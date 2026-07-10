@@ -42,6 +42,7 @@ Capture only what every future task needs: the stack and pinned versions, the pr
 
 ### 5. Wire the pipeline
 - **Claude GitHub App + workflows:** an implement workflow (responds to `@claude` on issues/PRs) and a review workflow (PR-opened → the review agent). Install via `/install-github-app` or commit the workflow files.
+- **Load the firm plugin into those workflows.** A locally-installed plugin does NOT reach the Action's CI runner — each workflow must load it explicitly. In every `anthropics/claude-code-action@v1` step, set `plugin_marketplaces: <owner>/firm-plugins` and `plugins: dev-lifecycle@firm-plugins` so the runner enables the firm's skills. If the marketplace repo is **private**, the runner's default `GITHUB_TOKEN` can't fetch it — either make the marketplace repo public, or supply a read-scoped token (a secret) and configure git to use it before the action. (Confirm the current input names against the action's README, as they can change.)
 - **CI gates:** lint → type-check → test → security scan, per `${CLAUDE_PLUGIN_ROOT}/references/devops/cicd.md`. A red gate blocks merge.
 - **Branch protection:** require the CI checks and at least one review; disallow direct pushes to the default branch. Merge stays manual — yours.
 - **Committed `.claude/settings.json`:** cost/efficiency env (`DISABLE_NON_ESSENTIAL_MODEL_CALLS`), sensible permissions (deny reads of `.env*`), and attribution per your preference for owned repos. This is what the cloud/Action agents inherit (they don't carry your user settings).
