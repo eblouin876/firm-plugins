@@ -26,6 +26,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: |
+            eblouin876/firm-plugins
+          plugins: |
+            dev-lifecycle@firm-plugins          
           claude_args: "--model claude-sonnet-5"
           prompt: |
             Run a freshness audit of the reference library in
