@@ -120,6 +120,35 @@ for path in glob.glob(os.path.join(PLUGIN, "references", "**", "*.md"), recursiv
     if "last-verified:" not in head:
         warn(f"{os.path.relpath(path, ROOT)}: no 'last-verified' metadata header")
 
+# 5. firm workflow templates must load the plugin and authenticate with OAuth.
+#    A locally-installed plugin does not reach the Action runner, so every
+#    template that invokes claude-code-action must set plugin_marketplaces +
+#    plugins; and the firm is OAuth-only, so anthropic_api_key is forbidden.
+wf_templates = sorted(
+    glob.glob(os.path.join(PLUGIN, "assets", "workflows", "*.yml"))
+    + glob.glob(os.path.join(PLUGIN, "assets", "workflows", "*.yaml"))
+)
+for path in wf_templates:
+    rel = os.path.relpath(path, ROOT)
+    # ignore comment lines so notes like "never an anthropic_api_key" don't trip checks
+    body = "\n".join(
+        ln for ln in open(path).read().splitlines() if not ln.lstrip().startswith("#")
+    )
+    if "claude-code-action" not in body:
+        continue
+    if "plugin_marketplaces:" not in body:
+        err(f"{rel}: invokes claude-code-action but does not set "
+            "'plugin_marketplaces:' (the plugin won't reach the runner)")
+    if "plugins:" not in body:
+        err(f"{rel}: invokes claude-code-action but does not set 'plugins:' "
+            "(the plugin won't reach the runner)")
+    if "claude_code_oauth_token" not in body:
+        err(f"{rel}: invokes claude-code-action but does not authenticate with "
+            "'claude_code_oauth_token' (the firm is OAuth-only)")
+    if "anthropic_api_key" in body:
+        err(f"{rel}: uses 'anthropic_api_key' — the firm authenticates with "
+            "CLAUDE_CODE_OAUTH_TOKEN only")
+
 # report
 for w in warnings:
     print(f"::warning:: {w}" if os.getenv("GITHUB_ACTIONS") else f"WARN  {w}")

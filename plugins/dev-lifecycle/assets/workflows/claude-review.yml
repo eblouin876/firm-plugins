@@ -1,0 +1,41 @@
+# Firm review workflow — runs the firm's code-review skill on every opened or
+# updated PR. Same auth + plugin model as claude.yml (see that file's header
+# for the OAuth secret, GitHub App identity, and private-marketplace notes).
+#
+# Copy this into a project's .github/workflows/ and replace <owner> with the
+# marketplace repo owner.
+
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: |
+            <owner>/firm-plugins
+          plugins: |
+            dev-lifecycle@firm-plugins
+          prompt: |
+            Use the dev-lifecycle plugin's code-review skill to review this pull
+            request against the firm's definition-of-done. The plugin is loaded
+            and its skills are available — use them rather than reviewing
+            ad-hoc. Post blocker and high-severity findings as PR comments.
+            Do not merge; the human merges.
+          claude_args: |
+            --append-system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available to you — USE them, and hold the change to the firm's definition-of-done."

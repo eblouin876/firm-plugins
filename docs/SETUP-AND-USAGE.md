@@ -53,8 +53,9 @@ Applies everywhere you work, zero repo footprint:
 The blanked `attribution` is what keeps Claude out of commit/PR bylines on guest repos; `DISABLE_NON_ESSENTIAL_MODEL_CALLS` trims auxiliary model calls for cost.
 
 ### 4. Secrets for the automations
-- **Plugin repo:** add `ANTHROPIC_API_KEY` as a repo secret so the freshness audit can run. Install the Claude GitHub App on it if you want the plugin repo to dogfood the pipeline too.
-- **Each owned project repo:** the `scaffolding` skill wires this, but it needs `ANTHROPIC_API_KEY` as a secret and the Claude GitHub App installed once.
+The firm authenticates with a Claude subscription token (OAuth), not an Anthropic API key.
+- **Plugin repo:** add `CLAUDE_CODE_OAUTH_TOKEN` as a repo secret so the freshness audit can run. Install the Claude GitHub App on it if you want the plugin repo to dogfood the pipeline too.
+- **Each owned project repo:** the `scaffolding`/`onboarding` skills set `CLAUDE_CODE_OAUTH_TOKEN` for you (`gh secret set`) when wiring the pipeline; you just install the Claude GitHub App once. No `ANTHROPIC_API_KEY` anywhere.
 
 ---
 
@@ -63,7 +64,7 @@ The blanked `attribution` is what keeps Claude out of commit/PR bylines on guest
 ### A repo you own → `scaffolding`
 > "Scaffold this repo" / "set up a new project for X"
 
-It detects (or defaults to Python back / TypeScript front), lays down structure and tooling, writes a **lean `CLAUDE.md`** (the thing that keeps every later task cheap), and wires the pipeline: the Claude Action, CI gates, branch protection requiring CI + a review, and a committed `.claude/settings.json` the cloud/Action agents inherit.
+It detects (or defaults to Python back / TypeScript front), lays down structure and tooling, writes a **lean `CLAUDE.md`** (the thing that keeps every later task cheap), and wires the pipeline: the Claude Action (from the firm's workflow templates — plugin loaded and OAuth auth), CI gates, branch protection requiring CI + a review, and a committed `.claude/settings.json` the cloud/Action agents inherit.
 
 ### A repo you don't own → `onboarding` (guest mode)
 > "Onboard this client repo without touching it"
