@@ -26,7 +26,7 @@ Check ownership/permissions: can you install the Claude GitHub App and commit to
 ### 2a. Owned path
 Run the same wiring as `scaffolding`, adapted to what's already there:
 - Generate a lean `CLAUDE.md` from the detected stack, layout, and commands (see `scaffolding`).
-- Wire the pipeline: Claude App + implement/review workflows, CI gates (`${CLAUDE_PLUGIN_ROOT}/references/devops/cicd.md`), branch protection requiring CI + review, committed `.claude/settings.json`. Conform to any CI that already exists rather than replacing it.
+- Wire the pipeline exactly as `scaffolding` does: copy the firm's workflow templates from `${CLAUDE_PLUGIN_ROOT}/assets/workflows/` (`claude.yml` + `claude-review.yml`) into `.github/workflows/` with `<owner>` filled in. These already **load the firm plugin** (`plugin_marketplaces` + `plugins` — a local install does not reach the Action's runner) and **instruct the agent to use its skills**. Authenticate with **OAuth only**: `gh secret set CLAUDE_CODE_OAUTH_TOKEN` (never an API key, never committed). Then add CI gates (`${CLAUDE_PLUGIN_ROOT}/references/devops/cicd.md`), branch protection requiring CI + review, and a committed `.claude/settings.json`. Conform to any CI that already exists rather than replacing it.
 - Confirm the merge gate is human (`${CLAUDE_PLUGIN_ROOT}/shared/definition-of-done.md`).
 
 ### 2b. Guest path (zero footprint)

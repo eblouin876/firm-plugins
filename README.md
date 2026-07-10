@@ -21,6 +21,7 @@ firm-plugins/
 ├── plugins/dev-lifecycle/
 │   ├── .claude-plugin/plugin.json       # plugin manifest (semver)
 │   ├── skills/<skill>/SKILL.md          # one folder per skill
+│   ├── assets/workflows/                # canonical Claude Action templates (implement + review) — plugin + OAuth pre-wired
 │   ├── shared/                          # cross-skill references
 │   │   ├── token-efficiency.md          # the efficiency doctrine every skill follows
 │   │   └── definition-of-done.md        # the shared merge-ready bar
