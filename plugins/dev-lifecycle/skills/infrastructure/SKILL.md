@@ -1,6 +1,6 @@
 ---
-name: infrastructure
-description: Provision and maintain the infrastructure that apps run on — cloud (AWS via IaC), a home/beta server (Goatenheim), or a VPS — and keep it healthy over time: networking (Tailscale), backups, monitoring, updates/patching, TLS, access control, and resilience/auto-recovery. Use this skill WHENEVER the work is about the hosting environment rather than the app itself: "set up the server", "provision AWS for this", "configure the home box", "set up Tailscale", "add backups/monitoring", "make sure it comes back after a reboot", "why is the host unreachable", "harden this infrastructure". It detects existing infra and conforms, and never mutates real infrastructure without showing a plan and getting confirmation. This is the ops/maintenance counterpart to devops, which ships the app.
+name: "infrastructure"
+description: "Provision and maintain the infrastructure that apps run on — cloud (AWS via IaC), a home/beta server (Goatenheim), or a VPS — and keep it healthy over time: networking (Tailscale), backups, monitoring, updates/patching, TLS, access control, and resilience/auto-recovery. Use this skill WHENEVER the work is about the hosting environment rather than the app itself: \"set up the server\", \"provision AWS for this\", \"configure the home box\", \"set up Tailscale\", \"add backups/monitoring\", \"make sure it comes back after a reboot\", \"why is the host unreachable\", \"harden this infrastructure\". It detects existing infra and conforms, and never mutates real infrastructure without showing a plan and getting confirmation. This is the ops/maintenance counterpart to devops, which ships the app."
 
 ---
 

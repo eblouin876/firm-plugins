@@ -1,6 +1,6 @@
 ---
-name: code-review
-description: Review code changes for correctness, breakage, best practices, DRYness, security, and performance/scalability, then either report what to fix (interactive) or take the change to merge-ready (in the PR pipeline). Use this skill WHENEVER the user asks to review code, check a diff or pull request, sanity-check changes before pushing or merging, or asks "did I break anything", "is this safe", "look over my changes", "review this PR" — and it is also the review agent in the automated pipeline. Works on live/local changes and on pull requests. By default it is read-only diagnosis; in pipeline mode it applies fixes via the build skills and re-reviews to merge-ready — but it NEVER merges. The human merges.
+name: "code-review"
+description: "Review code changes for correctness, breakage, best practices, DRYness, security, and performance/scalability, then either report what to fix (interactive) or take the change to merge-ready (in the PR pipeline). Use this skill WHENEVER the user asks to review code, check a diff or pull request, sanity-check changes before pushing or merging, or asks \"did I break anything\", \"is this safe\", \"look over my changes\", \"review this PR\" — and it is also the review agent in the automated pipeline. Works on live/local changes and on pull requests. By default it is read-only diagnosis; in pipeline mode it applies fixes via the build skills and re-reviews to merge-ready — but it NEVER merges. The human merges."
 ---
 
 # Code review

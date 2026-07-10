@@ -29,7 +29,10 @@ firm-plugins/
 │       ├── backend/   {fastapi,sqlalchemy,postgres,pydantic,django}.md
 │       ├── testing/ · devops/ · security/
 │       └── _TEMPLATE.md                 # house format + metadata header
+├── scripts/
+│   └── validate_plugin.py               # structural validator (manifests + SKILL.md frontmatter)
 └── .github/workflows/
+    ├── validate.yml                     # runs the validator on every push/PR (merge gate)
     ├── release.yml                      # semver bump + tag on merged PR
     └── freshness-audit.yml              # weekly staleness check → tracking issue
 ```
@@ -63,3 +66,13 @@ Version lives in `plugin.json` and `marketplace.json`. `release.yml` bumps it on
 
 - **Owned:** full in-repo pipeline — committed Action, branch protection, committed `.claude/settings.json` + `CLAUDE.md`. Set up by the `scaffolding` skill.
 - **Guest (repos you don't own):** zero footprint. The skill library rides in via this user-installed plugin — nothing added to the repo. Project-local config goes in untracked files excluded via `.git/info/exclude`. Work runs under your own identity, so commits and PRs are yours; attribution is blanked (`{"attribution":{"commit":"","pr":""}}` in `~/.claude/settings.json`) and the `onboarding` skill scrubs any residual Claude attribution before push. Set up by the `onboarding` skill.
+
+## Validation
+
+`scripts/validate_plugin.py` checks the JSON manifests and the YAML frontmatter of every `SKILL.md` — the things Claude Code rejects on install. It runs in CI (`validate.yml`) on every push and PR, so a malformed skill can't be merged or shipped. Run it locally before pushing:
+
+```bash
+python scripts/validate_plugin.py
+```
+
+Make the `validate` job a **required status check** in branch protection so nothing merges without it. The workflow also runs the official `claude plugin validate` as a best-effort cross-check.

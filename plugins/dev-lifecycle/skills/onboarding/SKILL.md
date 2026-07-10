@@ -1,6 +1,6 @@
 ---
-name: onboarding
-description: Bring an EXISTING repository into the firm so you can work it through the pipeline — detecting whether you own it (full setup) or are a guest (zero-footprint setup). Use this skill WHENEVER you point Claude at a repo that already exists and want it firm-ready: "onboard this repo", "set me up to work on this project", "I have access to this repo, get it wired up", "bring this client repo in", or when you clone someone else's project and want to work it your way without changing it. For a brand-new repo you own, use scaffolding instead. The defining decision this skill makes is owned vs guest, because guest repos get NOTHING committed — no Claude footprint anywhere, including in commit and PR attribution.
+name: "onboarding"
+description: "Bring an EXISTING repository into the firm so you can work it through the pipeline — detecting whether you own it (full setup) or are a guest (zero-footprint setup). Use this skill WHENEVER you point Claude at a repo that already exists and want it firm-ready: \"onboard this repo\", \"set me up to work on this project\", \"I have access to this repo, get it wired up\", \"bring this client repo in\", or when you clone someone else's project and want to work it your way without changing it. For a brand-new repo you own, use scaffolding instead. The defining decision this skill makes is owned vs guest, because guest repos get NOTHING committed — no Claude footprint anywhere, including in commit and PR attribution."
 ---
 
 # Onboarding

@@ -1,6 +1,6 @@
 ---
-name: testing
-description: Design a test strategy and write the test suite — unit, integration, and end-to-end — for backend and frontend code. Use this skill WHENEVER the work involves writing or improving tests: "write tests for X", "add test coverage", "set up testing", "test this endpoint/component", "I want to TDD this", or when a feature needs tests before it can ship through the pipeline. Default tooling is pytest (Python/FastAPI/Django) and the project's JS runner with Testing Library (frontend) plus Playwright for end-to-end, but it detects and conforms to the project's existing setup. Tests written here are what the devops CI gate runs and the code-review skill checks for — so they must be meaningful, not coverage theater.
+name: "testing"
+description: "Design a test strategy and write the test suite — unit, integration, and end-to-end — for backend and frontend code. Use this skill WHENEVER the work involves writing or improving tests: \"write tests for X\", \"add test coverage\", \"set up testing\", \"test this endpoint/component\", \"I want to TDD this\", or when a feature needs tests before it can ship through the pipeline. Default tooling is pytest (Python/FastAPI/Django) and the project's JS runner with Testing Library (frontend) plus Playwright for end-to-end, but it detects and conforms to the project's existing setup. Tests written here are what the devops CI gate runs and the code-review skill checks for — so they must be meaningful, not coverage theater."
 ---
 
 # Testing

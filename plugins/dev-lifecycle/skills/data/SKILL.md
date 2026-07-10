@@ -1,6 +1,6 @@
 ---
-name: data
-description: Create consistent seed/fixture data and build reporting for a project — realistic development/demo/test data, and the queries, exports, or dashboards that answer questions about the app's data. Use this skill WHENEVER the work is about populating or reporting on data rather than building features: "seed the database", "make some realistic test data", "set up fixtures", "build a report for X", "export this data", "add a dashboard/metrics", "how many users did Y". It reuses the project's models and factories so seeding is consistent, and pushes reporting work into the database. It keeps seeding and reporting done the same way across every project.
+name: "data"
+description: "Create consistent seed/fixture data and build reporting for a project — realistic development/demo/test data, and the queries, exports, or dashboards that answer questions about the app's data. Use this skill WHENEVER the work is about populating or reporting on data rather than building features: \"seed the database\", \"make some realistic test data\", \"set up fixtures\", \"build a report for X\", \"export this data\", \"add a dashboard/metrics\", \"how many users did Y\". It reuses the project's models and factories so seeding is consistent, and pushes reporting work into the database. It keeps seeding and reporting done the same way across every project."
 ---
 
 # Data (seed & reporting)

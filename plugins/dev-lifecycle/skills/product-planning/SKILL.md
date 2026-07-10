@@ -1,6 +1,6 @@
 ---
-name: product-planning
-description: Create the overarching plan for a whole product — the north star that keeps everything aligned — and break it into stages you build one at a time. Use this skill WHENEVER greenfielding a whole product or a major new system, or when the request is about the big picture rather than one feature: "plan out the whole product", "what's the roadmap", "architect this from scratch", "break this into phases/milestones", "how should we stage this build". It produces the product vision, the architecture and stack decisions, and a staged roadmap recorded as a GitHub epic + milestones + an ADR — then stops. It does NOT build anything or tag @claude; each stage is later planned and built through the normal planning → PR → review → merge loop. For scoping a single feature or fix, use the planning skill instead.
+name: "product-planning"
+description: "Create the overarching plan for a whole product — the north star that keeps everything aligned — and break it into stages you build one at a time. Use this skill WHENEVER greenfielding a whole product or a major new system, or when the request is about the big picture rather than one feature: \"plan out the whole product\", \"what's the roadmap\", \"architect this from scratch\", \"break this into phases/milestones\", \"how should we stage this build\". It produces the product vision, the architecture and stack decisions, and a staged roadmap recorded as a GitHub epic + milestones + an ADR — then stops. It does NOT build anything or tag @claude; each stage is later planned and built through the normal planning → PR → review → merge loop. For scoping a single feature or fix, use the planning skill instead."
 ---
 
 # Product planning

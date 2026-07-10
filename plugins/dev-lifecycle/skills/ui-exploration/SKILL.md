@@ -1,6 +1,6 @@
 ---
-name: ui-exploration
-description: Explore net-new UI — a new screen, feature look, or a product's visual direction — and turn the chosen direction into an implementable spec. Use this skill WHENEVER the work is figuring out what something should look like before building it: "design a screen for X", "explore some directions for this UI", "what should this page look like", "mock up the dashboard", "help me figure out the layout". It leans on Claude Design for visual exploration where available, then captures the decisions as a spec that the frontend skill implements and the design-system skill codifies. It explores and specs; it does not implement.
+name: "ui-exploration"
+description: "Explore net-new UI — a new screen, feature look, or a product's visual direction — and turn the chosen direction into an implementable spec. Use this skill WHENEVER the work is figuring out what something should look like before building it: \"design a screen for X\", \"explore some directions for this UI\", \"what should this page look like\", \"mock up the dashboard\", \"help me figure out the layout\". It leans on Claude Design for visual exploration where available, then captures the decisions as a spec that the frontend skill implements and the design-system skill codifies. It explores and specs; it does not implement."
 
 ---
 

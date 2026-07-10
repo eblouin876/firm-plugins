@@ -1,6 +1,6 @@
 ---
-name: documentation
-description: Write and maintain technical documentation for a codebase — READMEs, API references, architecture decision records (ADRs), changelogs, contributing/onboarding guides, and inline docstrings/comments. Use this skill WHENEVER the work involves documenting code or a project: "write a README", "document this API/endpoint/module", "add docstrings", "write an ADR", "update the changelog", "explain how to set this up", or when a feature needs docs before it ships. It detects the project's existing documentation style and conforms. This is technical documentation — for resumes, proposals, or general prose, use the dedicated writing skills instead.
+name: "documentation"
+description: "Write and maintain technical documentation for a codebase — READMEs, API references, architecture decision records (ADRs), changelogs, contributing/onboarding guides, and inline docstrings/comments. Use this skill WHENEVER the work involves documenting code or a project: \"write a README\", \"document this API/endpoint/module\", \"add docstrings\", \"write an ADR\", \"update the changelog\", \"explain how to set this up\", or when a feature needs docs before it ships. It detects the project's existing documentation style and conforms. This is technical documentation — for resumes, proposals, or general prose, use the dedicated writing skills instead."
 ---
 
 # Documentation

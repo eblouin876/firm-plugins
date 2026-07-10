@@ -1,6 +1,6 @@
 ---
-name: technical-proposal
-description: Produce a technical proposal for building something — the recommended stack and why, the high-level architecture, and an honest cost/timeline estimate — so a build/no-build decision can be made before any code or roadmap. Use this skill WHENEVER the question is whether and how to build a system: "what stack should we use for X", "propose an architecture for this", "what would it take to build Y", "is this worth building", "scope the tech for this idea". This is the internal/architecture proposal that opens a greenfield and feeds product-planning. For a persuasive CLIENT-facing sales pitch of a website build, use the web-proposal-writer skill instead; this one is the engineering decision doc.
+name: "technical-proposal"
+description: "Produce a technical proposal for building something — the recommended stack and why, the high-level architecture, and an honest cost/timeline estimate — so a build/no-build decision can be made before any code or roadmap. Use this skill WHENEVER the question is whether and how to build a system: \"what stack should we use for X\", \"propose an architecture for this\", \"what would it take to build Y\", \"is this worth building\", \"scope the tech for this idea\". This is the internal/architecture proposal that opens a greenfield and feeds product-planning. For a persuasive CLIENT-facing sales pitch of a website build, use the web-proposal-writer skill instead; this one is the engineering decision doc."
 ---
 
 # Technical proposal

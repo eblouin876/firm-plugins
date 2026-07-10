@@ -1,6 +1,6 @@
 ---
-name: frontend
-description: Build, modify, or review frontend web UI following modern best practices. Use this skill WHENEVER the work involves the client-facing layer of a web app — React components, pages, hooks, state, forms, styling, or server-rendered HTML/templates with HTMX and Tailwind. Trigger it for "build the UI for X", "add a component", "wire up this page", "make this form work", "style this", or any frontend task that follows a plan. Before writing any frontend code, this skill ALWAYS detects the project's existing stack and the exact versions and conforms to what's already there rather than imposing a different framework.
+name: "frontend"
+description: "Build, modify, or review frontend web UI following modern best practices. Use this skill WHENEVER the work involves the client-facing layer of a web app — React components, pages, hooks, state, forms, styling, or server-rendered HTML/templates with HTMX and Tailwind. Trigger it for \"build the UI for X\", \"add a component\", \"wire up this page\", \"make this form work\", \"style this\", or any frontend task that follows a plan. Before writing any frontend code, this skill ALWAYS detects the project's existing stack and the exact versions and conforms to what's already there rather than imposing a different framework."
 ---
 
 # Frontend

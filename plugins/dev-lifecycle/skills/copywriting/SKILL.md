@@ -1,6 +1,6 @@
 ---
-name: copywriting
-description: Write user-facing product and interface copy — microcopy (buttons, labels, empty states, error and success messages, tooltips), onboarding, notifications, and marketing/landing copy — in a consistent voice. Use this skill WHENEVER the work is words the end user reads in the product: "write the copy for X", "what should this button/error say", "write the empty state", "onboarding copy", "landing page headline", "make this message clearer". It detects and matches the product's voice, and runs a humanizer + ruthless-edit pass so the copy sounds human and tight. This is product copy — for technical docs use the documentation skill.
+name: "copywriting"
+description: "Write user-facing product and interface copy — microcopy (buttons, labels, empty states, error and success messages, tooltips), onboarding, notifications, and marketing/landing copy — in a consistent voice. Use this skill WHENEVER the work is words the end user reads in the product: \"write the copy for X\", \"what should this button/error say\", \"write the empty state\", \"onboarding copy\", \"landing page headline\", \"make this message clearer\". It detects and matches the product's voice, and runs a humanizer + ruthless-edit pass so the copy sounds human and tight. This is product copy — for technical docs use the documentation skill."
 ---
 
 # Copywriting

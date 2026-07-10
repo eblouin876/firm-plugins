@@ -1,6 +1,6 @@
 ---
-name: debugging
-description: Systematically diagnose and root-cause a failure — a crash, an error, a wrong result, a flaky test, a performance problem, or a production incident — then fix it at the root and prevent recurrence. Use this skill WHENEVER something is broken or behaving wrong and the cause isn't yet known: "why is this failing", "this error keeps happening", "X returns the wrong value", "the app is down", "this test is flaky", "debug this", "track down this bug". This is investigation of an *observed* failure (distinct from the planning skill, which scopes an already-understood problem). For a live production incident, it mitigates user impact first, then investigates.
+name: "debugging"
+description: "Systematically diagnose and root-cause a failure — a crash, an error, a wrong result, a flaky test, a performance problem, or a production incident — then fix it at the root and prevent recurrence. Use this skill WHENEVER something is broken or behaving wrong and the cause isn't yet known: \"why is this failing\", \"this error keeps happening\", \"X returns the wrong value\", \"the app is down\", \"this test is flaky\", \"debug this\", \"track down this bug\". This is investigation of an *observed* failure (distinct from the planning skill, which scopes an already-understood problem). For a live production incident, it mitigates user impact first, then investigates."
 ---
 
 # Debugging

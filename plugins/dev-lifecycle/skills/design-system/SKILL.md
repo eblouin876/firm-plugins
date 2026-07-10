@@ -1,6 +1,6 @@
 ---
-name: design-system
-description: Establish and enforce a project's visual design system — the design tokens (color, typography, spacing, radii, shadows, breakpoints), component conventions, and accessibility standards that the frontend, tailwind, and material-ui work is written to defer to. Use this skill WHENEVER the work is about the system rather than one screen: "set up the design system", "define our tokens/theme", "make the styling consistent", "what should our color/type scale be", "enforce the design standards", or when new UI needs a token that doesn't exist yet. It detects and conforms to any system already present. It defines the standards; the frontend skill builds against them.
+name: "design-system"
+description: "Establish and enforce a project's visual design system — the design tokens (color, typography, spacing, radii, shadows, breakpoints), component conventions, and accessibility standards that the frontend, tailwind, and material-ui work is written to defer to. Use this skill WHENEVER the work is about the system rather than one screen: \"set up the design system\", \"define our tokens/theme\", \"make the styling consistent\", \"what should our color/type scale be\", \"enforce the design standards\", or when new UI needs a token that doesn't exist yet. It detects and conforms to any system already present. It defines the standards; the frontend skill builds against them."
 ---
 
 # Design system

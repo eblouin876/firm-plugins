@@ -1,6 +1,6 @@
 ---
-name: scaffolding
-description: Bootstrap a new or empty repository into the firm — project structure, tooling, a lean CLAUDE.md, and the full GitHub pipeline (the Claude Action, CI gates, branch protection) so the repo is ready to build through plan → PR → review → merge. Use this skill WHENEVER starting a greenfield project or standing up a repo you own: "start a new project", "set up the repo", "scaffold this", "initialize the backend/frontend", "get this repo ready", or as Stage 0 right after a product plan. This is for repositories you OWN and can commit to — for bringing in a repo you don't own without a footprint, use the onboarding skill instead. Backend defaults to Python, frontend to TypeScript, but it detects and conforms to any stack already present or intended.
+name: "scaffolding"
+description: "Bootstrap a new or empty repository into the firm — project structure, tooling, a lean CLAUDE.md, and the full GitHub pipeline (the Claude Action, CI gates, branch protection) so the repo is ready to build through plan → PR → review → merge. Use this skill WHENEVER starting a greenfield project or standing up a repo you own: \"start a new project\", \"set up the repo\", \"scaffold this\", \"initialize the backend/frontend\", \"get this repo ready\", or as Stage 0 right after a product plan. This is for repositories you OWN and can commit to — for bringing in a repo you don't own without a footprint, use the onboarding skill instead. Backend defaults to Python, frontend to TypeScript, but it detects and conforms to any stack already present or intended."
 ---
 
 # Scaffolding

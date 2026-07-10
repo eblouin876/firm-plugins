@@ -1,6 +1,6 @@
 ---
-name: devops
-description: Set up and maintain infrastructure, containerization, and CI/CD for a web app — gated deployment, the build/test/deploy pipeline, environment and secrets management, and the operational side (migrations on deploy, observability, rollback). Use this skill WHENEVER the work involves Dockerfiles or Compose, a CI/CD pipeline (GitHub Actions and similar), deployment and hosting, environment/secret configuration, or "how do I ship this / deploy this / containerize this / set up the pipeline / add a deploy gate". Default stack is Docker + GitHub Actions, with the deployment target right-sized to the project — including the Goatenheim home beta server over Tailscale. It detects existing infra and conforms before changing anything, and never applies state-mutating cloud actions without showing the plan and getting confirmation.
+name: "devops"
+description: "Set up and maintain infrastructure, containerization, and CI/CD for a web app — gated deployment, the build/test/deploy pipeline, environment and secrets management, and the operational side (migrations on deploy, observability, rollback). Use this skill WHENEVER the work involves Dockerfiles or Compose, a CI/CD pipeline (GitHub Actions and similar), deployment and hosting, environment/secret configuration, or \"how do I ship this / deploy this / containerize this / set up the pipeline / add a deploy gate\". Default stack is Docker + GitHub Actions, with the deployment target right-sized to the project — including the Goatenheim home beta server over Tailscale. It detects existing infra and conforms before changing anything, and never applies state-mutating cloud actions without showing the plan and getting confirmation."
 ---
 
 # DevOps

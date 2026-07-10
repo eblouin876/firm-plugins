@@ -1,6 +1,6 @@
 ---
-name: backend
-description: Build, modify, or review backend APIs following modern best practices. Use this skill WHENEVER the work involves the server-side application layer — API endpoints, request/response schemas, business logic, database models, queries, migrations, authentication/authorization, or background jobs. Primary stack is FastAPI (Python) with SQLAlchemy and PostgreSQL (Django where server-rendered + HTMX fits), but it adapts to the project's actual stack. Trigger it for requests like "build an endpoint for X", "add an API route", "model this in the database", "write the migration", "wire up auth", or any backend task that follows a plan. Before writing code, this skill ALWAYS detects the project's stack and the exact library versions and conforms to what's already there.
+name: "backend"
+description: "Build, modify, or review backend APIs following modern best practices. Use this skill WHENEVER the work involves the server-side application layer — API endpoints, request/response schemas, business logic, database models, queries, migrations, authentication/authorization, or background jobs. Primary stack is FastAPI (Python) with SQLAlchemy and PostgreSQL (Django where server-rendered + HTMX fits), but it adapts to the project's actual stack. Trigger it for requests like \"build an endpoint for X\", \"add an API route\", \"model this in the database\", \"write the migration\", \"wire up auth\", or any backend task that follows a plan. Before writing code, this skill ALWAYS detects the project's stack and the exact library versions and conforms to what's already there."
 ---
 
 # Backend

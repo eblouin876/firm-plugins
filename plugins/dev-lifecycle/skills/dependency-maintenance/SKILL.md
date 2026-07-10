@@ -1,6 +1,6 @@
 ---
-name: dependency-maintenance
-description: Keep a project's dependencies current and secure — audit for outdated and vulnerable packages, plan and apply upgrades safely, and remediate CVEs. Use this skill WHENEVER the work is about the dependency graph rather than features: "update our dependencies", "are we vulnerable to X", "bump this to the latest", "there's a CVE in Y", "why is npm/pip audit complaining", "upgrade to React/Django N", or on a periodic maintenance sweep. It grounds fixed versions and severities in current advisories, upgrades incrementally so breakage is bisectable, and ships every change through the normal pipeline. This is the project-dependency counterpart to the plugin's own freshness audit.
+name: "dependency-maintenance"
+description: "Keep a project's dependencies current and secure — audit for outdated and vulnerable packages, plan and apply upgrades safely, and remediate CVEs. Use this skill WHENEVER the work is about the dependency graph rather than features: \"update our dependencies\", \"are we vulnerable to X\", \"bump this to the latest\", \"there's a CVE in Y\", \"why is npm/pip audit complaining\", \"upgrade to React/Django N\", or on a periodic maintenance sweep. It grounds fixed versions and severities in current advisories, upgrades incrementally so breakage is bisectable, and ships every change through the normal pipeline. This is the project-dependency counterpart to the plugin's own freshness audit."
 ---
 
 # Dependency maintenance
