@@ -1,0 +1,50 @@
+name: freshness-audit
+
+# Periodic review to keep the reference library fresh. Reads the metadata
+# header on each reference (versions-covered, last-verified) and checks it
+# against each library's current stable release and the current best
+# practices in its official docs. Flags stale references in a tracking
+# issue for review. Regeneration happens as a reviewed PR when you ask for
+# it — this job only surfaces what's gone stale (safe default).
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"   # Mondays, 14:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Freshness audit
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model claude-sonnet-5"
+          prompt: |
+            Run a freshness audit of the reference library in
+            plugins/dev-lifecycle/references/.
+
+            Use the freshness-audit skill. For each reference file, read its
+            metadata header (library, versions-covered, last-verified). For
+            each library, check its current stable major version and whether
+            its official docs show idiom or best-practice changes not yet
+            reflected here. Ground every check in current official docs — do
+            not rely on recall.
+
+            A reference is STALE if a newer major shipped that it doesn't
+            cover, if a documented idiom has changed, or if last-verified is
+            more than 90 days ago and the library has since released.
+
+            Open (or update) a single tracking issue titled
+            "Reference freshness: <date>" listing each stale reference, the
+            reason, and the current version. Do NOT edit references in this
+            job — regeneration is done later as a reviewed PR. If nothing is
+            stale, comment on the existing tracking issue that all references
+            are current and do not open a new one.

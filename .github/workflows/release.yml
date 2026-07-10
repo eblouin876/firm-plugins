@@ -1,0 +1,63 @@
+name: release
+
+# Semver release for the plugin. On a merged PR, bump the version in
+# plugin.json and marketplace.json, commit, and tag. The bump level comes
+# from a PR label (release:major | release:minor | release:patch);
+# default is patch. Users pick the new version up via `/plugin marketplace update`.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Determine bump level from PR labels
+        id: bump
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          level=patch
+          echo "$LABELS" | grep -q 'release:major' && level=major
+          echo "$LABELS" | grep -q 'release:minor' && level=minor
+          echo "$LABELS" | grep -q 'release:patch' && level=patch
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+
+      - name: Bump versions
+        id: version
+        run: |
+          PLUGIN=plugins/dev-lifecycle/.claude-plugin/plugin.json
+          MARKET=.claude-plugin/marketplace.json
+          cur=$(jq -r '.version' "$PLUGIN")
+          IFS='.' read -r MA MI PA <<< "$cur"
+          case "${{ steps.bump.outputs.level }}" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+          new="$MA.$MI.$PA"
+          jq --arg v "$new" '.version=$v' "$PLUGIN" > "$PLUGIN.tmp" && mv "$PLUGIN.tmp" "$PLUGIN"
+          jq --arg v "$new" '.metadata.version=$v | (.plugins[] | select(.name=="dev-lifecycle") | .version) |= $v' "$MARKET" > "$MARKET.tmp" && mv "$MARKET.tmp" "$MARKET"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and tag
+        env:
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/dev-lifecycle/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git commit -m "chore(release): v$NEW [skip ci]"
+          git tag "v$NEW"
+          git push origin main --tags
