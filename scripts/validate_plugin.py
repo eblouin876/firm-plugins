@@ -122,32 +122,50 @@ for path in glob.glob(os.path.join(PLUGIN, "references", "**", "*.md"), recursiv
 
 # 5. firm workflow templates must load the plugin and authenticate with OAuth.
 #    A locally-installed plugin does not reach the Action runner, so every
-#    template that invokes claude-code-action must set plugin_marketplaces +
-#    plugins; and the firm is OAuth-only, so anthropic_api_key is forbidden.
+#    claude-code-action step must set plugin_marketplaces (as a full git URL,
+#    NOT owner/repo shorthand, which the action rejects) + plugins; and the
+#    firm is OAuth-only, so anthropic_api_key is forbidden.
+def _entries(val):
+    """A with-input that may be a scalar or a newline block -> list of lines."""
+    if val is None:
+        return []
+    return [ln.strip() for ln in str(val).splitlines() if ln.strip()]
+
+
 wf_templates = sorted(
     glob.glob(os.path.join(PLUGIN, "assets", "workflows", "*.yml"))
     + glob.glob(os.path.join(PLUGIN, "assets", "workflows", "*.yaml"))
 )
 for path in wf_templates:
     rel = os.path.relpath(path, ROOT)
-    # ignore comment lines so notes like "never an anthropic_api_key" don't trip checks
-    body = "\n".join(
-        ln for ln in open(path).read().splitlines() if not ln.lstrip().startswith("#")
-    )
-    if "claude-code-action" not in body:
+    try:
+        doc = yaml.safe_load(open(path)) or {}
+    except yaml.YAMLError as e:
+        err(f"{rel}: invalid workflow YAML -> {e}")
         continue
-    if "plugin_marketplaces:" not in body:
-        err(f"{rel}: invokes claude-code-action but does not set "
-            "'plugin_marketplaces:' (the plugin won't reach the runner)")
-    if "plugins:" not in body:
-        err(f"{rel}: invokes claude-code-action but does not set 'plugins:' "
-            "(the plugin won't reach the runner)")
-    if "claude_code_oauth_token" not in body:
-        err(f"{rel}: invokes claude-code-action but does not authenticate with "
-            "'claude_code_oauth_token' (the firm is OAuth-only)")
-    if "anthropic_api_key" in body:
-        err(f"{rel}: uses 'anthropic_api_key' — the firm authenticates with "
-            "CLAUDE_CODE_OAUTH_TOKEN only")
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            if "claude-code-action" not in str(step.get("uses", "")):
+                continue
+            w = step.get("with") or {}
+            markets = _entries(w.get("plugin_marketplaces"))
+            if not markets:
+                err(f"{rel}: a claude-code-action step does not set "
+                    "'plugin_marketplaces' (the plugin won't reach the runner)")
+            for m in markets:
+                if "://" not in m and not m.startswith("git@"):
+                    err(f"{rel}: plugin_marketplaces entry '{m}' is not a git URL "
+                        "(owner/repo shorthand is rejected by the action; use "
+                        "https://github.com/<owner>/<repo>.git)")
+            if not _entries(w.get("plugins")):
+                err(f"{rel}: a claude-code-action step does not set 'plugins' "
+                    "(the plugin won't reach the runner)")
+            if not w.get("claude_code_oauth_token"):
+                err(f"{rel}: a claude-code-action step does not authenticate with "
+                    "'claude_code_oauth_token' (the firm is OAuth-only)")
+            if w.get("anthropic_api_key"):
+                err(f"{rel}: uses 'anthropic_api_key' — the firm authenticates "
+                    "with CLAUDE_CODE_OAUTH_TOKEN only")
 
 # report
 for w in warnings:

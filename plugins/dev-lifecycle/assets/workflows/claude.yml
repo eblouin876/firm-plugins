@@ -62,8 +62,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # github_token: ${{ steps.app-token.outputs.token }}
+          # plugin_marketplaces takes full git URLs, not owner/repo shorthand.
           plugin_marketplaces: |
-            <owner>/firm-plugins
+            https://github.com/<owner>/firm-plugins.git
           plugins: |
             dev-lifecycle@firm-plugins
           # The plugin is loaded above — this standing instruction tells the
