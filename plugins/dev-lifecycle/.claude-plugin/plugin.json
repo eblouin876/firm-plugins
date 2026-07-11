@@ -1,6 +1,6 @@
 {
   "name": "dev-lifecycle",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Full project lifecycle for the firm — planning, scaffolding/onboarding, build, review, testing, devops, docs — with a self-extending, version-aware per-library reference library and a token-efficiency doctrine every skill follows.",
   "author": {
     "name": "Emile"
