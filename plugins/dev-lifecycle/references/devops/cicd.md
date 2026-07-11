@@ -28,7 +28,7 @@ A fully built-out pipeline handles: lint → type-check → test → security sc
 ## The gates (this is the point)
 Deployment is *gated*. A red gate blocks the deploy — never configure a pipeline that ships on failure.
 
-1. **Lint & format:** the project's linters/formatters (Ruff/ESLint/Prettier) in check mode.
+1. **Lint & format:** the project's linters/formatters (Ruff/ESLint/Prettier) in check mode. Also lint the pipeline itself when the repo has one: `actionlint` on `.github/workflows/*` (it catches invalid expressions — e.g. `secrets` used in an `if:`, or an unknown self-hosted runner label needing an `.github/actionlint.yaml`) and `shellcheck` on any committed shell script. The build agent runs these locally before opening the PR (definition-of-done), and this gate is the backstop.
 2. **Type-check:** `mypy`/`pyright` for Python, `tsc --noEmit` for TypeScript. Type errors fail the build.
 3. **Tests:** the full suite (pytest, the JS test runner). Fail on any failure; enforce a coverage threshold if the project sets one. This gate runs the tests the build skills wrote — it only protects you if those tests exist and are meaningful.
 4. **Security scans** — the automated counterpart to the code-review skill's security audit:
