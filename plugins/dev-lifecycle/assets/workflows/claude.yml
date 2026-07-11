@@ -17,6 +17,33 @@
 # explicitly via plugin_marketplaces + plugins below. If that marketplace repo
 # is PRIVATE, the default GITHUB_TOKEN cannot fetch it — either make it public,
 # or provide a read-scoped token and configure git to use it before this step.
+#
+# PULL REQUESTS: claude-code-action does NOT open a PR on its own in tag mode —
+# by default it only pushes a branch and posts a "Create PR" compare link, which
+# leaves the pipeline stalled (claude-review.yml triggers on `pull_request`, so
+# no PR means no review). We instruct the agent to open the PR itself with
+# `gh pr create` (see the system prompt). For that to work the repo must allow
+# it: Settings -> Actions -> General -> Workflow permissions ->
+# "Allow GitHub Actions to create and approve pull requests" must be ENABLED
+# (the scaffolding/onboarding skills turn this on via
+# `gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow
+#   -F default_workflow_permissions=write -F can_approve_pull_request_reviews=true`).
+#
+# WORKFLOW FILES: the agent CANNOT write files under `.github/workflows/` — the
+# Claude GitHub App token has no `workflows` permission AND the action injects a
+# hard prompt-level restriction against it (it is a not-yet-shipped feature
+# upstream). A task whose deliverable is a workflow file cannot be finished
+# hands-off: the agent commits the file to a clearly-labeled staging path and
+# flags in the PR that a human must move it into `.github/workflows/`. The system
+# prompt tells the agent to surface this honestly rather than silently relocate
+# the file and mark the step done.
+#
+# TOOL PERMISSIONS: headless runs approve nothing interactively, so any Bash
+# command the build/verify skills need (tests, linters, shellcheck, git, gh)
+# must be pre-approved via `--allowedTools` in claude_args below, or it is
+# rejected as "requires approval" and verification silently doesn't run. Bash is
+# allowed broadly here; the action already gates triggering on write-access, so
+# only repo collaborators can reach it.
 
 name: Claude
 
@@ -73,5 +100,12 @@ jobs:
           # --system-prompt (the documented tag-mode customization knob shown in
           # the action's examples/claude.yml); the comment/PR context is injected
           # separately, so this does not suppress tag-mode behavior.
+          #
+          # --allowedTools pre-approves the tools the firm skills need in a
+          # headless run (Bash for tests/linters/git/gh, the file-ops commit
+          # tools the action uses to push). The system prompt adds: open the PR
+          # yourself, report status truthfully, and handle the workflow-file
+          # limitation honestly. See the header notes above for why each is here.
           claude_args: |
-            --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available. For the requested work, use the matching firm skill (planning, backend, frontend, testing, code-review, devops, documentation, and the rest) rather than working ad-hoc, and follow the firm conventions and definition-of-done."
+            --allowedTools "Bash,Edit,MultiEdit,Write,Read,Glob,Grep,TodoWrite,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"
+            --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available. For the requested work, use the matching firm skill (planning, backend, frontend, testing, code-review, devops, documentation, and the rest) rather than working ad-hoc, and follow the firm conventions and definition-of-done. When the work is complete and your branch is pushed, OPEN A PULL REQUEST yourself against the repository default branch with `gh pr create` (give it a clear title and a body that summarizes the change and references the issue) — do not stop at the compare link; the action does not open the PR for you and the review pipeline only runs once a PR exists. Report status with complete honesty: mark a checklist item done ONLY if it actually completed, and never claim a PR was opened, tests or linters passed, or a file was written unless it truly happened. You CANNOT modify files under .github/workflows/ (the GitHub App lacks the workflows permission). If the task requires creating or changing a workflow file, do NOT silently relocate it and check the box — commit it to the branch under a clearly-labeled staging path (for example pending-workflows/) and state plainly in the PR description that a human must move each such file into .github/workflows/ before the pipeline is live, listing them."

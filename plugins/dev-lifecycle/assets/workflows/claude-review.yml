@@ -38,5 +38,10 @@ jobs:
             and its skills are available — use them rather than reviewing
             ad-hoc. Post blocker and high-severity findings as PR comments.
             Do not merge; the human merges.
+          # --allowedTools pre-approves the tools the review skill needs in a
+          # headless run — Bash (to inspect the diff, run linters/tests, read CI
+          # via gh) and the read/search tools. Without it they are rejected as
+          # "requires approval" and the review runs blind.
           claude_args: |
+            --allowedTools "Bash,Read,Glob,Grep,TodoWrite"
             --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available. Use them, and hold the change to the firm definition-of-done."
