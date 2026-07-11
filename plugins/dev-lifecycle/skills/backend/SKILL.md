@@ -31,6 +31,8 @@ Load only the references for the libraries actually in play:
 - **API layer (FastAPI):** `${CLAUDE_PLUGIN_ROOT}/references/backend/fastapi.md`; for schemas/validation/settings also `${CLAUDE_PLUGIN_ROOT}/references/backend/pydantic.md`.
 - **Data layer (SQLAlchemy):** `${CLAUDE_PLUGIN_ROOT}/references/backend/sqlalchemy.md`; for Postgres-native specifics `${CLAUDE_PLUGIN_ROOT}/references/backend/postgres.md`.
 - **Django:** `${CLAUDE_PLUGIN_ROOT}/references/backend/django.md` (pairs with the frontend skill's HTMX path).
+- **Slack app (Bolt):** `${CLAUDE_PLUGIN_ROOT}/references/backend/slack-bolt.md` when the project uses `slack-bolt` / `slack_bolt` (events, Socket Mode, `ack()` discipline, sync-vs-async).
+- **Claude / LLM integration (Anthropic SDK):** `${CLAUDE_PLUGIN_ROOT}/references/backend/anthropic.md` when the project calls Claude via the `anthropic` SDK (Messages API, thinking/effort, streaming, tool use, caching).
 - If a significant library in the project has **no reference yet**, generate one from current official docs, use it now, and open a PR to add it to the plugin (see the onboarding/self-extend flow).
 
 Expectations: match existing conventions; separate concerns (routing/validation → route layer, business logic → services, persistence → data layer); handle errors with correct status codes and non-leaky messages; type everything; every schema change gets a migration.
