@@ -48,8 +48,8 @@ Apply fixes for 🔴/🟠 findings via the `frontend`/`backend` skills (and `tes
 Interactive: the recommendation and the must-fix shortlist. Pipeline: the approval, a summary of fixes applied, and confirmation it's merge-ready and awaiting the human's merge — or the escalation if it isn't.
 
 ### 6. Route the outcome (automated pipeline)
-After a pipeline review, close the loop with **one routing comment** whose `@`-mention is chosen by the outcome, so review comments are honored autonomously and a human is pulled in only when a human is genuinely required:
-- **Clear blocker/high fixes, no decision needed** → tag **`@claude`** and instruct it to implement the findings you listed. The implement agent (which has write access) pushes the fixes, and that push re-triggers the review on the new commit — the loop converges when the review comes back clean.
+Post the individual findings as plain comments **without** any `@`-mention. Then, **only once the review is complete**, close the loop with exactly **one routing comment** — the sole place a mention appears, so a tag signals "review finished," not "another comment landed." Post it on the **pull request** (not the linked issue) so the follow-up work stays attached to and visible on the PR. Choose the mention by the overall outcome, so review comments are honored autonomously and a human is pulled in only when a human is genuinely required:
+- **Clear blocker/high fixes, no decision needed** → tag **`@claude`** and instruct it to implement the findings you listed. The implement agent (which has write access) pushes the fixes onto the PR branch, and that push re-triggers the review on the new commit — the loop converges when the review comes back clean.
 - **Clean review (no blocker/high)** → tag **`@<owner>`** (the repo owner): merge-ready, their call.
 - **A decision is needed before implementation** — a design trade-off, an ambiguous requirement, an architectural choice, or anything not confidently fixable mechanically → tag **`@<owner>`**, state the decision needed, and do **not** tag `@claude`.
 

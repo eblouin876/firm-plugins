@@ -9,17 +9,25 @@
 #
 # ROUTING / HANDS-OFF LOOP: this workflow only has `contents: read`, so it
 # cannot push fixes — it diagnoses and then ROUTES by mention so the PR never
-# stalls waiting on a human unless a human is actually needed:
-#   - clear blocker/high fixes (no decision needed) -> the review ends its
-#     comment with `@claude`, which triggers claude.yml (that one has
-#     `contents: write`) to implement the fixes and push them. The push is a
-#     `synchronize` event, so this review re-runs on the new commit and the loop
-#     converges — terminating when the review comes back clean.
+# stalls waiting on a human unless a human is actually needed. The mention is
+# posted ONCE, only after the whole review is complete (individual findings are
+# plain comments with no @-mention) — so a tag means "review finished," not
+# "another comment landed":
+#   - clear blocker/high fixes (no decision needed) -> the routing comment ends
+#     with `@claude`, which triggers claude.yml (that one has `contents: write`)
+#     to implement the fixes and push them. The push is a `synchronize` event,
+#     so this review re-runs on the new commit and the loop converges —
+#     terminating when the review comes back clean.
 #   - clean review, or any finding that needs a human decision before it can be
-#     implemented -> the review ends its comment with `@<owner>` so the owner is
+#     implemented -> the routing comment ends with `@<owner>` so the owner is
 #     pinged. Decision-needed always routes to the owner, never to @claude.
-# claude.yml already allows the `claude` bot as an actor (allowed_bots), so the
-# review bot's `@claude` comment triggers it.
+# The routing comment is posted on the PULL REQUEST conversation (a
+# `pull_request`-scoped `issue_comment`), which claude.yml already listens for
+# (its `issue_comment` + `pull_request_review` triggers match `@claude`, and
+# `allowed_bots: "claude"` lets this review bot's comment through). Because that
+# event is on the PR, claude.yml's follow-up run and its progress tracking
+# appear on the PR itself — so anyone who opens the PR can see it is still
+# working, instead of the activity hiding on the originating issue.
 
 name: Claude Review
 
@@ -56,24 +64,27 @@ jobs:
             Use the dev-lifecycle plugin's code-review skill to review this pull
             request against the firm's definition-of-done. The plugin is loaded
             and its skills are available — use them rather than reviewing
-            ad-hoc. Post blocker and high-severity findings as PR comments.
-            Do not merge; the human merges.
+            ad-hoc. Post blocker and high-severity findings as individual PR
+            comments, and do NOT put an @-mention on any of those per-finding
+            comments. Do not merge; the human merges.
 
-            Then close the loop by posting ONE final routing comment, so the PR
-            is honored without human intervention unless a human is actually
-            needed. Decide the mention by the outcome of your review:
+            Only once the review is COMPLETE, close the loop with exactly ONE
+            routing comment. Post it on the pull request itself (not on the
+            linked issue) so the follow-up work stays attached to and visible on
+            the PR. This single comment is the ONLY place an @-mention appears,
+            and the mention is chosen by the overall outcome of your review:
             - If there are 🔴 blocker or 🟠 high findings AND every one of them
-              is a clear, mechanical fix that needs no decision, end that
+              is a clear, mechanical fix that needs no decision, end the routing
               comment with "@claude" plus a short instruction to implement the
-              fixes you listed. The implement workflow will pick it up, push the
-              fixes, and this review re-runs on the new commit.
-            - If the review is clean (no blocker/high findings), end that comment
-              with "@<owner>" — it is merge-ready and the merge is their call.
+              fixes you listed. claude.yml picks it up, pushes the fixes onto
+              this PR branch, and this review re-runs on the new commit.
+            - If the review is clean (no blocker/high findings), end it with
+              "@<owner>" — it is merge-ready and the merge is their call.
             - If ANY finding needs a human decision before it can be implemented
               (a design trade-off, an ambiguous requirement, an architectural
               choice, or anything you are not confident to fix mechanically), end
-              that comment with "@<owner>", state the decision needed, and do NOT
-              tag @claude — a decision must be made before implementation.
+              it with "@<owner>", state the decision needed, and do NOT tag
+              @claude — a decision must be made before implementation.
             Decision-needed always wins: if even one finding needs a call, route
             to @<owner>, not @claude. To avoid an endless loop, if a blocker/high
             finding you already handed to @claude is still present on re-review,
