@@ -169,9 +169,25 @@ for path in wf_templates:
             # The action documents --system-prompt for standing instructions;
             # --append-system-prompt is undocumented for it and its bundled CLI
             # rejects it, which silently breaks tag mode. Forbid it.
-            if "--append-system-prompt" in str(w.get("claude_args", "")):
+            args = str(w.get("claude_args", ""))
+            if "--append-system-prompt" in args:
                 err(f"{rel}: claude_args uses '--append-system-prompt' — the "
                     "action's CLI rejects it; use '--system-prompt' instead")
+            # Headless runs approve nothing interactively: without --allowedTools
+            # the firm skills' Bash commands (tests, linters, git, gh) are
+            # rejected as "requires approval" and verification silently no-ops.
+            if "--allowedTools" not in args:
+                err(f"{rel}: a claude-code-action step does not set "
+                    "'--allowedTools' in claude_args — headless Bash commands "
+                    "(tests/linters/git/gh) will be rejected as 'requires "
+                    "approval' and verification won't run")
+            # The implement template must open the PR itself: the action only
+            # posts a compare link in tag mode, and claude-review.yml can't fire
+            # until a PR exists, so an implicit link leaves the pipeline stalled.
+            if os.path.basename(path) == "claude.yml" and "gh pr create" not in args:
+                err(f"{rel}: the implement template must instruct the agent to "
+                    "open the PR ('gh pr create' in the system prompt) — the "
+                    "action does not open one in tag mode")
 
 # report
 for w in warnings:
