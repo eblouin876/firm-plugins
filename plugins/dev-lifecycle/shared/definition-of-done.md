@@ -10,7 +10,7 @@ A change is merge-ready when:
 - **Security**: every touched path is clean against the OWASP checklist (see `${CLAUDE_PLUGIN_ROOT}/references/security/owasp.md`) — authorization on protected routes, no injection, no secrets committed or logged.
 - **No regressions**: the change's blast radius was checked; existing tests pass; callers and consumers still hold.
 - **Docs** moved with the code where relevant: docstrings, README/usage, the API contract, or an ADR for a significant decision.
-- **CI is green**: lint, type-check, tests, and security scans all pass.
+- **CI is green**: lint, type-check, tests, and security scans all pass — including `actionlint` on any GitHub Actions workflow file and `shellcheck` on any shell script the change touches. Validate these locally before opening the PR, not only in CI.
 - **Reviewed**: a `code-review` pass is complete and its blocker/high findings are resolved.
 
 Then stop. The PR is merge-ready; **the human merges.** No agent self-merges.
