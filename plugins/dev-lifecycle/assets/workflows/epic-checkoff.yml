@@ -1,0 +1,89 @@
+# Firm epic-checkoff workflow — ticks an epic's checkbox when a stage/feature
+# issue that belongs to it is closed (and unticks on reopen).
+#
+# Why this exists: GitHub auto-CLOSES an issue when a PR that says `Closes #N`
+# merges, but it never edits the markdown task list in a *tracking* (epic)
+# issue — those `- [ ]` lines are plain text. So a merged PR closes its issue
+# yet leaves the epic's checklist stale. This workflow reconciles that.
+#
+# How the link is established (written by the planning / product-planning
+# skills, no manual work):
+#   - the child issue's body carries an `Epic: #<n>` marker line, and
+#   - the epic's checklist line for that stage carries the child number, e.g.
+#       - [ ] Stage 3 — Auth (#42)
+# Closing #42 flips that line to `- [x]`; reopening flips it back. The child
+# is also filed as a native GitHub sub-issue of the epic, which gives the epic
+# a progress bar for free — this workflow is only what ticks the literal box.
+#
+# Copy this into a project's .github/workflows/ alongside claude.yml. It needs
+# no secrets and no plugin — it runs on the default GITHUB_TOKEN via `gh`.
+
+name: Epic checkoff
+
+on:
+  issues:
+    types: [closed, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  checkoff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reconcile epic checkbox
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHILD: ${{ github.event.issue.number }}
+          IS_CLOSE: ${{ github.event.action == 'closed' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+
+          # 1. Which epic does this issue point at? First `Epic: #<n>` in its body.
+          body=$(gh issue view "$CHILD" --repo "$REPO" --json body -q .body)
+          epic=$(printf '%s\n' "$body" \
+            | grep -oiE 'epic:[[:space:]]*#[0-9]+' \
+            | head -n1 | grep -oE '[0-9]+' || true)
+          if [ -z "${epic:-}" ]; then
+            echo "Issue #$CHILD has no 'Epic: #<n>' marker; nothing to reconcile."
+            exit 0
+          fi
+          echo "Issue #$CHILD belongs to epic #$epic (action: closed=$IS_CLOSE)."
+
+          # 2. Pull the epic body to a file.
+          gh issue view "$epic" --repo "$REPO" --json body -q .body > epic.md
+
+          # 3. Flip the one checklist line that references #<CHILD>.
+          #    Match the child number on a word boundary so #42 never touches
+          #    #4 or #420. closed -> [x]; reopened -> [ ]. Exit 3 = no change.
+          awk -v child="$CHILD" -v onclose="$IS_CLOSE" '
+            function has(s, t) { return index(s, t) > 0 }
+            {
+              line = $0
+              is_item = (line ~ /^[[:space:]]*[-*] \[[ xX]\]/)
+              refs    = (line ~ ("#" child "([^0-9]|$)"))
+              if (is_item && refs) {
+                if (onclose == "1" && has(line, "[ ]")) {
+                  sub(/\[ \]/, "[x]", line); changed = 1
+                } else if (onclose == "0" && (has(line, "[x]") || has(line, "[X]"))) {
+                  sub(/\[[xX]\]/, "[ ]", line); changed = 1
+                }
+              }
+              print line
+            }
+            END { exit (changed ? 0 : 3) }
+          ' epic.md > epic.new && rc=0 || rc=$?
+
+          if [ "${rc:-0}" -eq 3 ]; then
+            echo "No matching checklist line for #$CHILD in epic #$epic; already in the desired state."
+            exit 0
+          fi
+
+          # 4. Push the updated body only if it actually changed.
+          if cmp -s epic.md epic.new; then
+            echo "Epic #$epic already up to date."
+          else
+            gh issue edit "$epic" --repo "$REPO" --body-file epic.new
+            echo "Epic #$epic reconciled for #$CHILD."
+          fi

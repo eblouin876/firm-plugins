@@ -86,6 +86,9 @@ Present the plan in the conversation. Discuss, adjust, and iterate on the user's
 On approval, and only then:
 
 - **File a GitHub issue.** Title from the goal; body is the plan; render the step-by-step breakdown as a markdown task list (`- [ ]`) so progress can be checked off. Prefer `gh issue create`; fall back to the GitHub API. For a large effort, a tracking issue with linked sub-issues is fine, but a single well-structured issue is the default.
+- **If this issue belongs to an epic** (a `product-planning` roadmap stage, or any tracking issue), link it so the epic reconciles itself when the work merges:
+  - Register it as a native **sub-issue** of the epic (`gh api` / GitHub's sub-issues endpoint, or the `sub_issue_write` tool) — this alone moves the epic's progress bar when the issue closes, no automation required.
+  - Add an `Epic: #<n>` marker line to this issue's body, and make sure the epic's checklist line for this stage carries this issue's number, e.g. `- [ ] Stage 3 — Auth (#<this-issue>)`. That pair is what the `epic-checkoff` workflow keys on to flip `- [ ]` → `- [x]` in the epic when the issue closes (via the merged PR's `Closes #`). Without the marker and the number on the line, the box won't tick.
 - **Tag @claude to start the build.** Trigger the build agent by mentioning @claude on the issue (e.g. a comment: "@claude implement this plan"), so the Claude GitHub Action picks it up, implements against the plan, and opens a PR.
 - **If the Action isn't installed on the repo,** file the issue but note @claude won't respond until the repo is scaffolded into the pipeline (see the `scaffolding` skill).
 - **If GitHub isn't available** (no `github.com` remote, or the CLI/API can't create issues), present the plan inline, say plainly it couldn't be filed, and note the build wasn't auto-triggered. Never silently drop the plan.

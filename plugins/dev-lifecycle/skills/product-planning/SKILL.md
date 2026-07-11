@@ -30,10 +30,12 @@ Break the product into an ordered set of stages. For each: what it delivers, why
 
 ### 4. Record it as durable artifacts
 **A repo must exist first** — the epic, milestones, and ADR live in it. For a greenfield product with no repo yet, run `scaffolding` to create and initialize it (that's its job), then record the plan into it. Don't hand-wave this: no repo, nowhere to file the epic.
-- **Epic / tracking issue** — the product plan: vision, architecture summary, and the roadmap as a checklist of stages (`- [ ]`), each linked to its milestone/sub-issue. This is the alignment anchor every stage references.
+- **Epic / tracking issue** — the product plan: vision, architecture summary, and the roadmap as a checklist of stages (`- [ ]`), each linked to its milestone and sub-issue. This is the alignment anchor every stage references. Put each stage's issue number on its checklist line — `- [ ] Stage 3 — Auth (#42)` — so the box can be reconciled when that stage's issue closes.
 - **Milestones** — one per stage, so each stage's issues group under it.
 - **Architecture ADR** — the decisions from step 2, via the `documentation` skill (its ADR format maps directly onto context / decision / consequences).
-- Stub sub-issues per stage are fine as placeholders; they get fleshed out by `planning` when that stage begins.
+- **Stage sub-issues** — file one native GitHub **sub-issue** per stage under the epic (even as a stub; `planning` fleshes it out when the stage begins). Give each an `Epic: #<n>` marker line pointing back at this epic. Two payoffs: GitHub rolls sub-issue completion into the epic's progress bar automatically, and the `epic-checkoff` workflow (shipped by `scaffolding`) uses the marker + the issue number on the checklist line to flip `- [ ]` → `- [x]` when a stage's issue closes on merge. So the epic stays current with zero manual upkeep.
+
+For an **epic that predates this wiring** (no markers, no numbers on its lines), backfill it once with `${CLAUDE_PLUGIN_ROOT}/assets/scripts/retrofit-epic.sh <owner/repo> <epic#> [stage-issue#…]` — it adds the markers, the numbers, and the sub-issue links, and ticks any already-merged stage. It's dry-run by default (`--apply` to write).
 
 Do **not** tag `@claude` — no stage is being built yet.
 
