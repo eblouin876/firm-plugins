@@ -166,6 +166,15 @@ for path in wf_templates:
             if w.get("anthropic_api_key"):
                 err(f"{rel}: uses 'anthropic_api_key' — the firm authenticates "
                     "with CLAUDE_CODE_OAUTH_TOKEN only")
+            # The action ignores bot-actor events by default, but the firm's
+            # autonomous pipeline drives itself as a bot (Claude opens PRs and
+            # posts @claude follow-ups). Without allowed_bots those events are
+            # dropped and the pipeline stalls, so require it on every step.
+            if not str(w.get("allowed_bots", "")).strip():
+                err(f"{rel}: a claude-code-action step does not set "
+                    "'allowed_bots' — the action ignores bot-actor events by "
+                    "default, so events posted by Claude (e.g. an autonomously "
+                    "opened PR or an @claude follow-up) won't trigger it")
             # The action documents --system-prompt for standing instructions;
             # --append-system-prompt is undocumented for it and its bundled CLI
             # rejects it, which silently breaks tag mode. Forbid it.

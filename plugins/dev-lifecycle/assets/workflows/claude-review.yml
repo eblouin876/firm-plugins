@@ -27,6 +27,10 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # By default the action ignores events whose actor is a bot. The
+          # implement workflow's agent opens PRs as a bot, so without this the
+          # review never runs on an autonomously-opened PR. Allow the Claude bot.
+          allowed_bots: "claude"
           # plugin_marketplaces takes full git URLs, not owner/repo shorthand.
           plugin_marketplaces: |
             https://github.com/<owner>/firm-plugins.git
