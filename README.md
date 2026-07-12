@@ -28,8 +28,9 @@ firm-plugins/
 │   │   └── definition-of-done.md        # the shared merge-ready bar
 │   └── references/                      # the self-extending library, by domain
 │       ├── frontend/  {react,typescript,tailwind,material-ui,htmx}.md
-│       ├── backend/   {fastapi,sqlalchemy,postgres,pydantic,django}.md
-│       ├── testing/ · devops/ · security/
+│       ├── backend/   {fastapi,sqlalchemy,postgres,pydantic,django,drf,celery,redis,stripe,pandas,websockets,anthropic,slack-bolt}.md
+│       ├── devops/    {cicd,containers,deploy-operate,kubernetes,uv}.md
+│       ├── testing/ · debugging/ · docs/ · infra/ · review/ · security/
 │       └── _TEMPLATE.md                 # house format + metadata header
 ├── scripts/
 │   └── validate_plugin.py               # structural validator (manifests + SKILL.md frontmatter)
