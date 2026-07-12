@@ -39,8 +39,11 @@ firm-plugins/
     ├── claude-review.reusable.yml       # reusable (workflow_call): the review Action (incl. @claude/@owner routing), called by each repo's claude-review.yml stub
     ├── validate.yml                     # runs the validator on every push/PR (merge gate)
     ├── release.yml                      # semver bump + exact tag + moving Action-contract tag (@v1) on merged PR
-    └── freshness-audit.yml              # weekly staleness check → tracking issue
+    ├── freshness-audit.yml              # weekly: existing references gone stale → tracking issue
+    └── coverage-audit.yml               # weekly: fleet libraries with no reference → PR (reads .github/fleet-repos.txt)
 ```
+
+`.github/fleet-repos.txt` lists the repos the coverage audit scans for gaps — edit it as the fleet changes.
 
 Skills reference shared files and library references by plugin-root path, e.g. `${CLAUDE_PLUGIN_ROOT}/shared/token-efficiency.md` and `${CLAUDE_PLUGIN_ROOT}/references/frontend/react.md`. (Resolution is verified in the local plugin test; the fallback, if a path form doesn't resolve, is to copy the shared file into the skill's own folder.)
 
@@ -56,12 +59,13 @@ library · versions-covered · last-verified · provenance · sources
 
 This header is load-bearing: it's what the freshness audit reads to decide staleness cheaply, and what distinguishes reviewed canon (`provenance: manual`) from machine-drafted docs (`provenance: auto-generated (pending review)`).
 
-### Three ways a reference gets created or refreshed
+### Four ways a reference gets created or refreshed
 1. **Onboarding (eager):** when a repo joins the firm, its significant direct dependencies are inventoried and any missing references are generated as a batch. Target frameworks/libraries with real idioms and version-sensitivity — not every transitive utility.
-2. **Build-time (lazy):** if a build skill meets a library with no reference, it generates one for immediate use and opens a PR to add it here.
-3. **Scheduled audit (freshness):** the weekly workflow flags references whose covered version or last-verified date has fallen behind; regeneration follows as a reviewed PR.
+2. **Build-time (lazy):** if a build skill meets a library with no reference, it generates one for immediate use and opens a PR to add it here. This is model-driven and only fires when a build session has this repo in scope — the coverage audit (#4) is its reliable backstop.
+3. **Scheduled audit (freshness):** `freshness-audit.yml` weekly flags references whose covered version or last-verified date has fallen behind; regeneration follows as a reviewed PR. Keeps the library **current**.
+4. **Scheduled audit (coverage):** `coverage-audit.yml` weekly reads `.github/fleet-repos.txt`, inventories each fleet repo's significant dependencies, diffs them against the library, and opens a PR adding references for any framework in use but undocumented. Keeps the library **complete** — the automatic form of #2. Requires a `FLEET_READ_TOKEN` secret with read access to the (mostly private) fleet repos.
 
-All three **ground generation in current official docs, never recall**, and all three land as **PRs you review and merge** — nothing enters canon silently.
+All four **ground generation in current official docs, never recall**, and all four land as **PRs you review and merge** — nothing enters canon silently.
 
 ## Releases (semver)
 

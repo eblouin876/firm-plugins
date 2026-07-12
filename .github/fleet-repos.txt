@@ -1,0 +1,17 @@
+# Fleet repos the coverage-audit scans for reference-library gaps.
+# One `owner/repo` per line. Lines starting with `#` and blank lines are ignored.
+# firm-plugins itself is intentionally excluded — it IS the library.
+#
+# The coverage-audit workflow reads this file weekly, inventories each repo's
+# significant direct dependencies, diffs them against
+# plugins/dev-lifecycle/references/, and opens a PR adding a grounded
+# reference for any missing framework/library. Edit this list as the fleet
+# changes — add a repo here and its stack is covered on the next run.
+#
+# Private repos require the FLEET_READ_TOKEN secret (see the workflow header).
+
+eblouin876/Outgrown
+eblouin876/schwab_trader
+eblouin876/TeamForge
+eblouin876/grain-brain
+eblouin876/backyard-farmer

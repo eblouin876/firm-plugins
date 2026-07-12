@@ -1,0 +1,91 @@
+name: coverage-audit
+
+# Periodic sweep that keeps the reference library COMPLETE (the sibling of
+# freshness-audit, which keeps it CURRENT). Reads the fleet repo list in
+# .github/fleet-repos.txt, inventories each repo's significant direct
+# dependencies, diffs them against plugins/dev-lifecycle/references/, and
+# opens a PR adding a grounded reference for any framework/library that is
+# in use across the fleet but has no reference yet. This is the automatic
+# version of the build skills' "meet an undocumented library -> PR a
+# reference" instruction, which otherwise only fires when a build session
+# happens to have this repo in scope.
+#
+# Nothing enters canon silently: the job opens a PR (references marked
+# `provenance: auto-generated (pending review)`) and a human merges it.
+#
+# ── Required secret ────────────────────────────────────────────────────────
+#   FLEET_READ_TOKEN — a token with READ access to every repo listed in
+#   .github/fleet-repos.txt (the default GITHUB_TOKEN only sees THIS repo,
+#   and most fleet repos are private). Use a fine-grained PAT scoped to the
+#   fleet repos with Contents: read, or a classic PAT with `repo` read.
+#   Without it, private repos are skipped and the audit only covers public
+#   ones. Add it under Settings → Secrets and variables → Actions.
+
+on:
+  schedule:
+    - cron: "0 15 * * 1"   # Mondays, 15:00 UTC — an hour after freshness-audit
+  workflow_dispatch: {}
+
+permissions:
+  contents: write        # create the branch + commit the new references
+  pull-requests: write   # open the PR
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Coverage audit
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Passed so Claude can read the (mostly private) fleet repos' manifests.
+          github_token: ${{ secrets.FLEET_READ_TOKEN }}
+          plugin_marketplaces: |
+            https://github.com/eblouin876/firm-plugins.git
+          plugins: |
+            dev-lifecycle@firm-plugins
+          claude_args: "--model claude-sonnet-5"
+          prompt: |
+            Audit the reference library in plugins/dev-lifecycle/references/
+            for GAPS — significant libraries the fleet uses that have no
+            reference yet. Use the onboarding skill's self-extend flow and the
+            reference conventions in plugins/dev-lifecycle/references/_TEMPLATE.md.
+
+            Steps:
+            1. Read .github/fleet-repos.txt for the list of `owner/repo` to
+               scan (ignore blank lines and `#` comments).
+            2. For each repo, fetch its dependency manifests via the GitHub API
+               / `gh` using the provided token (requirements*.txt,
+               pyproject.toml, package.json, uv.lock, Gemfile, go.mod — whatever
+               applies). If a private repo is unreachable, note it and skip it;
+               do not fail the run.
+            3. Inventory the SIGNIFICANT DIRECT dependencies — frameworks and
+               libraries with real, version-sensitive idioms. Skip transitive
+               deps and trivial utilities with nothing idiomatic to document.
+            4. Diff that inventory against the existing references (match on the
+               `library:` metadata header and the filename under references/).
+               Build the list of libraries in real use with NO reference.
+            5. For each gap, generate a reference following _TEMPLATE.md,
+               GROUNDED IN CURRENT OFFICIAL DOCS (never recall): correct
+               metadata header, `versions-covered` and `last-verified` set to
+               today, `provenance: auto-generated (pending review)`, and the
+               official doc URLs actually consulted in `sources`. Put it in the
+               right domain folder (backend/ frontend/ devops/ testing/ etc.).
+               Cap this run at the 6 highest-value gaps (rank by how many fleet
+               repos use the library, then by idiom richness); list any deferred
+               gaps in the PR body so the next run picks them up.
+            6. Run `python scripts/validate_plugin.py` and make sure it passes.
+            7. Open ONE pull request from a branch named
+               `coverage-audit/<YYYY-MM-DD>` adding the new references. Title:
+               "Coverage audit: add N reference(s)". In the body, list each new
+               reference with the repos that drove it and the versions covered,
+               note any repos skipped for access, list deferred gaps, and add a
+               line `cc @eblouin876` (repo convention — the owner is tagged on
+               every PR).
+
+            If there are NO gaps, do not open a PR — finish without changes.
+            Do not modify or "refresh" existing references here; staleness is
+            freshness-audit's job. Never commit anything to the fleet repos —
+            this job only reads them and only writes to firm-plugins.
