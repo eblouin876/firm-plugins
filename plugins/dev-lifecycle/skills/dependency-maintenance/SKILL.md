@@ -5,7 +5,7 @@ description: "Keep a project's dependencies current and secure — audit for out
 
 # Dependency maintenance
 
-Keep the software supply chain current and safe. This is the code-side complement to `infrastructure` (host maintenance) and to the plugin's freshness audit (which keeps *our references* current — this keeps a *project's dependencies* current). The two failure modes it prevents: falling so far behind that upgrades become dangerous, and sitting on a known vulnerability.
+Keep the software supply chain current and safe. This is the code-side complement to `infrastructure` (host maintenance) and to the plugin's freshness audit (which keeps *our references* current — this keeps a *project's dependencies* current). In a full-project `security-audit`, this dependency sweep is one surface of many — that skill maps the whole attack surface; this one remediates the dependency slice. The two failure modes it prevents: falling so far behind that upgrades become dangerous, and sitting on a known vulnerability.
 
 ## Core rules
 
