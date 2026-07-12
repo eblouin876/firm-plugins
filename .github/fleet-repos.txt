@@ -10,8 +10,8 @@
 #
 # Private repos require the FLEET_READ_TOKEN secret (see the workflow header).
 
-eblouin876/Outgrown
-eblouin876/schwab_trader
-eblouin876/TeamForge
-eblouin876/grain-brain
-eblouin876/backyard-farmer
+eblouin-development/Outgrown
+eblouin-development/schwab_trader
+eblouin-development/TeamForge
+eblouin-development/grain-brain
+eblouin-development/backyard-farmer
