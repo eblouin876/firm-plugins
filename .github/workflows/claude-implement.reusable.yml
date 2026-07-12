@@ -55,11 +55,34 @@ on:
 
 jobs:
   claude:
+    # AUTHORIZATION GATE. Two things must be true for the job to start: the event
+    # carries an "@claude" mention AND the actor is trusted. "Trusted" means the
+    # actor has real access to the repo (author_association OWNER / MEMBER /
+    # COLLABORATOR) OR the event is bot-authored. Without the association check,
+    # ANY GitHub user could comment "@claude ..." on a PUBLIC repo and trigger a
+    # run (burning quota / acting on the repo) — the association check is what
+    # keeps drive-by @claude mentions from the general public (CONTRIBUTOR /
+    # FIRST_TIME_CONTRIBUTOR / NONE) from starting a run.
+    #
+    # The bot allowance (user.type == 'Bot') is REQUIRED for the autonomous
+    # pipeline: the review workflow and the agent's own follow-ups post "@claude"
+    # routing comments as a bot, and those arrive with author_association == NONE,
+    # so they would fail the human-association check. Which bot is actually acted
+    # on is still narrowed by `allowed_bots: "claude"` on the action step below —
+    # a stray third-party bot may pass this gate but the action ignores it.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@claude') &&
+        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || github.event.comment.user.type == 'Bot')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@claude') &&
+        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || github.event.comment.user.type == 'Bot')) ||
+      (github.event_name == 'pull_request_review' &&
+        contains(github.event.review.body, '@claude') &&
+        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association) || github.event.review.user.type == 'Bot')) ||
+      (github.event_name == 'issues' &&
+        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) || github.event.issue.user.type == 'Bot'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
