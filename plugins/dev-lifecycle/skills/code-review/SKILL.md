@@ -14,7 +14,7 @@ Review the code that changed and either tell the user precisely what to fix (int
 
 ## Core rules
 
-- **Scope to the change.** Review what was touched since the base, plus that change's blast radius. Don't audit the whole codebase — relevant *and* token-efficient. See `${CLAUDE_PLUGIN_ROOT}/shared/token-efficiency.md`.
+- **Scope to the change.** Review what was touched since the base, plus that change's blast radius. Don't audit the whole codebase (that's the `security-audit` skill) — relevant *and* token-efficient. See `${CLAUDE_PLUGIN_ROOT}/shared/token-efficiency.md`.
 - **Read enough to judge, not everything.** Trace what the change touches — its call sites and contracts — not the whole tree.
 - **Be honest and specific.** Real issues with locations and reasons. No vague "consider improving error handling." Don't pad with nitpicks, don't withhold a real blocker to be agreeable.
 - **Judge against the right version and the project's conventions.** Flag a React-19 anti-pattern only if the project is on 19; a Pydantic v1/v2 mismatch against what's installed. "Best practice" = idiomatic for this stack and consistent with this codebase.

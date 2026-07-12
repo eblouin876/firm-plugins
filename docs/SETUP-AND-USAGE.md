@@ -10,7 +10,7 @@ This is the operator's manual. The plugin's internal conventions are in the repo
 
 A Claude Code plugin marketplace (`firm-plugins`) containing one plugin (`dev-lifecycle`) with:
 
-- **18 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` → `documentation` / `debugging`.
+- **19 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging`.
 - A **self-extending reference library** of per-library, version-aware docs (React, TypeScript, MUI, Tailwind, HTMX, FastAPI, Pydantic, SQLAlchemy, Postgres, Django, plus testing/devops/security/docs/debugging).
 - A **token-efficiency doctrine** every skill follows, and a shared **definition-of-done** that is the merge-ready bar.
 - Three automations: **semver release** on merge, a weekly **freshness audit** that flags stale references, and **epic checkoff** — a per-project workflow that ticks an epic's checkbox when a stage/feature issue closes on merge.
@@ -143,6 +143,7 @@ Roll back by pointing the catalog at a prior tag.
 | Containerize, wire CI, deploy (incl. Goatenheim) | `devops` |
 | Provision & maintain hosts/infra (AWS, home, Tailscale) | `infrastructure` |
 | Keep dependencies current / patch a CVE | `dependency-maintenance` |
+| Audit a whole project's security | `security-audit` |
 | Seed data & build reports | `data` |
 | Write docs / ADRs / API reference | `documentation` |
 | Root-cause a failure | `debugging` |
