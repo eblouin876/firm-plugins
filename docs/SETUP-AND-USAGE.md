@@ -10,7 +10,7 @@ This is the operator's manual. The plugin's internal conventions are in the repo
 
 A Claude Code plugin marketplace (`firm-plugins`) containing one plugin (`dev-lifecycle`) with:
 
-- **19 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging`.
+- **20 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging` / `walkthrough`.
 - A **self-extending reference library** of per-library, version-aware docs (React, TypeScript, MUI, Tailwind, HTMX, FastAPI, Pydantic, SQLAlchemy, Postgres, Django, plus testing/devops/security/docs/debugging).
 - A **token-efficiency doctrine** every skill follows, and a shared **definition-of-done** that is the merge-ready bar.
 - Three automations: **semver release** on merge, a weekly **freshness audit** that flags stale references, and **epic checkoff** — a per-project workflow that ticks an epic's checkbox when a stage/feature issue closes on merge.
@@ -38,7 +38,9 @@ In Claude Code:
 /plugin install dev-lifecycle@firm-plugins
 ```
 
-Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 11 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
+Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 20 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
+
+> **Cloud sessions are different — see [Keeping cloud sessions current](#keeping-cloud-sessions-current).** The `/plugin` UI toggle and `~/.claude/settings.json` don't carry into Claude Code on the web, so cloud sessions can silently pin an old plugin version.
 
 ### 3. Your user settings (`~/.claude/settings.json`)
 Applies everywhere you work, zero repo footprint:
@@ -124,6 +126,52 @@ Roll back by pointing the catalog at a prior tag.
 
 ---
 
+## Keeping cloud sessions current
+
+**The trap:** a release bumps the version fine, but Claude Code on the web keeps serving an **old** plugin — new skills never appear even in a "fresh" session started after the release.
+
+**Why:** cloud environments run a setup script (`claude plugin marketplace add …` + `claude plugin install …`) **once**, then [snapshot the filesystem](https://code.claude.com/docs/en/claude-code-on-the-web#environment-caching) — including `~/.claude/plugins` — and reuse it for every later session, **skipping the setup script**. So the plugin is frozen at whatever version was installed the first time. Worse, `add`/`install` are **no-ops against existing state** ("already on disk" / "already installed"), so re-running them never upgrades. The snapshot only rebuilds when you **edit the setup script** (or ~7-day expiry). GitHub Actions are immune — each run gets a clean runner and clones the marketplace fresh.
+
+There are two independent knobs; use the one that matches the scope:
+
+### Environment-level (covers every repo sharing that cloud environment)
+Fix the environment's **setup script** so it actually upgrades. `add`/`install` alone don't — add the `update` commands:
+
+```bash
+claude plugin marketplace add eblouin-development/firm-plugins || true
+claude plugin marketplace update firm-plugins        # pull marketplace → latest main
+claude plugin install dev-lifecycle@firm-plugins || true
+claude plugin update dev-lifecycle@firm-plugins       # upgrade the installed plugin
+```
+
+Editing the setup script **is** what un-sticks the current stale snapshot (it forces one rebuild). This is the low-effort fleet-wide fix: **you do not copy anything per-repo** — every project that runs in that default environment picks up the new version, with staleness bounded to the ~7-day cache window.
+
+### Repo-level (tighter freshness for one repo)
+Commit a `.claude/settings.json` (which *does* carry into cloud sessions, unlike user settings) that registers the marketplace for **auto-update** and, as a belt-and-suspenders guarantee, refreshes on session start:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "firm-plugins": {
+      "source": { "source": "github", "repo": "eblouin-development/firm-plugins" },
+      "autoUpdate": true
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [ { "type": "command", "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update firm-plugins && claude plugin update dev-lifecycle@firm-plugins; } >/dev/null 2>&1 || true", "timeout": 120 } ] },
+      { "matcher": "resume",  "hooks": [ { "type": "command", "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update firm-plugins && claude plugin update dev-lifecycle@firm-plugins; } >/dev/null 2>&1 || true", "timeout": 120 } ] }
+    ]
+  }
+}
+```
+
+`autoUpdate` is the native path (refreshes and prompts `/reload-plugins` in-session where honored); the SessionStart hook is the CLI-level fallback (applies on the next session, since `plugin update` needs a restart to take effect). This repo ships exactly this block. Do **not** hand-copy it into every project — the natural place to standardize it is `scaffolding`/`onboarding`, so every firm repo gets it when it's brought into the pipeline.
+
+**Bottom line:** for "all my projects," fix the **environment setup script** once — that's the fleet-wide lever. Reserve the repo-level `.claude/settings.json` block for repos where you can't tolerate the ~7-day window (like this one).
+
+---
+
 ## Which skill for what
 
 | I want to… | Skill |
@@ -147,6 +195,7 @@ Roll back by pointing the catalog at a prior tag.
 | Seed data & build reports | `data` |
 | Write docs / ADRs / API reference | `documentation` |
 | Root-cause a failure | `debugging` |
+| Understand code / a PR (read-only explainer) | `walkthrough` |
 
 ---
 
