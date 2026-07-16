@@ -55,34 +55,50 @@ on:
 
 jobs:
   claude:
-    # AUTHORIZATION GATE. Two things must be true for the job to start: the event
-    # carries an "@claude" mention AND the actor is trusted. "Trusted" means the
-    # actor has real access to the repo (author_association OWNER / MEMBER /
-    # COLLABORATOR) OR the event is bot-authored. Without the association check,
-    # ANY GitHub user could comment "@claude ..." on a PUBLIC repo and trigger a
-    # run (burning quota / acting on the repo) — the association check is what
-    # keeps drive-by @claude mentions from the general public (CONTRIBUTOR /
-    # FIRST_TIME_CONTRIBUTOR / NONE) from starting a run.
+    # AUTHORIZATION GATE. The job starts only for a trusted actor whose comment is
+    # a genuine request to act — and humans and bots are held to DIFFERENT bars:
     #
-    # The bot allowance (user.type == 'Bot') is REQUIRED for the autonomous
-    # pipeline: the review workflow and the agent's own follow-ups post "@claude"
-    # routing comments as a bot, and those arrive with author_association == NONE,
-    # so they would fail the human-association check. Which bot is actually acted
-    # on is still narrowed by `allowed_bots: "claude"` on the action step below —
-    # a stray third-party bot may pass this gate but the action ignores it.
+    #   HUMANS (author_association OWNER / MEMBER / COLLABORATOR) trigger on a
+    #   natural "@claude" mention, as before. The association check is what keeps
+    #   drive-by @claude mentions from the general public (CONTRIBUTOR /
+    #   FIRST_TIME_CONTRIBUTOR / NONE) on a PUBLIC repo from burning quota.
+    #
+    #   BOTS (user.type == 'Bot') trigger ONLY on an explicit machine sentinel,
+    #   the HTML comment `<!-- firm:route-to-claude -->`, NOT on a bare "@claude".
+    #   This is the fix for the self-tagging loop: the agent posts its own
+    #   comments as a bot, and a naive `contains(body, '@claude')` re-triggered a
+    #   full run on ANY bot comment that merely contained the string "@claude" —
+    #   even prose like "I'm not tagging @claude". `contains()` can't tell an
+    #   intentional handoff from an incidental mention, so we stop asking it to:
+    #   a bot handoff is real only when it carries the sentinel, which never
+    #   appears in ordinary prose. Intentional routers (the review workflow, the
+    #   agent's own follow-ups) emit the sentinel alongside a visible "@claude ..."
+    #   instruction; everything else a bot says is inert. This fails CLOSED — a
+    #   forgotten sentinel means a handoff that a human must re-tag, never a
+    #   runaway cost loop. The sentinel is an HTML comment, so it is invisible in
+    #   the rendered PR/issue. Which bot is acted on is still narrowed by
+    #   `allowed_bots: "claude"` on the action step below.
     if: |
       (github.event_name == 'issue_comment' &&
-        contains(github.event.comment.body, '@claude') &&
-        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || github.event.comment.user.type == 'Bot')) ||
+        ((contains(github.event.comment.body, '@claude') &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+         (github.event.comment.user.type == 'Bot' &&
+          contains(github.event.comment.body, '<!-- firm:route-to-claude -->')))) ||
       (github.event_name == 'pull_request_review_comment' &&
-        contains(github.event.comment.body, '@claude') &&
-        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || github.event.comment.user.type == 'Bot')) ||
+        ((contains(github.event.comment.body, '@claude') &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+         (github.event.comment.user.type == 'Bot' &&
+          contains(github.event.comment.body, '<!-- firm:route-to-claude -->')))) ||
       (github.event_name == 'pull_request_review' &&
-        contains(github.event.review.body, '@claude') &&
-        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association) || github.event.review.user.type == 'Bot')) ||
+        ((contains(github.event.review.body, '@claude') &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+         (github.event.review.user.type == 'Bot' &&
+          contains(github.event.review.body, '<!-- firm:route-to-claude -->')))) ||
       (github.event_name == 'issues' &&
-        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
-        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) || github.event.issue.user.type == 'Bot'))
+        (((contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
+         (github.event.issue.user.type == 'Bot' &&
+          contains(github.event.issue.body, '<!-- firm:route-to-claude -->'))))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,4 +123,4 @@ jobs:
           # to actually USE the firm's skills, not just have them present.
           claude_args: |
             --allowedTools "Bash,Edit,MultiEdit,Write,Read,Glob,Grep,TodoWrite,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"
-            --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available. For the requested work, use the matching firm skill (planning, backend, frontend, testing, code-review, devops, documentation, and the rest) rather than working ad-hoc, and follow the firm conventions and definition-of-done. When the work is complete and your branch is pushed, OPEN A PULL REQUEST yourself against the repository default branch with `gh pr create` (give it a clear title and a body that summarizes the change and references the issue, and tag the repository owner by including `@${{ inputs.owner }}` on its own line in the body — e.g. `cc @${{ inputs.owner }}` — so they are notified and can pull the PR up quickly, including on mobile) — do not stop at the compare link; the action does not open the PR for you and the review pipeline only runs once a PR exists. Report status with complete honesty: mark a checklist item done ONLY if it actually completed, and never claim a PR was opened, tests or linters passed, or a file was written unless it truly happened. You CANNOT modify files under .github/workflows/ (the GitHub App lacks the workflows permission). If the task requires creating or changing a workflow file, do NOT silently relocate it and check the box — commit it to the branch under a clearly-labeled staging path (for example pending-workflows/) and state plainly in the PR description that a human must move each such file into .github/workflows/ before the pipeline is live, listing them. Whenever you create or change a GitHub Actions workflow file (including a staged one) run actionlint on it, and run shellcheck on any shell script you touch — install the linter if it is not already present — and fix every finding before opening the PR; these are CI gates, so an unlinted workflow or script fails review."
+            --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available. For the requested work, use the matching firm skill (planning, backend, frontend, testing, code-review, devops, documentation, and the rest) rather than working ad-hoc, and follow the firm conventions and definition-of-done. When the work is complete and your branch is pushed, OPEN A PULL REQUEST yourself against the repository default branch with `gh pr create` (give it a clear title and a body that summarizes the change and references the issue, and tag the repository owner by including `@${{ inputs.owner }}` on its own line in the body — e.g. `cc @${{ inputs.owner }}` — so they are notified and can pull the PR up quickly, including on mobile) — do not stop at the compare link; the action does not open the PR for you and the review pipeline only runs once a PR exists. SELF-TAGGING LOOP GUARD: your comments are posted as a bot, and the pipeline gate ONLY re-triggers Claude on a bot comment that contains the exact hidden sentinel '<!-- firm:route-to-claude -->'. So in ordinary prose NEVER write the literal string '@claude' — refer to 'the Claude bot' instead — because although a bare '@claude' from a bot no longer triggers a run, keeping the string out of prose avoids all ambiguity. ONLY when you deliberately want to hand work back to the Claude bot (a genuine follow-up that should start another run) do you post a comment that contains BOTH a visible '@claude <instruction>' AND the sentinel '<!-- firm:route-to-claude -->' on its own line. Never put the sentinel on any comment that is not an intentional handoff. Report status with complete honesty: mark a checklist item done ONLY if it actually completed, and never claim a PR was opened, tests or linters passed, or a file was written unless it truly happened. You CANNOT modify files under .github/workflows/ (the GitHub App lacks the workflows permission). If the task requires creating or changing a workflow file, do NOT silently relocate it and check the box — commit it to the branch under a clearly-labeled staging path (for example pending-workflows/) and state plainly in the PR description that a human must move each such file into .github/workflows/ before the pipeline is live, listing them. Whenever you create or change a GitHub Actions workflow file (including a staged one) run actionlint on it, and run shellcheck on any shell script you touch — install the linter if it is not already present — and fix every finding before opening the PR; these are CI gates, so an unlinted workflow or script fails review."

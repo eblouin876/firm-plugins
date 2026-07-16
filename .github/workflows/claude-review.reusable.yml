@@ -13,18 +13,24 @@
 # is posted ONCE, only after the whole review is complete (individual findings
 # are plain comments with no @-mention) — so a tag means "review finished," not
 # "another comment landed":
-#   - clear blocker/high fixes (no decision needed) -> the routing comment ends
-#     with `@claude`, which triggers the implement workflow (its caller grants
-#     `contents: write`) to implement the fixes and push them. The push is a
-#     `synchronize` event, so this review re-runs on the new commit and the loop
-#     converges — terminating when the review comes back clean.
+#   - clear blocker/high fixes (no decision needed) -> the routing comment
+#     carries `@claude` PLUS the hidden sentinel `<!-- firm:route-to-claude -->`,
+#     which triggers the implement workflow (its caller grants `contents: write`)
+#     to implement the fixes and push them. The push is a `synchronize` event, so
+#     this review re-runs on the new commit and the loop converges — terminating
+#     when the review comes back clean.
 #   - clean review, or any finding that needs a human decision before it can be
-#     implemented -> the routing comment ends with `@<owner>` so the owner is
-#     pinged. Decision-needed always routes to the owner, never to @claude.
-# The routing comment is posted on the PULL REQUEST conversation (a
-# `pull_request`-scoped `issue_comment`), which the implement stub already
-# listens for (`issue_comment` + `pull_request_review` triggers match `@claude`,
-# and `allowed_bots: "claude"` lets this review bot's comment through). Because
+#     implemented -> the routing comment ends with `@<owner>` (and NO sentinel)
+#     so the owner is pinged. Decision-needed always routes to the owner, never
+#     to @claude.
+# The sentinel is what the implement gate keys on for BOT-authored comments: a
+# bare `@claude` from this review bot no longer triggers a run (that was the
+# self-tagging loop), only the sentinel does. So this bot must emit the sentinel
+# on — and ONLY on — the intentional auto-fix handoff. The routing comment is
+# posted on the PULL REQUEST conversation (a `pull_request`-scoped
+# `issue_comment`), which the implement stub already listens for (`issue_comment`
+# + `pull_request_review` triggers, and `allowed_bots: "claude"` lets this review
+# bot's comment through). Because
 # that event is on the PR, the implement run and its progress tracking appear on
 # the PR itself — so anyone who opens the PR can see it is still working, instead
 # of the activity hiding on the originating issue.
@@ -78,22 +84,31 @@ jobs:
             - If there are 🔴 blocker or 🟠 high findings AND every one of them
               is a clear, mechanical fix that needs no decision, end the routing
               comment with "@claude" plus a short instruction to implement the
-              fixes you listed. The implement workflow picks it up, pushes the
+              fixes you listed, AND include the exact hidden sentinel
+              "<!-- firm:route-to-claude -->" on its own line in that comment.
+              Your comment is bot-authored, and the implement workflow ONLY
+              re-triggers on a bot comment that contains this sentinel — a bare
+              "@claude" from you will NOT start a run (that was the old
+              self-tagging loop). The implement workflow picks it up, pushes the
               fixes onto this PR branch, and this review re-runs on the new
               commit.
             - If the review is clean (no blocker/high findings), end it with
               "@${{ inputs.owner }}" — it is merge-ready and the merge is their
-              call.
+              call. Do NOT include the sentinel.
             - If ANY finding needs a human decision before it can be implemented
               (a design trade-off, an ambiguous requirement, an architectural
               choice, or anything you are not confident to fix mechanically), end
               it with "@${{ inputs.owner }}", state the decision needed, and do
-              NOT tag @claude — a decision must be made before implementation.
+              NOT tag @claude or include the sentinel — a decision must be made
+              before implementation.
             Decision-needed always wins: if even one finding needs a call, route
             to @${{ inputs.owner }}, not @claude. To avoid an endless loop, if a
             blocker/high finding you already handed to @claude is still present
-            on re-review, do not tag @claude again — route to @${{ inputs.owner }}
-            and explain that the automated fix did not resolve it.
+            on re-review, do not route to @claude again (omit the sentinel) —
+            route to @${{ inputs.owner }} and explain that the automated fix did
+            not resolve it. The sentinel appears on the auto-fix handoff and
+            nowhere else: never place it on a per-finding comment or an
+            owner-routed comment.
           # --allowedTools pre-approves the tools the review skill needs in a
           # headless run — Bash (to inspect the diff, run linters/tests, read CI
           # via gh) and the read/search tools.
