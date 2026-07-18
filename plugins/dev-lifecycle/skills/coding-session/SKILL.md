@@ -28,6 +28,25 @@ They are compatible: a session files the same issue structure and opens the same
 - **The repo is the memory.** State lives in GitHub — the issue/epic, its `in-progress` label, the PR, the review comments — not in the thread. If the session is interrupted, another session (or the Action) can pick it up from the issue and PR alone.
 - **Merge-ready is the ceiling, never merge.** The loop converges on `${CLAUDE_PLUGIN_ROOT}/shared/definition-of-done.md`: behavior meets acceptance criteria, meaningful tests pass, CI green, security clean, review's blockers resolved. Then it **stops and notifies the user**. No agent self-merges.
 - **Bound the loop, then escalate.** If build↔review can't reach merge-ready in a couple of rounds, or a finding needs a design decision, stop and bring it to the user with the diagnosis — don't thrash or force a risky change.
+- **Route each subagent to the right model.** Reasoning-heavy stages (planning, plan-review, code-review) run on a stronger model; mechanical build/implementation runs on a cheaper one. Pass the model explicitly on every spawn (see "Model routing" below) — an unset model inherits the orchestrator's, which is the most expensive default and the main source of avoidable spend.
+
+## Model routing
+
+The session runs many subagents, and each is spawned with the `Agent` tool's `model` parameter. **Always set it** — leave it unset and the subagent inherits the orchestrator's model (Opus), which is the costliest option and the reason an un-routed session burns far more than it needs to. Route by what the stage actually demands:
+
+| Subagent / stage | Model | Why |
+| --- | --- | --- |
+| **Orchestrator** (this conducting thread) | `opus` | Holds the plan, loop state, and gate decisions — reasoning-critical, and usually the session's own model already. |
+| **Planner** (`planning` / `product-planning`, step 1) | `opus` | Investigation and design quality set the ceiling for everything downstream; cheap here is expensive later. |
+| **Plan-review** (step 2) | `opus` | Judges whether a plan is actually buildable and what it glossed over — a judgment stage. |
+| **Build / implementation** (`frontend`, `backend`, `testing`, `data`, `debugging`, `devops`, `infrastructure`; steps 4 and 6) | `sonnet` | Mechanical execution against a concrete plan — Sonnet builds to spec well and is where the bulk of tokens are spent, so this is the biggest saving. |
+| **Code-review** (`code-review` pipeline mode; step 5) | `opus` | Correctness/security judgment — catching one real bug outweighs the token savings (`${CLAUDE_PLUGIN_ROOT}/shared/token-efficiency.md`). |
+
+Rules of thumb:
+
+- **Default reasoning/judgment stages to `opus`, execution stages to `sonnet`.** The split above is the default; follow it unless the user says otherwise.
+- **The user can override per session.** If the user asks to run a stage cheaper (e.g. "review on Sonnet this time" for a low-risk change) or richer, honor it for that session — the defaults are a starting point, not a lock.
+- **Match the model to the risk, not the file count.** A large but mechanical build is still `sonnet`; a small but subtle security-sensitive change may warrant keeping review (or even build) on `opus`. When a build step is unusually tricky, it's fine to raise that one spawn to `opus`.
 
 ## Workflow
 
@@ -35,14 +54,14 @@ They are compatible: a session files the same issue structure and opens the same
 
 Two entry points:
 
-- **Plan new work.** The user is starting something fresh. Run the `planning` skill (or `product-planning` for a whole product) to investigate and draft the plan. Planning owns the investigate → draft → iterate loop; let it. Do **not** let planning file the issue and tag `@claude` yet — in a session, filing and the build trigger are the session's job (step 3), because the session drives the build with local subagents rather than the Action. Carry the approved plan into step 2.
+- **Plan new work.** The user is starting something fresh. Run the `planning` skill (or `product-planning` for a whole product) to investigate and draft the plan — spawn the planner on **`opus`** (see "Model routing"). Planning owns the investigate → draft → iterate loop; let it. Do **not** let planning file the issue and tag `@claude` yet — in a session, filing and the build trigger are the session's job (step 3), because the session drives the build with local subagents rather than the Action. Carry the approved plan into step 2.
 - **Pick up an existing epic or issue.** The user points at an epic or issue already on GitHub. Read it (and its ADR/epic parent if any). If it's an **epic**, identify the next unstarted stage — the first `- [ ]` line / open sub-issue in roadmap order — and make *that stage* the scoped step for this pass; run `planning` on it if its issue is still a stub. If it's a **single issue** with an actionable plan already, use it as-is. Confirm with the user which scoped step you're picking up before proceeding.
 
 Either way you arrive at **one scoped step** with a plan concrete enough to build from.
 
 ### 2. Verify the plan, then get approval (gate 1)
 
-Before it becomes the build brief, the plan must be sound. Spin up a short **plan-review subagent** (brief it with the plan + the relevant part of the codebase) to sanity-check it for completeness, feasibility, missing edge cases, and blast radius the plan glossed over — a cheap pass that catches "this plan can't actually be built as written" before a build agent discovers it the expensive way. Fold its findings back into the plan.
+Before it becomes the build brief, the plan must be sound. Spin up a short **plan-review subagent** on **`opus`** (brief it with the plan + the relevant part of the codebase) to sanity-check it for completeness, feasibility, missing edge cases, and blast radius the plan glossed over — a cheap pass that catches "this plan can't actually be built as written" before a build agent discovers it the expensive way. Fold its findings back into the plan.
 
 Then present the verified plan to the user and **iterate to explicit approval**. This is gate 1. Do not file anything or start a build until the user approves. If they request changes, revise and re-present.
 
@@ -60,7 +79,7 @@ Do **not** tag `@claude` on the issue — in a session the *session* drives the 
 
 ### 4. Build — spawn the build subagent
 
-Pick the build skill from the nature of the scoped step, then spawn a subagent to do it:
+Pick the build skill from the nature of the scoped step, then spawn a subagent to do it — on **`sonnet`** by default (build is execution against a concrete plan; see "Model routing"), raising that one spawn to `opus` only when the step is unusually subtle or security-sensitive:
 
 | Work is mostly… | Skill the subagent invokes |
 | --- | --- |
@@ -82,13 +101,13 @@ Keep the conductor thread out of the file-by-file work — the subagent holds th
 
 ### 5. Review — spawn the review subagent
 
-Spawn a second subagent to review the PR, briefed to invoke the `code-review` skill in **pipeline mode** on that PR number. It reviews across all dimensions (correctness, conventions, DRY, security, performance), then posts its findings **as comments on the pull request** — per-finding comments with file:line, severity-ranked — and a single summary comment stating the verdict (merge-ready, or blockers/highs that must be fixed first). It stops at review; it does not merge and it does not push fixes itself in this mode.
+Spawn a second subagent to review the PR — on **`opus`** (correctness and security judgment; see "Model routing") — briefed to invoke the `code-review` skill in **pipeline mode** on that PR number. It reviews across all dimensions (correctness, conventions, DRY, security, performance), then posts its findings **as comments on the pull request** — per-finding comments with file:line, severity-ranked — and a single summary comment stating the verdict (merge-ready, or blockers/highs that must be fixed first). It stops at review; it does not merge and it does not push fixes itself in this mode.
 
 Capture the verdict: **clean** (no blocker/high) or **changes needed** (with the specific findings).
 
 ### 6. Loop build ↔ review to merge-ready
 
-- **Changes needed** → spawn a build subagent again, briefed with the review's blocker/high findings (and the PR/issue context), to push fixes onto the **same PR branch**. Then spawn a review subagent again on the updated PR. Repeat.
+- **Changes needed** → spawn a build subagent again (**`sonnet`**, same as step 4), briefed with the review's blocker/high findings (and the PR/issue context), to push fixes onto the **same PR branch**. Then spawn a review subagent again (**`opus`**) on the updated PR. Repeat.
 - **Clean** → the PR meets the definition of done. Go to step 7.
 
 Bound it: after ~2 rounds without convergence, or the moment a finding needs a human decision (a design trade-off, an ambiguous requirement, an architectural call), **stop and escalate to the user** with the specific blocker rather than looping again. A back-and-forth that isn't converging is a signal to pull the human in, not to spin.
@@ -113,6 +132,7 @@ When the epic/plan is fully merged: confirm the epic reads complete (all boxes t
 ## Subagent briefing notes
 
 - **One skill focus per subagent.** A subagent is briefed to invoke a specific skill (or a build pair) with a specific issue/PR. Don't hand a subagent the whole session — hand it one stage of it. Its context dies when it returns; only what it reports (a PR number, a verdict, a blocker) survives into the conductor.
+- **Set the model on every spawn.** Pass `model` on each `Agent` call per the "Model routing" table — `opus` for planner/plan-review/code-review, `sonnet` for build/implementation. An unset model silently inherits the orchestrator's (Opus); that inheritance is the single biggest source of avoidable session cost.
 - **Pass pointers, not payloads.** Give the subagent the issue number and the branch and let it read what it needs from GitHub and the repo. Don't paste whole files into the brief — that's the orchestrator paying for the subagent's reading.
 - **Isolate build agents that run concurrently only if they touch different trees.** In a normal session builds are sequential (one scoped step at a time), so isolation isn't needed. If you ever fan out, give each its own branch/worktree so they don't collide.
 - **The review agent posts on the PR, not the issue** — follow-up work stays attached to the PR (matches `code-review`'s routing).
