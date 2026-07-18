@@ -10,7 +10,7 @@ This is the operator's manual. The plugin's internal conventions are in the repo
 
 A Claude Code plugin marketplace (`firm-plugins`) containing one plugin (`dev-lifecycle`) with:
 
-- **20 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging` / `walkthrough`.
+- **21 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging` / `walkthrough` — plus `coding-session`, the conductor that runs the whole plan → build → review → merge loop for you.
 - A **self-extending reference library** of per-library, version-aware docs (React, TypeScript, MUI, Tailwind, HTMX, FastAPI, Pydantic, SQLAlchemy, Postgres, Django, plus testing/devops/security/docs/debugging).
 - A **token-efficiency doctrine** every skill follows, and a shared **definition-of-done** that is the merge-ready bar.
 - Three automations: **semver release** on merge, a weekly **freshness audit** that flags stale references, and **epic checkoff** — a per-project workflow that ticks an epic's checkbox when a stage/feature issue closes on merge.
@@ -38,7 +38,7 @@ In Claude Code:
 /plugin install dev-lifecycle@firm-plugins
 ```
 
-Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 20 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
+Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 21 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
 
 > **Cloud sessions are different — see [Keeping cloud sessions current](#keeping-cloud-sessions-current).** The `/plugin` UI toggle and `~/.claude/settings.json` don't carry into Claude Code on the web, so cloud sessions can silently pin an old plugin version.
 
@@ -94,6 +94,8 @@ Because every stage plan references the epic and ADR, the whole product stays al
 ### A feature or fix on an existing repo
 1. **`planning`** — talk it through; on your approval it files the issue and tags `@claude` (owned repos) or hands it to you to run (guest repos).
 2. Build agent → PR → review agent (auto-routes: clear fixes back to `@claude`, a clean pass or a needed decision to you) → CI → **you merge**.
+
+> **Prefer to conduct it live?** `coding-session` runs that same loop from an interactive thread using local subagents instead of the headless Action — it plans (or picks up an epic/issue), marks it in-progress, builds, opens the PR, reviews, loops build↔review to merge-ready, then pings you to merge and flows into the next scoped step. Same two gates (you approve the plan, you merge); use it when you're sitting down to drive the work rather than firing it off from an issue. Don't run it *and* `@claude` on the same issue — that races two build agents.
 
 ### The one rule that never changes
 Agents plan, build, review, and get to green — **you approve the plan and you merge.** No agent ever merges.
@@ -176,6 +178,7 @@ Commit a `.claude/settings.json` (which *does* carry into cloud sessions, unlike
 
 | I want to… | Skill |
 |---|---|
+| Drive a feature/epic end to end (plan → build → review → merge) | `coding-session` |
 | Decide whether/what/what-it-costs to build | `technical-proposal` |
 | Plan a whole product and its stages | `product-planning` |
 | Plan one feature/fix and kick off the build | `planning` |
