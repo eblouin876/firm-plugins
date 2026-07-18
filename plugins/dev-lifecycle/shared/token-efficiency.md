@@ -34,4 +34,6 @@ Governing idea: **context is the budget, and the repository is the memory.** Eve
 - Explain what changed and why it matters — not line-by-line narration.
 
 ## Model routing (pipeline level)
-- Not every step needs the most capable model. Planning and review benefit from a stronger model; mechanical steps can run a cheaper one. In the GitHub Action, set the model per job via `claude_args` (`--model ...`). This is a cost lever configured at the pipeline, not inside each skill.
+- Not every step needs the most capable model. Planning and review benefit from a stronger model; mechanical steps can run a cheaper one.
+- **In the GitHub Action**, set the model per job via `claude_args` (`--model ...`) — a cost lever configured at the pipeline, not inside each skill.
+- **In a `coding-session`** (local subagents), route per spawn with the `Agent` tool's `model` parameter: reasoning/judgment stages (planning, plan-review, code-review) on `opus`, build/implementation on `sonnet`. An unset model inherits the orchestrator's — the most expensive default — so set it explicitly on every spawn. See the coding-session skill's "Model routing" table.
