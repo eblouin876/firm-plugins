@@ -116,7 +116,19 @@ for path in skills:
 for path in glob.glob(os.path.join(PLUGIN, "references", "**", "*.md"), recursive=True):
     if os.path.basename(path).startswith("_"):
         continue
-    head = open(path).read(200)
+    head = open(path).read(1000)
+    if "last-verified:" not in head:
+        warn(f"{os.path.relpath(path, ROOT)}: no 'last-verified' metadata header")
+
+# 4a. (warning) same freshness/header check for real template blocks, once they
+#     exist. `_`-prefixed files are schema exemplars (e.g. _TEMPLATE-README.md)
+#     and are skipped, matching the references check above. The glob is
+#     empty-dir safe: as of Stage 0 no real block has landed yet, so this is a
+#     no-op until Stage 1+ adds one.
+for path in glob.glob(os.path.join(PLUGIN, "templates", "**", "*.md"), recursive=True):
+    if os.path.basename(path).startswith("_"):
+        continue
+    head = open(path).read(1000)
     if "last-verified:" not in head:
         warn(f"{os.path.relpath(path, ROOT)}: no 'last-verified' metadata header")
 

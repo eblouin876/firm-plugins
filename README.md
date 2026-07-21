@@ -20,27 +20,39 @@ firm-plugins/
 ├── .claude-plugin/marketplace.json      # catalog (semver in metadata.version)
 ├── plugins/dev-lifecycle/
 │   ├── .claude-plugin/plugin.json       # plugin manifest (semver)
-│   ├── skills/<skill>/SKILL.md          # one folder per skill
+│   ├── skills/<skill>/SKILL.md          # one folder per skill, incl. template-author, recipe-author
 │   ├── assets/workflows/                # thin caller stubs copied into each repo (implement + review) that `uses:` the reusable workflows below, plus epic-checkoff (ticks an epic's box on stage-issue close)
 │   ├── assets/scripts/                  # operator one-shots — retrofit-epic.sh backfills a pre-existing epic so epic-checkoff works on it
+│   ├── assets/pr/                       # shippable templates `scaffolding` copies into project repos, e.g. pull_request_template.md
 │   ├── shared/                          # cross-skill references
 │   │   ├── token-efficiency.md          # the efficiency doctrine every skill follows
 │   │   └── definition-of-done.md        # the shared merge-ready bar
+│   ├── templates/                       # golden-path starter kit: composable blocks + catalog components
+│   │   ├── <layer>/<name>/README.md     # a block (e.g. backend/fastapi) — composition contract (needs/exposes) + doc fragment
+│   │   ├── components/<domain>/         # lighter drop-in slices / shared packages (e.g. the generated api-client)
+│   │   └── _TEMPLATE-README.md          # composition-contract schema + house format every block/component fills
 │   └── references/                      # the self-extending library, by domain
 │       ├── frontend/  {react,typescript,tailwind,material-ui,htmx}.md
 │       ├── backend/   {fastapi,sqlalchemy,postgres,pydantic,django,drf,celery,redis,stripe,pandas,websockets,anthropic,slack-bolt}.md
 │       ├── devops/    {cicd,containers,deploy-operate,kubernetes,uv}.md
-│       ├── testing/ · debugging/ · docs/ · infra/ · review/ · security/
+│       ├── testing/ · debugging/ · docs/ · infra/ · review/
+│       ├── security/     {secure-baseline,attack-surfaces,secrets-management,payments-security,data-protection,owasp}.md — the firm security standard every block/recipe inherits
+│       ├── authoring/    {documentation-standard}.md — the co-located-doc-fragment model templates/recipes ship, and its aggregation into a project's root README + CLAUDE.md
+│       ├── recipes/      <name>.md — feature recipes (e.g. stripe-checkout) that wire existing blocks/components into one capability; _RECIPE-TEMPLATE.md is the schema exemplar
+│       ├── compatibility-matrix.md      # the keystone pinned version set every template block and component pins to
 │       └── _TEMPLATE.md                 # house format + metadata header
+├── docs/adr/                            # numbered, immutable Architecture Decision Records (see project-docs.md)
 ├── scripts/
 │   └── validate_plugin.py               # structural validator (manifests + SKILL.md frontmatter)
-└── .github/workflows/
-    ├── claude-implement.reusable.yml    # reusable (workflow_call): the implement Action, called by each repo's claude.yml stub
-    ├── claude-review.reusable.yml       # reusable (workflow_call): the review Action (incl. @claude/@owner routing), called by each repo's claude-review.yml stub
-    ├── validate.yml                     # runs the validator on every push/PR (merge gate)
-    ├── release.yml                      # semver bump + exact tag + moving Action-contract tag (@v1) on merged PR
-    ├── freshness-audit.yml              # weekly: existing references gone stale → tracking issue
-    └── coverage-audit.yml               # weekly: fleet libraries with no reference → PR (reads .github/fleet-repos.txt)
+└── .github/
+    ├── pull_request_template.md         # this repo's own PR template (plugin-specific gates)
+    └── workflows/
+        ├── claude-implement.reusable.yml    # reusable (workflow_call): the implement Action, called by each repo's claude.yml stub
+        ├── claude-review.reusable.yml       # reusable (workflow_call): the review Action (incl. @claude/@owner routing), called by each repo's claude-review.yml stub
+        ├── validate.yml                     # runs the validator on every push/PR (merge gate)
+        ├── release.yml                      # semver bump + exact tag + moving Action-contract tag (@v1) on merged PR
+        ├── freshness-audit.yml              # weekly: existing references gone stale → tracking issue
+        └── coverage-audit.yml               # weekly: fleet libraries with no reference → PR (reads .github/fleet-repos.txt)
 ```
 
 `.github/fleet-repos.txt` lists the repos the coverage audit scans for gaps — edit it as the fleet changes.
@@ -66,6 +78,15 @@ This header is load-bearing: it's what the freshness audit reads to decide stale
 4. **Scheduled audit (coverage):** `coverage-audit.yml` weekly reads `.github/fleet-repos.txt`, inventories each fleet repo's significant dependencies, diffs them against the library, and opens a PR adding references for any framework in use but undocumented. Keeps the library **complete** — the automatic form of #2. Requires a `FLEET_READ_TOKEN` secret with read access to the (mostly private) fleet repos.
 
 All four **ground generation in current official docs, never recall**, and all four land as **PRs you review and merge** — nothing enters canon silently.
+
+### Templates and recipes (the starter kit)
+
+Two further artifact types extend the library into runnable starter code, alongside plain references:
+
+- **Templates** — composable golden-path **blocks** (`templates/<layer>/<name>/`, e.g. `backend/fastapi`) and lighter drop-in **catalog components** (`templates/components/<domain>/`), each declaring a composition contract (what it `needs` from the monorepo, what it `exposes`) so independently-authored blocks stitch together — see `templates/_TEMPLATE-README.md`. Authored via the `template-author` skill.
+- **Feature recipes** (`references/recipes/<name>.md`) — portable how-tos that wire an already-authored block/component into one feature (Stripe checkout, S3 uploads, an auth provider) without inventing new infrastructure — see `references/recipes/_RECIPE-TEMPLATE.md`. Authored via the `recipe-author` skill.
+
+Both carry the same kind of metadata header as a reference (`last-verified`, `provenance`, plus their own fields — `needs`/`exposes`/`versions-pinned-to` for a block, `applies-to` for a recipe) and pin to `references/compatibility-matrix.md`, the keystone pinned version set every block/component is built against. Both must clear **four acceptance bars** before they ship — composition-contract present, documented, version-pinned, secure-by-default (per `references/security/secure-baseline.md`) — enforced by their authoring skill, not left to review to catch. Documentation is co-located and portable: every block/component/recipe ships a doc fragment that aggregates into a scaffolded project's root README, per `references/authoring/documentation-standard.md`.
 
 ## Releases (semver)
 
