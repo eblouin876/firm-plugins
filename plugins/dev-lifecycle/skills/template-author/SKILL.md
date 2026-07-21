@@ -1,6 +1,6 @@
 ---
 name: "template-author"
-description: "Author a new template block for this plugin's monorepo starter kit — decide its layer and placement under templates/<layer>/<name>/, fill its composition contract (needs/exposes), and clear the four acceptance bars (composition-contract, documented, version-pinned, secure-by-default) before it ships. Use this skill WHENEVER extending the starter kit's catalog: \"add a template block\", \"author a backend/frontend/mobile/infra block\", \"add a component to the catalog\", \"scaffold a new block for the kit\". This is a META-skill invoked by build agents and humans EXTENDING the kit itself — not for building an app feature. For building an app that USES a block, see the relevant build skill (backend, frontend, ...); for wiring an existing block into a feature, see recipe-author."
+description: "Author a new template block or catalog component for this plugin's monorepo starter kit — decide its placement, fill its composition contract (needs/exposes), and clear the four acceptance bars (composition-contract, documented, version-pinned, secure-by-default) before it ships. Use this skill WHENEVER extending the starter kit's catalog: \"add a template block\", \"author a backend/frontend/mobile/infra block\", \"add a catalog component (mixin, shared package, drop-in slice)\", \"scaffold a new block or component for the kit\". This is a META-skill invoked by build agents and humans EXTENDING the kit itself — not for building an app feature. For building an app that USES a block, see the relevant build skill (backend, frontend, ...); for wiring an existing block into a feature, see recipe-author."
 ---
 
 # Template author
@@ -13,6 +13,7 @@ A template block is a unit of the starter kit's catalog — a backend, frontend,
 - **The contract is the interface.** Other blocks and recipes wire against a block's declared `needs`/`exposes`, never against its file layout. Under-declaring breaks composition silently; over-declaring locks in interfaces before Stage 1 (#24) hardens them — state only what's actually true today.
 - **All four bars, every block, no exceptions.** A block that's missing its doc fragment, its version pin, or its secure-by-default posture is not done, even if the code runs.
 - **Subordinate to the project.** Everything a block does is a default a scaffolded project can and will diverge from — say so in the block's README, don't fight it later.
+- **Blocks vs catalog components.** A *block* is a full app unit at `${CLAUDE_PLUGIN_ROOT}/templates/<layer>/<name>/`; a *catalog component* is a lighter drop-in slice or shared package at `${CLAUDE_PLUGIN_ROOT}/templates/components/<domain>/` (a model mixin, an auth slice, a Terraform module, the shared `api-client`). Author both here — a component declares a *partial* contract (what it needs + what it exposes to importers), skips the app-layer `<layer>/<name>/` placement, and still clears the documented, version-pinned, and secure-by-default bars.
 
 ## Workflow
 
@@ -44,7 +45,7 @@ If the block has runnable behavior, it wires into the project-root `justfile`'s 
 
 ### 5. Verify and hand off
 
-Run `python scripts/validate_plugin.py` — a real (non-`_`-prefixed) block's `README.md` is checked for a `last-verified` header. Confirm the block builds/runs standalone against its declared `needs`. Hand off by naming the block and layer so `scaffolding` and other authors can pick it up.
+Run `python scripts/validate_plugin.py` — any non-`_`-prefixed `.md` under a block or component directory is warned if it lacks a `last-verified` header (a warning; exit stays 0). Confirm the block builds/runs standalone against its declared `needs`. Hand off by naming the block and layer so `scaffolding` and other authors can pick it up.
 
 ## What this skill does NOT do
 
