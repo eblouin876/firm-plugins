@@ -116,7 +116,7 @@ for path in skills:
 for path in glob.glob(os.path.join(PLUGIN, "references", "**", "*.md"), recursive=True):
     if os.path.basename(path).startswith("_"):
         continue
-    head = open(path).read(200)
+    head = open(path).read(1000)
     if "last-verified:" not in head:
         warn(f"{os.path.relpath(path, ROOT)}: no 'last-verified' metadata header")
 
@@ -128,7 +128,7 @@ for path in glob.glob(os.path.join(PLUGIN, "references", "**", "*.md"), recursiv
 for path in glob.glob(os.path.join(PLUGIN, "templates", "**", "*.md"), recursive=True):
     if os.path.basename(path).startswith("_"):
         continue
-    head = open(path).read(200)
+    head = open(path).read(1000)
     if "last-verified:" not in head:
         warn(f"{os.path.relpath(path, ROOT)}: no 'last-verified' metadata header")
 

@@ -7,6 +7,8 @@ exposes:                            # what this block provides to the rest of th
 versions-pinned-to: references/compatibility-matrix.md   # the pinned version set this block was built against
 last-verified: <YYYY-MM-DD>         # date this block was last checked against the pinned versions + its own doc fragment
 provenance: manual                  # manual | auto-generated (append "(pending review)" until reviewed)
+# note: blocks intentionally omit `sources:` — a block cites its versions via its
+# compatibility-matrix entry (versions-pinned-to), not an inline sources list.
 -->
 
 # <Block name> template
