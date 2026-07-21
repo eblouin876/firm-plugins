@@ -62,12 +62,23 @@ rejected, when the choice isn't obvious.
 An ordered list of concrete, reviewable steps. Each step names what
 changes (which files/modules/endpoints), and is small enough to verify on
 its own. Note dependencies between steps and anything parallelizable. This
-is the heart of the plan and the build agent's checklist.
+is the heart of the plan and the build agent's checklist. The whole list
+should land as ONE reviewable PR — if it can't (roughly a thousand-plus
+changed lines, or several unrelated subsystems), say so and propose
+splitting the work into separate issues instead.
 
 ## Risks & open questions
 Things that could go wrong, decisions that need the user's input, unknowns
 that couldn't be resolved cheaply, and anything that would change the plan
 if the answer were different.
+
+## Human checkpoints
+Mid-build points where a human must be pulled in, if any: manual test
+gates only a person can run, known decision points, or irreversible /
+externally visible actions (shared-data migrations, deploys). The default
+is NONE — state "None" when the build can run from approval to final
+review without stopping. In a coding session these are the only planned
+mid-flight stops, and the user approves them as part of the plan.
 
 ## Acceptance criteria
 How we'll know it's done and correct. Derive these from the shared
