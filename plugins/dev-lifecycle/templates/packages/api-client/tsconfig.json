@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // NOTE: this package is authored at
+  // templates/packages/api-client/ but scaffolding MATERIALIZES it into
+  // <project>/packages/api-client/ (the pnpm-workspace `packages/*` glob),
+  // so this "extends" path is written for the materialized location — two
+  // levels up from packages/api-client/ to the project root — not for
+  // where this file sits in the firm-plugins repo.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The base pins Node-executed `module`/`moduleResolution` (NodeNext),
+    // which requires explicit `.js` extensions on relative imports. This
+    // package is a library consumed by bundler-based apps (web via Vite,
+    // mobile via Metro) rather than run directly under Node's ESM loader,
+    // and orval's generated output doesn't emit those extensions — so this
+    // package overrides to `bundler` resolution, which both matches how
+    // it's actually consumed and works with the codegen as-is.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM"],
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

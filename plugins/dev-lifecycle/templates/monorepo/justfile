@@ -42,9 +42,8 @@ build:
     pnpm -r --if-present run build
 
 # Regenerate the typed api-client from the backend's OpenAPI schema.
-# wired in Step 2 (packages/api-client + orval config land there).
 client-generate:
-    @echo "client:generate: not wired yet — lands in Stage 1 Step 2 (packages/api-client, orval)." && exit 0
+    pnpm --filter @repo/api-client run generate
 
 # Deploy the project. Backed once an infra/devops block is scaffolded in.
 deploy:
