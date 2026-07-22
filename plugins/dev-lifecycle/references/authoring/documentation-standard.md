@@ -24,11 +24,15 @@ Docs that live far from the code they describe go stale; docs generated once and
 - Fragments **aggregate into the project's root README** — the single source of truth a developer reads first. The root README does not restate each block's internals; it collects what each block/component/recipe already declared about itself: how to set it up, deploy it, maintain it, and where its secrets come from.
 - This composes with the `template-author` composition contract (`templates/_TEMPLATE-README.md`): a block's `exposes` list includes its doc fragment as a first-class thing it provides, alongside routes and packages.
 
-Stage 1 (#24) materializes the aggregation mechanics (how fragments actually get pulled into the root README, and the `justfile`'s `docs:generate` / `docs:check` targets that keep them honest). This document defines the model and the canonical template bodies those mechanics assemble from.
+Stage 1 (#24) materializes the aggregation mechanics (how fragments actually get pulled into the root README, and the `justfile`'s `docs-generate` / `docs-check` targets that keep them honest). This document defines the model and the canonical template bodies those mechanics assemble from.
+
+**Naming convention:** `just` (stable, 1.21.x) does not allow `:` in a recipe or alias name — it's reserved as the dependency separator — so every `justfile` target in this standard and its templates is **dash-named** (`docs-generate`, `docs-check`, `client-generate`), never colon-named. This applies only to `just` targets; pnpm **script** names (in a `package.json`) may still use colons where that's the natural convention — none of this kit's shipped `package.json`s currently do, but nothing here forbids it.
+
+**Payload vs. canon convention:** a template body in this document that materializes into a *scaffolded project's own files* (rather than staying plugin canon) ships from its `templates/` location with a `.md.tmpl` suffix (e.g. `templates/monorepo/README.md.tmpl`). Scaffolding strips the suffix when it copies the file into the new project. The suffix does two jobs: this plugin's header-lint (`scripts/validate_plugin.py`) only checks bare `*.md` files, so a payload body describing the *scaffolded project* (not this plugin) isn't held to this plugin's own doc-header bar; and a `.tmpl` file is never mistaken for a real `CLAUDE.md`/`README.md` and auto-loaded into a session working in `firm-plugins` itself. A block's or component's **own** doc fragment (its co-located `README.md`) is not a payload template — it's real canon describing that block, ships as bare `.md`, and carries the `last-verified` header like any other reference.
 
 ## The root README template (canonical source)
 
-This is the canonical section set every scaffolded project's root README is built from. Stage 1 (#24) will materialize this body under `templates/monorepo/README.md` (or equivalent) for scaffolding to consume via `${CLAUDE_PLUGIN_ROOT}`; until then, this is the source of truth an authoring skill copies from.
+This is the canonical section set every scaffolded project's root README is built from. Stage 1 (#24) materializes this body at `templates/monorepo/README.md.tmpl` for scaffolding to consume via `${CLAUDE_PLUGIN_ROOT}` (stripping the `.tmpl` suffix on materialization); this document remains the source of truth those two stay in sync with.
 
 ```markdown
 # <Project name>
@@ -48,8 +52,8 @@ apply, backend/frontend build+deploy steps).
 ## Maintenance
 Routine upkeep: how dependencies are updated, how the compatibility matrix is
 tracked, how the freshness audit surfaces drift, and how to run the standard
-`justfile` targets (`test`, `lint`, `dev`, `build`, `deploy`, `docs:generate`,
-`docs:check`).
+`justfile` targets (`test`, `lint`, `dev`, `build`, `deploy`, `docs-generate`,
+`docs-check`).
 
 ## Secrets
 Every secret this project needs, and **where to get each one** — not the
@@ -68,7 +72,7 @@ without reading every directory.
 
 ## The project CLAUDE.md template (canonical source)
 
-Every scaffolded project also gets a `CLAUDE.md` explaining its structure and behavior — and, critically, the discipline for keeping the README current so it doesn't drift the way hand-maintained docs do. Stage 1 (#24) materializes this body under `templates/monorepo/CLAUDE.md` for scaffolding to consume via `${CLAUDE_PLUGIN_ROOT}`; until then, this is the source of truth.
+Every scaffolded project also gets a `CLAUDE.md` explaining its structure and behavior — and, critically, the discipline for keeping the README current so it doesn't drift the way hand-maintained docs do. Stage 1 (#24) materializes this body at `templates/monorepo/CLAUDE.md.tmpl` for scaffolding to consume via `${CLAUDE_PLUGIN_ROOT}` (stripping the `.tmpl` suffix on materialization); this document remains the source of truth the two stay in sync with.
 
 ```markdown
 # CLAUDE.md
@@ -88,8 +92,8 @@ The root README aggregates a doc fragment from every block, component, and
 recipe in this project. When you add, remove, or materially change one:
 1. Update (or add) that artifact's own co-located doc fragment first —
    it is the source fact.
-2. Re-run `just docs:generate` (or the project's equivalent) so the root
-   README reflects the change, and `just docs:check` before committing to
+2. Re-run `just docs-generate` (or the project's equivalent) so the root
+   README reflects the change, and `just docs-check` before committing to
    catch drift.
 3. Never hand-edit an aggregated section of the root README directly without
    also updating the fragment it came from — the next regeneration will

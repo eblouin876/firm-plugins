@@ -26,7 +26,7 @@ Every template block declares what it **needs** from the rest of the monorepo to
 What's already locked (epic #22) that every block's contract is grounded in:
 - **pnpm workspaces** — the monorepo is one pnpm workspace; a block that ships JS/TS is a workspace package.
 - **A shared, generated `api-client`** — web and mobile consume one typed client generated from the backend's OpenAPI schema. A frontend/mobile block *needs* it; a backend block *exposes* the OpenAPI contract it's generated from.
-- **A standardized `justfile`** — every block that has runnable behavior wires into the project-root `justfile`'s standard targets: `test`, `lint`, `dev`, `build`, `deploy`, `docs:generate`, `docs:check`. A block doesn't invent its own task-runner surface.
+- **A standardized `justfile`** — every block that has runnable behavior wires into the project-root `justfile`'s standard targets: `test`, `lint`, `dev`, `build`, `deploy`, `docs-generate`, `docs-check` (dash-named — `just` forbids `:` in a recipe name; see `references/authoring/documentation-standard.md`). A block doesn't invent its own task-runner surface.
 - **Every block ships a co-located doc** — see `references/authoring/documentation-standard.md` (below). This is an acceptance bar, not optional polish.
 
 Do not over-specify beyond this: exact env var names, the generated client's interface, and per-stack directory conventions are deliberately undecided here and get hardened in Stage 1 (#24) and the stack-specific stages that follow it.

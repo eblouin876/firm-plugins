@@ -4,12 +4,13 @@
 # skeleton (no packages under apps/ or packages/ yet), the pnpm-backed
 # targets are clean no-ops thanks to `--if-present`.
 #
-# NOTE on naming: the composition contract names these targets with a
-# colon (e.g. `docs:generate`, matching the pnpm-script convention used
-# elsewhere in the kit). `just` (stable, 1.21.x) does not allow `:` in a
-# recipe or alias name — it's reserved for the dependency separator — so
-# these are implemented as dash-named recipes (`docs-generate`) instead.
-# See this step's decision log.
+# NOTE on naming: these targets are dash-named (`docs-generate`, not
+# `docs:generate`) because `just` (stable, 1.21.x) does not allow `:` in a
+# recipe or alias name — it's reserved for the dependency separator. This
+# matches the composition contract (templates/_TEMPLATE-README.md) and
+# references/authoring/documentation-standard.md, which name the same
+# dash-form targets. pnpm SCRIPT names (package.json) are a separate
+# namespace and may still use colons where that's the natural convention.
 
 set shell := ["bash", "-uc"]
 
@@ -52,9 +53,9 @@ deploy:
 # Regenerate the root README from every block's co-located doc fragment.
 # wired in Step 4 (docs aggregation script).
 docs-generate:
-    @echo "docs:generate: not wired yet — lands in Stage 1 Step 4 (doc fragment aggregation script)." && exit 0
+    @echo "docs-generate: not wired yet — lands in Stage 1 Step 4 (doc fragment aggregation script)." && exit 0
 
 # Check the root README isn't stale relative to the doc fragments.
 # wired in Step 4 (docs aggregation script).
 docs-check:
-    @echo "docs:check: not wired yet — lands in Stage 1 Step 4 (doc fragment aggregation script)." && exit 0
+    @echo "docs-check: not wired yet — lands in Stage 1 Step 4 (doc fragment aggregation script)." && exit 0
