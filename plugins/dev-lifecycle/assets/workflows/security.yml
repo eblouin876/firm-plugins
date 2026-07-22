@@ -1,0 +1,190 @@
+# Firm security-gate workflow — the standard CI security gate scaffolded
+# projects receive, enforcing plugins/dev-lifecycle/references/security/
+# secure-baseline.md's "Dependency, SAST, and IaC scanning in CI" section.
+#
+# What this gates: SAST (bandit + semgrep), secret scanning (gitleaks),
+# dependency-CVE scanning (pip-audit / pnpm audit, per stack present),
+# IaC misconfiguration (checkov), and container image findings (trivy,
+# inspection-only where noted below). Tool versions and the scanner choice
+# per surface are pinned in references/compatibility-matrix.md's "Security
+# tooling (CI scanners)" section — bump versions there, not here.
+#
+# Copied by scaffolding into a project's .github/workflows/ alongside
+# claude.yml / claude-review.yml / epic-checkoff.yml. Self-contained: no
+# plugin, no extra secrets — runs entirely on the default GITHUB_TOKEN.
+# Each job is conditional-smart so a project missing a given stack (no
+# Python, no Terraform, ...) skips that job cleanly instead of failing.
+#
+# Per the firm definition-of-done, this is a REQUIRED check: a red gate
+# blocks merge. Make it a required status check in branch protection when
+# wiring up a new repo (see the devops/scaffolding skills).
+
+name: Security gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sast:
+    name: SAST (bandit + semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Python
+        id: py
+        run: |
+          if [ -n "$(find . -name '*.py' -not -path '*/node_modules/*' -print -quit)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.py.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: bandit (Python SAST)
+        if: steps.py.outputs.present == 'true'
+        run: |
+          pip install --disable-pip-version-check bandit==1.9.4
+          # -r recursive, -ll only medium+ severity/confidence, excludes tests/venvs.
+          bandit -r . -ll -x './.venv,./venv,./node_modules,./tests,./**/migrations'
+
+      - name: semgrep (multi-language SAST)
+        # Runs regardless of Python presence — semgrep covers JS/TS/etc too.
+        run: |
+          pip install --disable-pip-version-check semgrep==1.170.1
+          # Free public registry rulesets — deliberately not `--config=auto`,
+          # which expects a Semgrep AppSec Platform login. p/ci and
+          # p/owasp-top-ten run unauthenticated, keeping this on GITHUB_TOKEN
+          # only (references/compatibility-matrix.md, Security tooling row).
+          semgrep scan --error --config=p/ci --config=p/owasp-top-ten .
+
+  secrets:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history — gitleaks scans git log, not just the working tree.
+
+      - name: gitleaks
+        run: |
+          # Pinned CLI via the official image, run directly rather than
+          # gitleaks/gitleaks-action@v3: that Action requires a paid
+          # GITLEAKS_LICENSE for org-owned repos scanning more than one
+          # repo. The raw MIT-licensed binary needs no extra secret.
+          docker run --rm -v "${PWD}:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --redact -v
+
+  deps:
+    name: Dependency CVE scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Python deps
+        id: py
+        run: |
+          if [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect pnpm deps
+        id: js
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: pip-audit (Python)
+        if: steps.py.outputs.present == 'true'
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements.txt
+
+      - name: pnpm audit (JS/TS)
+        if: steps.js.outputs.present == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: pnpm audit run
+        if: steps.js.outputs.present == 'true'
+        run: pnpm audit --audit-level=high
+
+  iac:
+    name: IaC scan (checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Terraform
+        id: tf
+        run: |
+          if [ -n "$(find . -name '*.tf' -print -quit)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.tf.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: checkov
+        if: steps.tf.outputs.present == 'true'
+        run: |
+          # Primary IaC scanner (references/compatibility-matrix.md judgment
+          # call: tfsec is frozen — merged into Trivy in 2024, no new checks
+          # since). Alternate: `trivy config` on the same directories, if a
+          # project prefers one fewer tool over the containers job's trivy.
+          pip install --disable-pip-version-check checkov==3.2.526
+          checkov --directory . --framework terraform --compact --quiet
+
+  containers:
+    name: Container scan (trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Dockerfiles
+        id: docker
+        run: |
+          if [ -n "$(find . -iname 'Dockerfile*' -print -quit)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # NOTE (inspection-only, not run here): building and scanning an image
+      # needs a real Docker build context and, for base-image CVE lookups,
+      # registry/network access this sandbox doesn't have. This step is
+      # correct as written and is what scaffolded projects run — it was
+      # verified by reading trivy-action's docs, not by executing it here.
+      - name: Build image
+        if: steps.docker.outputs.present == 'true'
+        run: docker build -t security-gate-scan:${{ github.sha }} .
+
+      - name: trivy (image scan)
+        if: steps.docker.outputs.present == 'true'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: security-gate-scan:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
