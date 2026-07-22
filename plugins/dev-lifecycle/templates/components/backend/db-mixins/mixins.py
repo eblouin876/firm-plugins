@@ -66,14 +66,27 @@ class UUIDPrimaryKey:
 
 
 class TimestampMixin:
-    """`created_at`/`updated_at`, both timezone-aware and both set at the
-    DATABASE layer (`server_default`/`server_onupdate` via `func.now()`),
-    not in application code — per references/backend/sqlalchemy.md's
-    "Models" section: "Make constraints explicit at the DB level... The
-    database — not just the app — enforces integrity." A row inserted by
-    any path (a raw migration-time backfill, a different service sharing
-    the table) gets a correct `created_at` even if it never goes through
-    this app's ORM layer at all."""
+    """`created_at`/`updated_at`, both timezone-aware, but set by two
+    genuinely different mechanisms — don't conflate them:
+
+    - `created_at` uses a real DB-level `server_default=func.now()` — the
+      database itself supplies the value for ANY INSERT that reaches this
+      table, through this ORM or otherwise (a raw-SQL backfill, a
+      migration, a different service sharing the table), matching
+      references/backend/sqlalchemy.md's "Models" section: "Make
+      constraints explicit at the DB level... The database — not just the
+      app — enforces integrity."
+    - `updated_at` uses SQLAlchemy's `onupdate=func.now()`, which is an
+      **ORM-level** convenience, NOT `server_onupdate`: SQLAlchemy only
+      adds `updated_at = now()` to the `SET` clause of an `UPDATE` *it
+      itself issues* (via a flush on a tracked, dirty instance). A raw-SQL
+      `UPDATE`, a migration-time bulk update, or another service writing
+      to this table directly will NOT bump `updated_at` — there is no
+      database trigger enforcing it, unlike `created_at`'s real
+      `server_default`. If cross-path enforcement is required (any
+      `UPDATE`, from any source, must bump `updated_at`), add a database
+      trigger, or the dialect's `server_onupdate` where it's supported —
+      this mixin's `onupdate=` alone does not cover that case."""
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

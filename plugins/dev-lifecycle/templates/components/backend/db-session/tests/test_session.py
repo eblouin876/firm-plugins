@@ -65,6 +65,45 @@ def test_get_sessionmaker_raises_when_not_configured():
         get_sessionmaker()
 
 
+# --- configure_engine: fail-fast on a non-async driver scheme ---------------
+
+
+def test_configure_engine_rejects_bare_postgresql_scheme():
+    with pytest.raises(ValueError, match="asyncpg"):
+        configure_engine("postgresql://user:pass@localhost/db")
+
+
+def test_configure_engine_rejects_bare_sqlite_scheme():
+    with pytest.raises(ValueError, match="aiosqlite"):
+        configure_engine("sqlite:///test.db")
+
+
+def test_configure_engine_rejects_bare_mysql_scheme():
+    with pytest.raises(ValueError, match="aiomysql"):
+        configure_engine("mysql://user:pass@localhost/db")
+
+
+def test_configure_engine_rejection_message_names_the_offending_url():
+    with pytest.raises(ValueError, match=r"postgresql://user:pass@localhost/db"):
+        configure_engine("postgresql://user:pass@localhost/db")
+
+
+def test_configure_engine_rejecting_a_bad_url_does_not_clobber_the_configured_engine(engine):
+    # A failed configure_engine() call must not overwrite the
+    # already-configured (good) engine/sessionmaker.
+    assert get_engine() is engine
+    with pytest.raises(ValueError):
+        configure_engine("postgresql://user:pass@localhost/db")
+    assert get_engine() is engine
+
+
+def test_configure_engine_accepts_an_already_async_scheme_without_raising(engine):
+    # sqlite+aiosqlite:// is what the autouse `engine` fixture already
+    # configured -- this asserts it didn't raise (a smoke check that the
+    # guard doesn't false-positive on the async scheme itself).
+    assert get_engine() is engine
+
+
 # --- get_db: yields an AsyncSession ----------------------------------------
 
 

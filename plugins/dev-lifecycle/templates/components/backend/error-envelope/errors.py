@@ -1,5 +1,6 @@
-"""Framework-neutral error envelope: the app's standard shape for every
-non-422 error response, plus the exception hierarchy a framework's
+"""Framework-neutral error envelope: THE single error shape every error
+response in this app uses — including the framework's own request-
+boundary validation failures — plus the exception hierarchy a framework's
 exception handler maps to it. Pydantic v2 only (pinned per
 references/compatibility-matrix.md's Backend — Python row to Pydantic v2,
 2.13.x) — NO FastAPI import in this file (shape only). This is THE
@@ -15,18 +16,77 @@ and the exception types only, deliberately with no `except`-to-HTTP
 mapping or FastAPI import here, so a Django/DRF exception handler (Stage 4)
 can import the same AppError hierarchy without pulling in FastAPI.
 
-Distinct from FastAPI's own automatic 422 response for a request-body/
-query-param Pydantic ValidationError — that shape
-(`{"detail": [{"loc": [...], "msg": ..., "type": ...}]}`) is FastAPI's
-built-in behavior for schema validation failures at the request boundary
-and is NOT reshaped into this envelope; ErrorEnvelope/AppError cover every
-OTHER error class (404, 401, 403, 409, 500, and a domain-level 400 that
-isn't a schema mismatch).
+ONE error shape, not two: FastAPI/Pydantic's own automatic response for a
+request-body/query-param schema validation failure — the native shape
+`{"detail": [{"loc": [...], "msg": ..., "type": ...}]}` — is NOT part of
+this app's contract; DRF has no way to reproduce that shape, and "Django
+conforms wire-for-wire" would break the moment a client saw it. Step 2's
+FastAPI app MUST register a `RequestValidationError` handler that remaps
+FastAPI's native validation errors into THIS envelope before they ever
+reach a client:
+
+    ErrorEnvelope(
+        error=ErrorBody(
+            code=ErrorCode.VALIDATION_FAILED,
+            message=<a summary, e.g. "Request validation failed.">,
+            details=[
+                ErrorDetail(field=".".join(str(p) for p in err["loc"]), message=err["msg"])
+                for err in exc.errors()
+            ],
+        )
+    ), returned with status 422
+
+Stage 4's Django/DRF track maps DRF's own `ValidationError` into the
+identical envelope + 422, independently — achieving wire-for-wire parity
+with Step 2's remap without importing FastAPI or this file's Step 2
+counterpart. `ValidationFailedError` below (the domain-level, non-schema
+validation failure this app raises deliberately) carries the SAME status
+(422) and the SAME `code` (`validation_failed`) as that remap, so a client
+parsing an error response only ever sees ONE shape and ONE status for
+"the request didn't validate" — whether the failure was caught at the
+request boundary or inside a service function. (Actually registering that
+FastAPI handler is Step 2's job, not this file's; regenerating the API
+client to reflect the single shape is Step 4's job — this docstring only
+keeps the CONTRACT docs consistent with what those steps must do.)
 """
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict
+
+
+# ---------------------------------------------------------------------------
+# The error code enum (THE closed, versioned set)
+# ---------------------------------------------------------------------------
+
+
+class ErrorCode(StrEnum):
+    """THE closed set of machine-matchable error codes this app's
+    `ErrorEnvelope` ever carries. A `StrEnum` (not a bare `str` field) so
+    OpenAPI emits a proper enum for `ErrorBody.code` — a generated API
+    client gets an exhaustive union to switch on, not an unconstrained
+    string. Members align 1:1 with the concrete `AppError` subclasses
+    below (plus `internal_error`, the base's default); the exact string
+    values already in use are preserved unchanged so this is a type
+    tightening, not a wire-format change.
+
+    Extensible-but-versioned: adding a new member is additive for a client
+    with a default/fallback case, but is a breaking change for a strict
+    generated client that exhaustively switches over every existing
+    member. Treat adding, renaming, or removing a member as a contract
+    change requiring the same coordination as any other wire-shape edit —
+    bump the generated API client (Step 4), and keep Stage 4's Django/DRF
+    exception handler's own code set aligned with this one."""
+
+    INTERNAL_ERROR = "internal_error"
+    UNAUTHENTICATED = "unauthenticated"
+    PERMISSION_DENIED = "permission_denied"
+    NOT_FOUND = "not_found"
+    VALIDATION_FAILED = "validation_failed"
+    CONFLICT = "conflict"
+    RATE_LIMITED = "rate_limited"
 
 
 # ---------------------------------------------------------------------------
@@ -48,20 +108,25 @@ class ErrorDetail(BaseModel):
 
 class ErrorBody(BaseModel):
     """The `error` object inside the envelope. `code` is a short, stable,
-    machine-matchable string (`"not_found"`, `"conflict"`, ...) — a client
-    should switch on `code`, never on `message` (message is for humans,
-    can change wording without breaking a client, and MUST NOT be treated
-    as a stable identifier)."""
+    machine-matchable `ErrorCode` member — a client should switch on
+    `code`, never on `message` (message is for humans, can change wording
+    without breaking a client, and MUST NOT be treated as a stable
+    identifier). Typed as `ErrorCode`, not `str`, so Pydantic rejects an
+    unrecognized code at construction time and OpenAPI documents the
+    closed set."""
 
     model_config = ConfigDict(extra="forbid")
 
-    code: str
+    code: ErrorCode
     message: str
     details: list[ErrorDetail] | None = None
 
 
 class ErrorEnvelope(BaseModel):
-    """THE non-422 error envelope every error response in this app uses:
+    """THE error envelope every error response in this app uses — every
+    non-2xx error, including request-boundary validation failures once
+    Step 2's `RequestValidationError` handler remaps them (see this
+    module's docstring):
 
         {"error": {"code": "not_found", "message": "...", "details": null}}
 
@@ -92,7 +157,7 @@ class AppError(Exception):
     `AppError` directly in application code — the concrete subclasses are
     what carry the right `code`/`status_code`/default message."""
 
-    code: str = "internal_error"
+    code: ErrorCode = ErrorCode.INTERNAL_ERROR
     status_code: int = 500
     default_message: str = "An unexpected error occurred."
 
@@ -112,7 +177,7 @@ class UnauthenticatedError(AppError):
     authorization": authentication proves identity; authorization checks
     whether *this* identity may act on *this* resource."""
 
-    code = "unauthenticated"
+    code = ErrorCode.UNAUTHENTICATED
     status_code = 401
     default_message = "Authentication is required."
 
@@ -122,27 +187,31 @@ class PermissionDeniedError(AppError):
     IDOR-class check (`references/security/secure-baseline.md`: "Check
     ownership/scope on every ID-addressed resource")."""
 
-    code = "permission_denied"
+    code = ErrorCode.PERMISSION_DENIED
     status_code = 403
     default_message = "You do not have permission to perform this action."
 
 
 class NotFoundError(AppError):
-    code = "not_found"
+    code = ErrorCode.NOT_FOUND
     status_code = 404
     default_message = "The requested resource was not found."
 
 
 class ValidationFailedError(AppError):
     """A domain-level validation failure that is NOT a schema mismatch —
-    Pydantic/FastAPI's own request-body validation already produces its
-    own distinct 422 response, untouched by this hierarchy (see this
-    module's docstring). Raise this for a business-rule violation a field
-    constraint can't express (e.g. "end_date must be after start_date"
-    caught in a service function, not at the schema layer)."""
+    e.g. a business-rule violation a field constraint can't express
+    ("end_date must be after start_date") caught in a service function,
+    not at the schema layer. Carries the SAME status (422) and the SAME
+    `code` (`validation_failed`) as Step 2's FastAPI `RequestValidationError`
+    remap and Stage 4's DRF `ValidationError` mapping (see this module's
+    docstring) — app-raised and request-boundary validation failures are
+    indistinguishable to a client past the envelope: both render as
+    `{"error": {"code": "validation_failed", ...}}` at 422, THE single
+    error shape and status for "the request didn't validate"."""
 
-    code = "validation_failed"
-    status_code = 400
+    code = ErrorCode.VALIDATION_FAILED
+    status_code = 422
     default_message = "The request could not be validated."
 
 
@@ -151,7 +220,7 @@ class ConflictError(AppError):
     (a duplicate unique key, a stale optimistic-concurrency version, a
     state-machine transition that isn't valid from the current state)."""
 
-    code = "conflict"
+    code = ErrorCode.CONFLICT
     status_code = 409
     default_message = "The request conflicts with the current state of the resource."
 
@@ -163,6 +232,6 @@ class RateLimitedError(AppError):
     hand-rolling its own 429 body, so a rate-limited response uses the
     same envelope shape as every other error."""
 
-    code = "rate_limited"
+    code = ErrorCode.RATE_LIMITED
     status_code = 429
     default_message = "Too many requests. Please try again later."

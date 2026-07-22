@@ -10,6 +10,7 @@ from errors import (
     AppError,
     ConflictError,
     ErrorBody,
+    ErrorCode,
     ErrorDetail,
     ErrorEnvelope,
     NotFoundError,
@@ -69,6 +70,38 @@ def test_error_detail_rejects_unknown_field():
         ErrorDetail(message="y", unexpected="z")  # type: ignore[call-arg]
 
 
+# --- ErrorCode: the frozen, machine-matchable enum --------------------------
+
+
+def test_error_code_enum_has_the_canonical_members():
+    assert {c.value for c in ErrorCode} == {
+        "internal_error",
+        "unauthenticated",
+        "permission_denied",
+        "not_found",
+        "validation_failed",
+        "conflict",
+        "rate_limited",
+    }
+
+
+def test_error_code_is_a_str_subclass_and_serializes_as_a_plain_string():
+    assert isinstance(ErrorCode.NOT_FOUND, str)
+    envelope = ErrorEnvelope(error=ErrorBody(code=ErrorCode.NOT_FOUND, message="x"))
+    assert envelope.model_dump()["error"]["code"] == "not_found"
+    assert envelope.model_dump_json()  # sanity: round-trips through JSON
+
+
+def test_error_body_accepts_a_valid_code_string_and_coerces_to_the_enum():
+    body = ErrorBody(code="conflict", message="y")
+    assert body.code is ErrorCode.CONFLICT
+
+
+def test_error_body_rejects_an_unrecognized_code_string():
+    with pytest.raises(ValidationError):
+        ErrorBody(code="not_a_real_code", message="y")
+
+
 # --- AppError base ----------------------------------------------------------
 
 
@@ -112,7 +145,7 @@ def test_app_error_to_envelope_carries_details():
         (UnauthenticatedError, "unauthenticated", 401),
         (PermissionDeniedError, "permission_denied", 403),
         (NotFoundError, "not_found", 404),
-        (ValidationFailedError, "validation_failed", 400),
+        (ValidationFailedError, "validation_failed", 422),
         (ConflictError, "conflict", 409),
         (RateLimitedError, "rate_limited", 429),
     ],

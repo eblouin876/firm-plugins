@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from schema import Page, PageParams
+from schema import Page, PageParams, PageResult
 
 
 # --- PageParams --------------------------------------------------------
@@ -100,16 +100,50 @@ def test_page_generic_with_pydantic_model():
     assert dumped["items"] == [{"name": "a"}, {"name": "b"}]
 
 
-def test_page_generic_with_arbitrary_object_via_arbitrary_types_allowed():
-    class _NotAPydanticModel:
-        def __init__(self, value: str) -> None:
-            self.value = value
-
-    obj = _NotAPydanticModel("plain-object")
-    page = Page.create([obj], total=1, params=PageParams())
-    assert page.items[0].value == "plain-object"
+def test_page_is_a_strict_wire_model_no_arbitrary_types_allowed():
+    # MEDIUM-2 fix: Page must stay strict -- arbitrary_types_allowed was
+    # removed so a route can never accidentally return raw ORM rows
+    # through it.
+    assert Page.model_config.get("arbitrary_types_allowed") is not True
 
 
 def test_page_serialization_shape_has_exactly_the_expected_keys():
     page = Page.create([1], total=1, params=PageParams(page=1, size=20))
     assert set(page.model_dump().keys()) == {"items", "total", "page", "size", "pages"}
+
+
+# --- PageResult: the internal, non-wire container ---------------------------
+
+
+def test_page_result_holds_items_total_page_size():
+    result = PageResult(items=["a", "b"], total=10, page=2, size=2)
+    assert result.items == ["a", "b"]
+    assert result.total == 10
+    assert result.page == 2
+    assert result.size == 2
+
+
+def test_page_result_is_not_a_pydantic_model():
+    result = PageResult(items=[], total=0, page=1, size=20)
+    assert not hasattr(result, "model_dump")
+
+
+def test_page_result_holds_an_arbitrary_non_pydantic_object():
+    # This is exactly the case Page[T] used to accommodate via
+    # arbitrary_types_allowed -- now it's PageResult's job, not Page's.
+    class _NotAPydanticModel:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    obj = _NotAPydanticModel("plain-object")
+    result = PageResult(items=[obj], total=1, page=1, size=20)
+    assert result.items[0].value == "plain-object"
+
+
+def test_a_route_maps_a_page_result_into_a_wire_page_via_page_create():
+    # The documented route-layer pattern: PageResult -> mapped items ->
+    # Page.create(...).
+    result = PageResult(items=[1, 2, 3], total=3, page=1, size=20)
+    page = Page.create(result.items, total=result.total, params=PageParams(page=result.page, size=result.size))
+    assert page.items == [1, 2, 3]
+    assert page.pages == 1

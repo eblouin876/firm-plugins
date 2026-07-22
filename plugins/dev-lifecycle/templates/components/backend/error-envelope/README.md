@@ -3,7 +3,8 @@ block: components/backend/error-envelope  # catalog component
 needs:
   - pydantic v2 (2.13.x): the sole runtime dependency, pinned per references/compatibility-matrix.md's Backend — Python row
 exposes:
-  - ErrorEnvelope, ErrorBody, ErrorDetail — the {error: {code, message, details?}} shape, THE non-422 error contract
+  - ErrorCode — the frozen, versioned StrEnum of every machine-matchable error code
+  - ErrorEnvelope, ErrorBody, ErrorDetail — the {error: {code, message, details?}} shape, THE SINGLE error contract (every error class, including remapped request-boundary validation)
   - AppError and its concrete subclasses (UnauthenticatedError, PermissionDeniedError, NotFoundError, ValidationFailedError, ConflictError, RateLimitedError) — the exception hierarchy a framework's handler maps to the envelope
   - its co-located doc fragment: docs/fragment.md
 versions-pinned-to: references/compatibility-matrix.md
@@ -13,8 +14,9 @@ provenance: manual
 
 # error-envelope
 
-A framework-neutral, drop-in `errors.py`: THE standard non-422 error
-envelope every response in this app uses, and the exception hierarchy a
+A framework-neutral, drop-in `errors.py`: THE standard error envelope
+every response in this app uses — for every error class, with no second
+shape for request-boundary validation — and the exception hierarchy a
 framework's own exception handler maps to it. Lives at
 `templates/components/backend/error-envelope/` in this repo; Stage 3
 backend blocks copy `errors.py` verbatim into `app/core/errors.py`. THE
@@ -29,7 +31,7 @@ to the shape below.
 ## Contents
 - Composition contract
 - The envelope shape (THE contract)
-- Not the 422 shape
+- ONE error shape — including the native 422
 - The exception hierarchy
 - Testing
 - Judgment calls
@@ -41,13 +43,17 @@ to the shape below.
   `references/compatibility-matrix.md`'s Backend — Python row.
 
 **EXPOSES**
+- `ErrorCode` — a `StrEnum` of the frozen, machine-matchable code set
+  (`internal_error`, `unauthenticated`, `permission_denied`, `not_found`,
+  `validation_failed`, `conflict`, `rate_limited`). Extensible-but-
+  versioned — see "The exception hierarchy" below.
 - `ErrorEnvelope` / `ErrorBody` / `ErrorDetail` — the envelope shape (see
-  below).
+  below). `ErrorBody.code: ErrorCode`, not a bare `str`.
 - `AppError` — the exception base every domain/HTTP-shaped error the app
   raises deliberately extends. `to_envelope() -> ErrorEnvelope`.
 - Six concrete subclasses: `UnauthenticatedError` (401),
   `PermissionDeniedError` (403), `NotFoundError` (404),
-  `ValidationFailedError` (400), `ConflictError` (409), `RateLimitedError`
+  `ValidationFailedError` (422), `ConflictError` (409), `RateLimitedError`
   (429) — each with its own `code`, `status_code`, and `default_message`.
 - Its co-located doc fragment: `docs/fragment.md`.
 
@@ -60,6 +66,15 @@ no framework import or `except`-to-HTTP-response code here.
 ## The envelope shape (THE contract)
 
 ```python
+class ErrorCode(StrEnum):
+    INTERNAL_ERROR = "internal_error"
+    UNAUTHENTICATED = "unauthenticated"
+    PERMISSION_DENIED = "permission_denied"
+    NOT_FOUND = "not_found"
+    VALIDATION_FAILED = "validation_failed"
+    CONFLICT = "conflict"
+    RATE_LIMITED = "rate_limited"
+
 class ErrorDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")
     field: str | None = None
@@ -67,7 +82,7 @@ class ErrorDetail(BaseModel):
 
 class ErrorBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    code: str
+    code: ErrorCode
     message: str
     details: list[ErrorDetail] | None = None
 
@@ -82,27 +97,61 @@ Serialized:
 {"error": {"code": "not_found", "message": "The requested resource was not found.", "details": null}}
 ```
 
-A client switches on `code` (a short, stable, machine-matchable string),
-never on `message` — `message` is for humans and can change wording
-without breaking a client. `details` is a list of `{field, message}`
-pairs for a failure with more than one thing to say (e.g. several business
-rules violated at once); `field` is optional since not every detail ties
-to a single field.
+A client switches on `code` (typed as `ErrorCode`, so OpenAPI emits it as
+an enum and a generated client gets an exhaustive union), never on
+`message` — `message` is for humans and can change wording without
+breaking a client. `details` is a list of `{field, message}` pairs for a
+failure with more than one thing to say (e.g. several business rules
+violated at once); `field` is optional since not every detail ties to a
+single field.
 
-## Not the 422 shape
+## ONE error shape — including the native 422
 
 FastAPI/Pydantic's own automatic response for a request-body or
 query-param schema validation failure — `{"detail": [{"loc": [...], "msg":
 ..., "type": ...}]}` — is FastAPI's built-in behavior, produced before the
-app's own exception handler ever runs, and is **deliberately not**
-reshaped into `ErrorEnvelope`. This component's envelope covers every
-*other* error class the app raises on purpose: not-found, forbidden,
-unauthenticated, conflict, rate-limited, a domain-level 400 that isn't a
-schema mismatch, and the generic 500 for anything unhandled.
-`references/backend/fastapi.md`'s "Validation & error handling" section
-("Let schema validation reject malformed input automatically (422)... Add
-exception handlers for domain exceptions") is the canon this split is
-grounded in.
+app's own exception handler ever runs. It is **not this app's contract**:
+DRF has no way to reproduce that native shape, so a Django backend
+(Stage 4) claiming wire-for-wire parity with the FastAPI track (Step 2)
+would break the moment a client actually hit a validation error. Instead,
+THE contract is a single shape for every error class, including this one:
+
+Step 2's FastAPI app **must** register a `RequestValidationError` handler
+that remaps FastAPI's native validation errors into `ErrorEnvelope` before
+they reach a client:
+
+```python
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    envelope = ErrorEnvelope(
+        error=ErrorBody(
+            code=ErrorCode.VALIDATION_FAILED,
+            message="Request validation failed.",
+            details=[
+                ErrorDetail(field=".".join(str(p) for p in err["loc"]), message=err["msg"])
+                for err in exc.errors()
+            ],
+        )
+    )
+    return JSONResponse(status_code=422, content=envelope.model_dump())
+```
+
+Stage 4's Django/DRF track maps DRF's own `ValidationError` into the
+identical envelope + 422 independently (no shared code, just the same
+target shape) — that's what makes "Django conforms wire-for-wire" true.
+The app-raised `ValidationFailedError` below carries the same `code`
+(`validation_failed`) and the same status (422), so a client sees exactly
+one error shape and one status for "the request didn't validate,"
+regardless of whether FastAPI's own request-boundary validation caught it
+or a service function raised `ValidationFailedError` for a business rule a
+schema can't express. `references/backend/fastapi.md`'s "Validation &
+error handling" section ("Let schema validation reject malformed input
+automatically (422)... Add exception handlers for domain exceptions") is
+the canon this remap is grounded in — this component only ships the
+target shape; registering the actual `RequestValidationError` handler is
+Step 2's job, not this file's (kept out of this file to stay FastAPI-
+import-free, per the module docstring). Regenerating the API client
+against the single shape is Step 4's job.
 
 ## The exception hierarchy
 
@@ -115,7 +164,7 @@ in application code:
 | `UnauthenticatedError` | `unauthenticated` | 401 |
 | `PermissionDeniedError` | `permission_denied` | 403 |
 | `NotFoundError` | `not_found` | 404 |
-| `ValidationFailedError` | `validation_failed` | 400 |
+| `ValidationFailedError` | `validation_failed` | 422 (matches the remapped native 422 — see "ONE error shape" above) |
 | `ConflictError` | `conflict` | 409 |
 | `RateLimitedError` | `rate_limited` | 429 |
 | `AppError` (base, raised directly only for an unhandled/generic case) | `internal_error` | 500 |
@@ -138,9 +187,13 @@ field (`extra="forbid"`), `AppError`'s default-vs-custom message and
 `to_envelope()` round trip, `AppError` behaving as a real raisable
 exception, `to_envelope()` carrying `details` through, every concrete
 subclass's `code`/`status_code`/non-empty default message (parametrized
-across all six), a concrete subclass's full serialized envelope, a
-concrete subclass accepting a custom message, and every concrete subclass
-being an `AppError`.
+across all six, `ValidationFailedError` asserting 422), a concrete
+subclass's full serialized envelope, a concrete subclass accepting a
+custom message, every concrete subclass being an `AppError`, `ErrorCode`
+having exactly the seven canonical members, `ErrorCode` being a `str`
+subclass that serializes as a plain string (both `model_dump()` and
+`model_dump_json()`), `ErrorBody` coercing a valid code string into the
+enum, and `ErrorBody` rejecting an unrecognized code string.
 
 Run: `uv run --python 3.13 --with 'pydantic==2.13.*' --with pytest -- pytest templates/components/backend/error-envelope/tests/ -q`
 
@@ -162,3 +215,16 @@ Run: `uv run --python 3.13 --with 'pydantic==2.13.*' --with pytest -- pytest tem
   framework dependency is what lets Stage 4's Django/DRF track reuse the
   exact same `AppError` hierarchy and envelope shape — a hard FastAPI
   import here would break that reuse.
+- **`ErrorCode` is a `StrEnum`, not a `Literal[...]` union.** Either would
+  give OpenAPI an enum; `StrEnum` was chosen so the members are also
+  addressable as real attributes (`ErrorCode.NOT_FOUND`) at every call
+  site across this component's own subclasses and any future consumer,
+  rather than callers re-typing string literals that could drift from the
+  canonical set.
+- **`ValidationFailedError` carries 422, not 400.** Before this fix it
+  used 400, which meant an app-raised domain validation failure and a
+  FastAPI request-boundary validation failure (422, un-enveloped)
+  disagreed on both status and shape. Now both use 422 and the same
+  envelope — the FastAPI-native 422 shape is explicitly overridden by
+  Step 2's `RequestValidationError` remap so there is exactly one
+  validation-failure contract, not two.

@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 from mixins import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKey
-from schema import PageParams
+from schema import PageParams, PageResult
 from sqlalchemy import String, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
@@ -175,15 +175,30 @@ async def test_delete_on_model_without_soft_delete_mixin_always_hard_deletes(pla
 
 
 @pytest.mark.asyncio
-async def test_list_returns_paginated_page(widget_repo):
+async def test_list_returns_paginated_page_result(widget_repo):
     for i in range(5):
         await widget_repo.create(name=f"widget-{i}")
 
-    page = await widget_repo.list(params=PageParams(page=1, size=2))
+    result = await widget_repo.list(params=PageParams(page=1, size=2))
 
-    assert len(page.items) == 2
-    assert page.total == 5
-    assert page.pages == 3
+    assert len(result.items) == 2
+    assert result.total == 5
+    assert result.page == 1
+    assert result.size == 2
+
+
+@pytest.mark.asyncio
+async def test_list_returns_the_internal_page_result_not_the_wire_page(widget_repo):
+    # MEDIUM-2: AsyncRepository.list() must never return the wire Page of
+    # raw ORM objects -- it returns PageResult, which the route layer maps
+    # into Page[SchemaOut].
+    await widget_repo.create(name="gadget")
+
+    result = await widget_repo.list(params=PageParams(page=1, size=20))
+
+    assert isinstance(result, PageResult)
+    assert not hasattr(result, "pages")
+    assert not hasattr(result, "model_dump")
 
 
 @pytest.mark.asyncio
@@ -192,10 +207,10 @@ async def test_list_excludes_soft_deleted_by_default(widget_repo):
     drop = await widget_repo.create(name="drop")
     await widget_repo.delete(drop)
 
-    page = await widget_repo.list(params=PageParams(page=1, size=20))
+    result = await widget_repo.list(params=PageParams(page=1, size=20))
 
-    assert [w.name for w in page.items] == ["keep"]
-    assert page.total == 1
+    assert [w.name for w in result.items] == ["keep"]
+    assert result.total == 1
 
 
 @pytest.mark.asyncio
@@ -204,10 +219,10 @@ async def test_list_includes_soft_deleted_when_requested(widget_repo):
     drop = await widget_repo.create(name="drop")
     await widget_repo.delete(drop)
 
-    page = await widget_repo.list(params=PageParams(page=1, size=20), include_deleted=True)
+    result = await widget_repo.list(params=PageParams(page=1, size=20), include_deleted=True)
 
-    assert page.total == 2
-    assert {w.name for w in page.items} == {"keep", "drop"}
+    assert result.total == 2
+    assert {w.name for w in result.items} == {"keep", "drop"}
 
 
 @pytest.mark.asyncio
@@ -216,13 +231,13 @@ async def test_list_applies_extra_filters(widget_repo):
     await widget_repo.create(name="beta")
     await widget_repo.create(name="gamma")
 
-    page = await widget_repo.list(
+    result = await widget_repo.list(
         params=PageParams(page=1, size=20),
         filters=[Widget.name.in_(["alpha", "gamma"])],
     )
 
-    assert {w.name for w in page.items} == {"alpha", "gamma"}
-    assert page.total == 2
+    assert {w.name for w in result.items} == {"alpha", "gamma"}
+    assert result.total == 2
 
 
 @pytest.mark.asyncio
@@ -230,6 +245,6 @@ async def test_list_on_model_without_soft_delete_mixin_returns_all_rows(plain_re
     await plain_repo.create(name="one")
     await plain_repo.create(name="two")
 
-    page = await plain_repo.list(params=PageParams(page=1, size=20))
+    result = await plain_repo.list(params=PageParams(page=1, size=20))
 
-    assert page.total == 2
+    assert result.total == 2

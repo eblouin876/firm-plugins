@@ -94,18 +94,31 @@ module rather than left implicit, so the dual-rendering behavior is
 visible at the definition site, not just "whatever the library happens to
 default to today."
 
-## TimestampMixin: the database sets the clock
+## TimestampMixin: created_at is DB-level, updated_at is ORM-level
 
-`created_at`/`updated_at` are populated by `server_default=func.now()` /
-`onupdate=func.now()` — SQL-level defaults evaluated by the database at
-insert/update time, not by application code computing `datetime.now()`
-before the INSERT. Per `references/backend/sqlalchemy.md`'s "Models"
-section ("Make constraints explicit at the DB level... The database — not
-just the app — enforces integrity"): a row inserted by any path (a
-migration-time backfill, a different service sharing the table, a raw SQL
-script) still gets a correct, consistent `created_at`/`updated_at` even if
-it never goes through this app's ORM layer at all. Both columns are
-timezone-aware (`DateTime(timezone=True)`) and `nullable=False`.
+`created_at`/`updated_at` are both timezone-aware (`DateTime(timezone=True)`)
+and `nullable=False`, but they are set by two genuinely different
+mechanisms — this distinction matters, don't conflate them:
+
+- **`created_at`** uses a real `server_default=func.now()` — a SQL-level
+  default the database itself evaluates at INSERT time, not application
+  code computing `datetime.now()` beforehand. Per
+  `references/backend/sqlalchemy.md`'s "Models" section ("Make
+  constraints explicit at the DB level... The database — not just the
+  app — enforces integrity"): a row inserted by ANY path (a
+  migration-time backfill, a different service sharing the table, a raw
+  SQL script) still gets a correct `created_at`, even if it never goes
+  through this app's ORM layer at all.
+- **`updated_at`** uses `onupdate=func.now()` — an **ORM-level**
+  convenience, NOT `server_onupdate`. SQLAlchemy adds `updated_at =
+  now()` to the `SET` clause only of an `UPDATE` statement *it itself
+  issues* (a flush on a dirty, tracked instance). A raw-SQL `UPDATE`, a
+  migration-time bulk update, or another service writing to this table
+  directly will **not** bump `updated_at` — there's no database trigger
+  behind it the way there is for `created_at`. A project that needs
+  `updated_at` bumped regardless of write path needs a real database
+  trigger (or the dialect's `server_onupdate`, where supported) — this
+  mixin's `onupdate=` alone doesn't cover that case.
 
 ## SoftDeleteMixin: a filterable state, not a scattered boolean
 

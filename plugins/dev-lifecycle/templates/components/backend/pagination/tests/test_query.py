@@ -13,7 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
 
 from query import paginate_select
-from schema import PageParams
+from schema import PageParams, PageResult
 
 
 class _Base(DeclarativeBase):
@@ -52,48 +52,60 @@ async def session():
 @pytest.mark.asyncio
 async def test_paginate_select_first_page(session):
     stmt = select(Item).order_by(Item.id)
-    page = await paginate_select(session, stmt, PageParams(page=1, size=2))
+    result = await paginate_select(session, stmt, PageParams(page=1, size=2))
 
-    assert [i.name for i in page.items] == ["item-0", "item-1"]
-    assert page.total == 5
-    assert page.pages == 3
-    assert page.page == 1
-    assert page.size == 2
+    assert [i.name for i in result.items] == ["item-0", "item-1"]
+    assert result.total == 5
+    assert result.page == 1
+    assert result.size == 2
+
+
+@pytest.mark.asyncio
+async def test_paginate_select_returns_the_internal_page_result_not_a_page(session):
+    # MEDIUM-2: paginate_select returns PageResult (internal), never the
+    # strict wire Page -- it has no `pages` field and is not a Pydantic
+    # model.
+    stmt = select(Item).order_by(Item.id)
+    result = await paginate_select(session, stmt, PageParams(page=1, size=2))
+
+    assert isinstance(result, PageResult)
+    assert not hasattr(result, "pages")
+    assert not hasattr(result, "model_dump")
 
 
 @pytest.mark.asyncio
 async def test_paginate_select_middle_page(session):
     stmt = select(Item).order_by(Item.id)
-    page = await paginate_select(session, stmt, PageParams(page=2, size=2))
+    result = await paginate_select(session, stmt, PageParams(page=2, size=2))
 
-    assert [i.name for i in page.items] == ["item-2", "item-3"]
+    assert [i.name for i in result.items] == ["item-2", "item-3"]
 
 
 @pytest.mark.asyncio
 async def test_paginate_select_last_partial_page(session):
     stmt = select(Item).order_by(Item.id)
-    page = await paginate_select(session, stmt, PageParams(page=3, size=2))
+    result = await paginate_select(session, stmt, PageParams(page=3, size=2))
 
-    assert [i.name for i in page.items] == ["item-4"]
-    assert page.total == 5
+    assert [i.name for i in result.items] == ["item-4"]
+    assert result.total == 5
 
 
 @pytest.mark.asyncio
 async def test_paginate_select_page_past_the_end_returns_empty_items(session):
     stmt = select(Item).order_by(Item.id)
-    page = await paginate_select(session, stmt, PageParams(page=10, size=2))
+    result = await paginate_select(session, stmt, PageParams(page=10, size=2))
 
-    assert page.items == []
-    assert page.total == 5  # total reflects the whole (filtered) set, not the empty page
+    assert result.items == []
+    assert result.total == 5  # total reflects the whole (filtered) set, not the empty page
 
 
 @pytest.mark.asyncio
 async def test_paginate_select_size_evenly_divides_total(session):
     stmt = select(Item).order_by(Item.id)
-    page = await paginate_select(session, stmt, PageParams(page=1, size=5))
+    result = await paginate_select(session, stmt, PageParams(page=1, size=5))
 
-    assert page.pages == 1
-    assert len(page.items) == 5
+    assert len(result.items) == 5
+    assert result.total == 5
 
 
 # --- total reflects filters already on the statement -----------------------
@@ -102,10 +114,10 @@ async def test_paginate_select_size_evenly_divides_total(session):
 @pytest.mark.asyncio
 async def test_paginate_select_total_reflects_where_filter(session):
     stmt = select(Item).where(Item.name.in_(["item-0", "item-1", "item-2"])).order_by(Item.id)
-    page = await paginate_select(session, stmt, PageParams(page=1, size=2))
+    result = await paginate_select(session, stmt, PageParams(page=1, size=2))
 
-    assert page.total == 3  # not 5 -- the WHERE clause narrows the count too
-    assert page.pages == 2
+    assert result.total == 3  # not 5 -- the WHERE clause narrows the count too
+    assert len(result.items) == 2
 
 
 # --- empty table -------------------------------------------------------------
@@ -124,10 +136,9 @@ async def test_paginate_select_empty_table():
     sessionmaker = async_sessionmaker(bind=engine, expire_on_commit=False)
     async with sessionmaker() as s:
         stmt = select(Item)
-        page = await paginate_select(s, stmt, PageParams(page=1, size=20))
+        result = await paginate_select(s, stmt, PageParams(page=1, size=20))
 
-        assert page.items == []
-        assert page.total == 0
-        assert page.pages == 0
+        assert result.items == []
+        assert result.total == 0
 
     await engine.dispose()

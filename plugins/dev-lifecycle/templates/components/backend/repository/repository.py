@@ -9,8 +9,8 @@ row. Canon: references/backend/sqlalchemy.md ("Sessions & transactions",
 Drop-in: copy this file into app/core/db/repository.py, alongside
 mixins.py, session.py, and pagination/'s query.py + schema.py — this
 module imports the pagination pair as flat sibling modules (`from query
-import paginate_select`; `from schema import Page, PageParams`), so all
-five files land together in one app/core/db/ directory. Keep the whole
+import paginate_select`; `from schema import PageParams, PageResult`), so
+all five files land together in one app/core/db/ directory. Keep the whole
 backend/ SQLAlchemy-specific set together when copied — see db-mixins/
 README.md's note on this same convention.
 
@@ -26,6 +26,15 @@ this repository only flushes (to populate DB-generated values like a
 UUIDPrimaryKey's default or a TimestampMixin's server_default) so a caller
 that touches the object again in the same request sees consistent state,
 without prematurely ending the request's transaction.
+
+`list()` returns pagination/schema.py's `PageResult` — an INTERNAL
+container, not the wire `Page` — because its `items` are raw `ModelT` ORM
+instances, not yet mapped to an output schema. The ROUTE layer (Step 2)
+maps those items to an output schema and constructs the wire
+`Page[SchemaOut]` via `Page.create(...)`; this repository never does that
+mapping itself (it doesn't know the output schema) and never returns a
+`Page` for exactly that reason. See pagination/schema.py's `PageResult`
+docstring for the full wire-vs-internal split.
 """
 
 from __future__ import annotations
@@ -36,7 +45,7 @@ from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from query import paginate_select
-from schema import Page, PageParams
+from schema import PageParams, PageResult
 
 ModelT = TypeVar("ModelT")
 
@@ -80,11 +89,18 @@ class AsyncRepository(Generic[ModelT]):
         params: PageParams,
         include_deleted: bool = False,
         filters: Sequence[ColumnElement[bool]] = (),
-    ) -> Page[ModelT]:
+    ) -> PageResult[ModelT]:
         """Paginated list, delegating the actual `LIMIT`/`OFFSET` + count
         work to `pagination/query.py`'s `paginate_select` — this method's
         only job is building the right `select()` (soft-delete filter,
-        any caller-supplied `filters`) before handing it off."""
+        any caller-supplied `filters`) before handing it off.
+
+        Returns the INTERNAL `PageResult[ModelT]` container, NOT the wire
+        `Page[ModelT]` — its `items` are raw, unmapped ORM instances. A
+        route MUST map them to an output schema and build
+        `Page.create(mapped_items, total=result.total, params=params)`
+        itself before returning a response body; never return this
+        method's result directly as a response."""
         stmt = self._base_select(include_deleted=include_deleted)
         for condition in filters:
             stmt = stmt.where(condition)

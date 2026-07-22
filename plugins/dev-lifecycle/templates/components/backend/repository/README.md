@@ -2,10 +2,10 @@
 block: components/backend/repository  # catalog component
 needs:
   - SQLAlchemy 2.0.x (async extras): the runtime dependency, pinned per references/compatibility-matrix.md's Backend — Python row
-  - pagination/query.py + pagination/schema.py: sibling modules imported flat (from query import paginate_select; from schema import Page, PageParams)
+  - pagination/query.py + pagination/schema.py: sibling modules imported flat (from query import paginate_select; from schema import PageParams, PageResult)
   - a mapped model with an `id` primary-key attribute: AsyncRepository's get()/update()/delete() assume `self.model.id`
 exposes:
-  - AsyncRepository[ModelT] — get/list/create/update/delete over an AsyncSession, soft-delete-aware by duck-typing
+  - AsyncRepository[ModelT] — get/list/create/update/delete over an AsyncSession, soft-delete-aware by duck-typing; list() returns the INTERNAL PageResult[ModelT], never the wire Page
   - its co-located doc fragment: docs/fragment.md
 versions-pinned-to: references/compatibility-matrix.md
 last-verified: 2026-07-22
@@ -37,6 +37,7 @@ of scope for this component).
 ## Contents
 - Composition contract
 - Duck-typed soft-delete, not a hard import
+- Wire vs internal: what list() returns
 - Commit discipline: this repository never commits
 - Testing
 - Judgment calls
@@ -48,7 +49,7 @@ of scope for this component).
   `references/compatibility-matrix.md`'s Backend — Python row.
 - **`pagination/`'s `query.py` and `schema.py`, as flat sibling modules**
   — `repository.py` imports `from query import paginate_select` and `from
-  schema import Page, PageParams`. Copy all four SQLAlchemy-specific
+  schema import PageParams, PageResult`. Copy all four SQLAlchemy-specific
   files (`mixins.py`, `session.py`, `repository.py`, and pagination's
   `query.py`/`schema.py`) into one `app/core/db/` directory so these flat
   imports resolve.
@@ -62,11 +63,20 @@ of scope for this component).
 - `AsyncRepository[ModelT]` — constructed as `AsyncRepository(session,
   Model)`. Methods:
   - `get(id_, *, include_deleted=False) -> ModelT | None`
-  - `list(*, params: PageParams, include_deleted=False, filters=()) -> Page[ModelT]`
+  - `list(*, params: PageParams, include_deleted=False, filters=()) -> PageResult[ModelT]`
   - `create(**values) -> ModelT`
   - `update(obj, **values) -> ModelT`
   - `delete(obj, *, hard=False) -> None`
 - Its co-located doc fragment: `docs/fragment.md`.
+
+> **A route MUST map `PageResult.items` to an output schema and construct
+> the wire `Page[SchemaOut]` itself (via `Page.create(...)`) — NEVER
+> return `list()`'s result directly as a response body.** `list()`
+> returns `PageResult[ModelT]`, pagination/schema.py's INTERNAL container
+> — its `items` are raw, unmapped ORM instances (relationship loaders,
+> non-JSON-able columns). The wire `Page[T]` is a strict Pydantic model
+> with no `arbitrary_types_allowed`; it cannot and must not hold those
+> raw instances. See "Wire vs internal: what `list()` returns" below.
 
 ## Duck-typed soft-delete, not a hard import
 
@@ -88,6 +98,31 @@ copyable — a project could in principle use one without the other — while
 still composing correctly when both are present, which is the common
 case.
 
+## Wire vs internal: what list() returns
+
+`list()` returns `PageResult[ModelT]` — pagination/schema.py's INTERNAL
+container (`items`, `total`, `page`, `size`; no `pages`, not a Pydantic
+model) — never `Page[ModelT]`. `list()`'s `items` are raw `ModelT` ORM
+instances the repository fetched, not yet mapped to any output schema;
+`Page[T]` is the app's strict wire model (`extra="forbid"`, no
+`arbitrary_types_allowed`) and must never be asked to hold them.
+
+A ROUTE handler is the one place with enough context to do the mapping —
+it knows the output schema — so it, not this repository, does:
+
+```python
+result = await repo.list(params=params)
+mapped = [WidgetOut.model_validate(w) for w in result.items]
+return Page.create(mapped, total=result.total, params=params)
+```
+
+Returning `list()`'s `PageResult` directly as a response body is a bug,
+not a style choice: it risks leaking unmapped ORM columns, a lazy-load
+failing outside the request's session, or a field the output schema
+deliberately omits. See `pagination/README.md`'s "schema.py: the neutral
+contract" and `PageResult`'s docstring in `pagination/schema.py` for the
+full rationale behind the split.
+
 ## Commit discipline: this repository never commits
 
 Every mutating method (`create`, `update`, `delete`) calls
@@ -105,20 +140,24 @@ guarantee for a request that calls the repository more than once.
 
 `tests/test_repository.py` composes `db-mixins/`'s `Base`,
 `UUIDPrimaryKey`, `TimestampMixin`, `SoftDeleteMixin` and
-`pagination/`'s `PageParams`/`Page` against an in-memory sqlite engine
-(aiosqlite) — the real four-file composition a Stage 3 `app/core/db/`
-directory has. Covers: `create()` populating a generated id and
-timestamps, `get()` returning `None` for a missing id and the created
+`pagination/`'s `PageParams`/`PageResult` against an in-memory sqlite
+engine (aiosqlite) — the real four-file composition a Stage 3
+`app/core/db/` directory has. Covers: `create()` populating a generated id
+and timestamps, `get()` returning `None` for a missing id and the created
 object by id, `get()` excluding/including a soft-deleted row via
 `include_deleted`, `update()` mutating and persisting, `delete()`'s soft
 path (row stays in the table, `deleted_at` set, confirmed via a raw
 query bypassing the repository), `delete(hard=True)` actually removing
 the row, a model with **no** `SoftDeleteMixin` always hard-deleting
-regardless of `hard=`, `list()`'s pagination math, `list()` excluding/
-including soft-deleted rows, `list()` applying caller-supplied `filters`,
-and `list()` on a non-soft-deletable model returning every row.
+regardless of `hard=`, `list()`'s pagination math, `list()` returning the
+internal `PageResult` (not the wire `Page` — no `pages` field, not a
+Pydantic model), `list()` excluding/including soft-deleted rows, `list()`
+applying caller-supplied `filters`, and `list()` on a non-soft-deletable
+model returning every row.
 
-Run: `uv run --python 3.13 --with 'sqlalchemy[asyncio]==2.0.*' --with aiosqlite --with pytest --with pytest-asyncio -- pytest templates/components/backend/repository/tests/ -q`
+Run: `uv run --python 3.13 --with 'sqlalchemy[asyncio]==2.0.*' --with aiosqlite --with pytest --with pytest-asyncio --with 'pydantic==2.13.*' -- pytest templates/components/backend/repository/tests/ -q`
+(`pydantic` is required transitively — `repository.py` imports
+`pagination/schema.py`, which is Pydantic-only.)
 
 ## Judgment calls
 
@@ -139,3 +178,12 @@ Run: `uv run --python 3.13 --with 'sqlalchemy[asyncio]==2.0.*' --with aiosqlite 
   different PK name subclasses `AsyncRepository` and overrides `get()`.
 - **Never commits.** See "Commit discipline" above — a deliberate
   boundary with `db-session/`'s `get_db()`, not an oversight.
+- **`list()` returns `PageResult[ModelT]`, not `Page[ModelT]`.** Before
+  this fix, `list()` returned `Page[ModelT]` — the wire model, holding raw
+  ORM rows — kept legal only by `arbitrary_types_allowed=True` on `Page`.
+  That let a route return `list()`'s result directly as a response body
+  with zero schema mapping, leaking ORM internals onto the wire and
+  quietly widening the wire contract's `T` to "anything," not just a
+  serializable schema. Splitting `PageResult` (internal) from `Page`
+  (wire, strict) closes that hole: `list()` physically cannot be returned
+  as a response body without a route explicitly mapping it first.

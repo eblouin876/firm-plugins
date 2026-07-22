@@ -4,7 +4,7 @@ needs:
   - SQLAlchemy 2.0.x (async extras): the sole runtime dependency, pinned per references/compatibility-matrix.md's Backend — Python row
   - DATABASE_URL: an async-driver connection string (e.g. postgresql+asyncpg://... in prod, sqlite+aiosqlite:// in tests) passed to configure_engine()
 exposes:
-  - configure_engine(database_url, *, echo=False, **engine_kwargs) -> AsyncEngine — call once at app startup
+  - configure_engine(database_url, *, echo=False, **engine_kwargs) -> AsyncEngine — call once at app startup; fails fast (ValueError) on a bare sync-driver scheme (postgresql://, sqlite://, mysql://)
   - get_engine() / get_sessionmaker() — accessors, raise RuntimeError if configure_engine() was never called
   - get_db() -> AsyncIterator[AsyncSession] — the FastAPI dependency (Depends(get_db)); commit-on-success, rollback-on-exception, always closes
   - its co-located doc fragment: docs/fragment.md
@@ -35,6 +35,7 @@ this file.
 ## Contents
 - Composition contract
 - One engine, configured once at startup
+- Fail-fast on a non-async driver
 - get_db: the commit/rollback/close contract
 - Testing
 - Judgment calls
@@ -92,6 +93,32 @@ so a connection the DB server already dropped (idle timeout, failover) is
 recycled transparently instead of surfacing a stale-connection error on
 the next request.
 
+## Fail-fast on a non-async driver
+
+`configure_engine()` checks `database_url`'s scheme before calling
+`create_async_engine()`. A bare synchronous scheme this catalog's own
+dialects would otherwise recognize — `postgresql://`, `postgres://`,
+`sqlite://`, `mysql://` — raises `ValueError` immediately, naming the
+async driver to use instead:
+
+```
+DATABASE_URL 'postgresql://user:pass@localhost/db' uses the synchronous
+'postgresql://' scheme, but configure_engine() requires an async driver —
+use 'postgresql+asyncpg://' instead (e.g.
+'postgresql+asyncpg://user:pass@host/dbname'). Install the matching async
+driver package if it isn't already a dependency.
+```
+
+Without this check, a misconfigured `DATABASE_URL` (a config value pasted
+from a sync-context example, an env var typo) still reaches
+`create_async_engine`, which either fails later — at the first query — or
+raises an import error for a sync driver package the project never
+installed, several frames deep and far from the actual mistake. The check
+only recognizes schemes this catalog targets; an already-async scheme
+(anything with a `+driver` suffix, e.g. `postgresql+asyncpg`) always
+passes through untouched, and a scheme this catalog has no opinion about
+is left to `create_async_engine`'s own error.
+
 ## get_db: the commit/rollback/close contract
 
 ```python
@@ -130,10 +157,15 @@ async-sqlite test), both accessors raising a clear `RuntimeError` before
 the commit-on-success path (a row added through `get_db()` is visible from
 a fresh session afterward), the rollback-on-exception path (a row added
 then an exception thrown into the generator leaves no row persisted), the
-original exception propagating unchanged (not swallowed or replaced), and
-the session's `close()` being called exactly once on both the success and
-the exception path (verified via a monkeypatched spy on
-`AsyncSession.close`).
+original exception propagating unchanged (not swallowed or replaced), the
+session's `close()` being called exactly once on both the success and the
+exception path (verified via a monkeypatched spy on `AsyncSession.close`),
+`configure_engine` rejecting a bare `postgresql://`/`sqlite://`/`mysql://`
+scheme with a `ValueError` naming the correct async driver, the rejection
+message quoting the offending URL, a rejected call leaving the
+already-configured engine untouched (no partial/clobbered state), and an
+already-async scheme (`sqlite+aiosqlite://`) passing the guard without
+raising.
 
 Run: `uv run --python 3.13 --with 'sqlalchemy[asyncio]==2.0.*' --with aiosqlite --with pytest --with pytest-asyncio -- pytest templates/components/backend/db-session/tests/ -q`
 (async tests use explicit `@pytest.mark.asyncio` markers — pytest-asyncio's
@@ -158,3 +190,16 @@ ini configuration needed).
   2's FastAPI exception-handler's job, not this module's — `get_db()`'s
   only contract is "the DB transaction reflects what actually happened,"
   independent of how that outcome eventually reaches the client.
+- **The async-driver guard is a small, hardcoded scheme map, not a
+  general URL-parsing/validation library.** `_ASYNC_DRIVER_HINT` only
+  covers the dialects this catalog actually targets (postgresql, sqlite,
+  plus mysql as a common fourth); an unrecognized scheme is left to
+  `create_async_engine`'s own error rather than this module trying to be
+  exhaustive about every SQLAlchemy dialect that exists.
+- **The guard checks the scheme, not whether the named async driver
+  package is actually installed.** Confirming the driver is importable
+  would require actually attempting the import (or a package-name lookup
+  keyed to the dialect) — more machinery than a fail-fast scheme check
+  needs; a missing driver package still surfaces its own clear
+  `ModuleNotFoundError` from `create_async_engine`, just not this
+  module's more specific message.

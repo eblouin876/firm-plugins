@@ -36,12 +36,52 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
+# Bare (sync-driver) scheme -> the async driver this module actually needs.
+# Covers the schemes this catalog's own dialects use (sqlite for hermetic
+# tests, postgresql for prod); a scheme not listed here (an already-async
+# scheme like `postgresql+asyncpg`, or a dialect this catalog doesn't
+# target) is left to create_async_engine's own error, not guarded here.
+_ASYNC_DRIVER_HINT: dict[str, str] = {
+    "postgresql": "postgresql+asyncpg://",
+    "postgres": "postgresql+asyncpg://",
+    "sqlite": "sqlite+aiosqlite://",
+    "mysql": "mysql+aiomysql://",
+}
+
+
+def _require_async_driver(database_url: str) -> None:
+    """Fails fast, with an actionable message, when `database_url` uses a
+    bare synchronous-driver scheme (`postgresql://`, `sqlite://`, ...)
+    instead of an async one (`postgresql+asyncpg://`,
+    `sqlite+aiosqlite://`, ...). Without this check, `create_async_engine`
+    still accepts a sync scheme, then fails later — either at the first
+    query, or with an import error for a sync driver package this project
+    never installed — surfacing a confusing, deep stack trace far from the
+    actual mistake (a config value, not this module). Only checks schemes
+    this catalog's own dialects use; an already-async scheme (`+asyncpg`,
+    `+aiosqlite`, ...) always passes through untouched."""
+    scheme = database_url.split("://", 1)[0] if "://" in database_url else database_url
+    if "+" in scheme:
+        return  # already names a driver, e.g. postgresql+asyncpg -- not our concern
+    hint = _ASYNC_DRIVER_HINT.get(scheme.lower())
+    if hint is None:
+        return  # not one of the schemes we have an opinion about
+    raise ValueError(
+        f"DATABASE_URL {database_url!r} uses the synchronous '{scheme}://' scheme, "
+        f"but configure_engine() requires an async driver — use {hint!r} instead "
+        f"(e.g. '{hint}user:pass@host/dbname'). Install the matching async driver "
+        "package if it isn't already a dependency."
+    )
+
 
 def configure_engine(database_url: str, *, echo: bool = False, **engine_kwargs: Any) -> AsyncEngine:
     """Builds (and caches, module-level) the async engine and its
     sessionmaker from a DATABASE_URL. Call exactly once at app startup —
     e.g. a FastAPI lifespan handler reading `settings.DATABASE_URL` (see
-    settings/). `pool_pre_ping=True` is the default unless overridden via
+    settings/). Validates `database_url` names an async driver scheme
+    first (see `_require_async_driver`) — fails fast with an actionable
+    message instead of a deep `create_async_engine` stack trace.
+    `pool_pre_ping=True` is the default unless overridden via
     `engine_kwargs` — it recycles a connection dropped by the DB server
     (idle timeout, failover) instead of surfacing a stale-connection error
     to a request. `**engine_kwargs` passes through to
@@ -49,6 +89,7 @@ def configure_engine(database_url: str, *, echo: bool = False, **engine_kwargs: 
     `poolclass=StaticPool` for a shared in-memory sqlite engine (see
     tests/test_session.py); a prod deployment might use it to tune
     `pool_size`/`max_overflow`."""
+    _require_async_driver(database_url)
     global _engine, _sessionmaker
     engine_kwargs.setdefault("pool_pre_ping", True)
     _engine = create_async_engine(database_url, echo=echo, **engine_kwargs)
