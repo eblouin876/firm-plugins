@@ -1,6 +1,6 @@
 <!--
 scope: documentation-standard        # cross-cutting canon, not a single library — see references/_TEMPLATE.md for the library-doc header this variant replaces
-last-verified: 2026-07-21
+last-verified: 2026-07-22
 provenance: manual
 sources: []
 -->
@@ -12,6 +12,7 @@ How a starter-kit project's documentation stays true to the code as blocks, comp
 ## Contents
 - The portable, co-located doc model
 - The root README template (canonical source)
+- Aggregation markers (canonical spec)
 - The project CLAUDE.md template (canonical source)
 - "Ships its doc" is an acceptance bar
 
@@ -32,10 +33,10 @@ Stage 1 (#24) materializes the aggregation mechanics (how fragments actually get
 
 ## The root README template (canonical source)
 
-This is the canonical section set every scaffolded project's root README is built from. Stage 1 (#24) materializes this body at `templates/monorepo/README.md.tmpl` for scaffolding to consume via `${CLAUDE_PLUGIN_ROOT}` (stripping the `.tmpl` suffix on materialization); this document remains the source of truth those two stay in sync with.
+This is the canonical section set every scaffolded project's root README is built from. Stage 1 (#24) materializes this body at `templates/monorepo/README.md.tmpl` for scaffolding to consume via `${CLAUDE_PLUGIN_ROOT}` (stripping the `.tmpl` suffix on materialization); this document remains the source of truth those two stay in sync with. The payload is not a byte-for-byte copy of the body below: it additionally wraps the Setup/Deployment/Maintenance/Secrets sections in the aggregation marker regions defined next, and it drops the illustrative `<ENV_VAR>` Secrets example row shown here (a real project's Secrets rows come only from composed blocks' fragments). Canon remains the source of truth for the section set and body wording; the payload materializes that wording plus the aggregation mechanics.
 
 ```markdown
-# <Project name>
+# <project-name>
 
 One-line description of what this project is and who it's for.
 
@@ -69,6 +70,31 @@ A short orientation to the monorepo layout — the workspace packages and
 where each block/component lives — so a reader can find their way around
 without reading every directory.
 ```
+
+## Aggregation markers (canonical spec)
+
+This is the canonical spec for the anchor-marker pairs `just docs-generate` uses to write each composed block's doc-fragment contribution into an aggregating section of the root README (Setup, Deployment, Maintenance, Secrets), and to find, replace, or remove that contribution on a later run without disturbing hand-written prose above it or another block's region. `templates/monorepo/README.md.tmpl` materializes this spec; its header comment is a pointer back here, not a second source of truth.
+
+**Marker syntax.** A region is delimited by a pair of HTML comments, each occupying its own line:
+
+```
+<!-- BEGIN block:<layer>/<name> -->
+<!-- END block:<layer>/<name> -->
+```
+
+`<layer>/<name>` matches the block's own placement in the composed project (e.g. `backend/fastapi`, `packages/api-client`), so the generator and a human diff can tell at a glance which block a region came from. Matching is anchored to the full line: a marker comment occupies its own line, and the whole line must match the pattern, not merely contain it. Parsers may normalize internal whitespace when matching, but the emitter always writes the canonical single-space form shown above — one space after `<!--` and before `-->`, one space around `block:<layer>/<name>`.
+
+**Section scoping.** A `<layer>/<name>` marker id is not document-unique. Each of the four aggregating sections (Setup, Deployment, Maintenance, Secrets) gets its own independent BEGIN/END pair per composed block — the same block can contribute up to four regions, one per section it has a fragment for, all sharing the same `<layer>/<name>`. The generator must resolve the enclosing `##` section first, then match markers only within it; it must never dedupe or reorder markers across sections — a `backend/fastapi` region in Setup and a `backend/fastapi` region in Secrets are unrelated for matching purposes.
+
+**Sentinel lifecycle.** The literal id `<layer>/<name>` (used verbatim, not as a placeholder for some real block's name) is reserved as the empty-state sentinel. On a fresh scaffold with no blocks composed in, each aggregating section holds exactly one `<!-- BEGIN block:<layer>/<name> -->` / `<!-- END block:<layer>/<name> -->` pair, showing future block authors and the generator the exact syntax to use. On the first real fill of a section, `just docs-generate` removes the sentinel pair; it is re-created only if every real block is later removed and the section returns to empty. A real block's region must never be named `<layer>/<name>` — that id is permanently reserved for the sentinel.
+
+**Parser guidance.** Match against the full comment line, never a substring search for `block:` — that token also appears in explanatory prose (including in this document and in the payload's own header comment), and a substring match would false-positive on it.
+
+**Secrets section specifics.** The `| Secret | Used by | Where to get it |` header row and its `| --- | --- | --- |` separator live outside and above the marker regions, written once by the template itself. A block's Secrets fragment contributes table rows only, inside its own BEGIN/END pair; the generator must not re-emit the header or separator per block.
+
+**Nesting.** Regions never nest. Within a section they are flat siblings, one per contributing block, in whatever order the generator writes them.
+
+**Region ownership.** Everything between a block's BEGIN and END marker is owned by the generator: it is fully regenerated from that block's own doc fragment on every `just docs-generate` run. Never hand-edit content inside a region directly — edit the block's own co-located `README.md` doc fragment instead, then regenerate. A hand-edit inside a region with no fragment behind it is silently overwritten on the next run.
 
 ## The project CLAUDE.md template (canonical source)
 

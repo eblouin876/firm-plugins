@@ -4,36 +4,36 @@ scaffolded project as that project's own root README.md (scaffolding
 strips the `.tmpl` suffix). It is not linted by this plugin's header-lint
 (references/ + templates/ *.md checks — see scripts/validate_plugin.py)
 and is never auto-loaded as this repo's own docs. `<placeholders>` like
-<project-name> are substituted by scaffolding at materialization time.
+`<project-name>` are substituted by scaffolding at materialization time.
 
-Canonical source for this body: references/authoring/documentation-standard.md
-("The root README template"). Keep the two in sync — this file is the
-materialized copy, that document is the source of truth.
+Canonical source for this body AND for the aggregation-marker contract
+below: references/authoring/documentation-standard.md ("The root README
+template" and "Aggregation markers"). That document is the single source
+of truth; this file is the materialized copy plus the marker regions
+themselves. Keep the two in sync.
 
-DOC-FRAGMENT AGGREGATION REGIONS (consumed by Step 4's docs-generate script;
-see references/authoring/documentation-standard.md and
-templates/_TEMPLATE-README.md's composition contract):
+DOC-FRAGMENT AGGREGATION REGIONS, summarized (full spec in
+references/authoring/documentation-standard.md's "Aggregation markers"
+section — read that before touching this contract):
 - Every template block/catalog component/recipe ships a co-located doc
   fragment (its own README.md) with sub-sections matching the four
   aggregating sections below (Setup / Deployment / Maintenance / Secrets).
 - `just docs-generate` copies each composed block's fragment content into
   the matching section here, wrapping each block's contribution in its own
-  anchor-marker pair so later runs can find, replace, and reorder it
-  without touching hand-written prose above it or another block's region:
-    an HTML comment reading exactly  BEGIN block:<layer>/<name>
-    ... that block's fragment content for this section, verbatim ...
-    an HTML comment reading exactly  END block:<layer>/<name>
-  <layer>/<name> matches the block's own placement (e.g. backend/fastapi,
-  packages/api-client) so the generator and a human diff can tell which
-  block a region came from at a glance.
+  `<!-- BEGIN block:<layer>/<name> -->` / `<!-- END block:<layer>/<name> -->`
+  marker pair (single-space padding, each marker on its own line) so later
+  runs can find, replace, and reorder it without touching hand-written
+  prose above it or another block's region. Marker ids are scoped per
+  section, not document-unique; `<layer>/<name>` (e.g. `backend/fastapi`)
+  itself is reserved as the empty-state sentinel and is never a real
+  block's id.
 - Never hand-edit content between a block's markers directly — the next
   `just docs-generate` silently overwrites it. Edit that block's own
   README.md doc fragment instead, then regenerate. `just docs-check`
   fails the build if this file has drifted from the fragments it should
   reflect.
 - On a fresh scaffold (no blocks composed in yet) each aggregation region
-  below is empty, holding only a single placeholder marker pair that shows
-  the exact syntax future block authors and the Step 4 script agree on.
+  below holds only the sentinel marker pair shown above.
 -->
 
 # <project-name>
