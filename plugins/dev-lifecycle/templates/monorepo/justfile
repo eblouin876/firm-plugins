@@ -1,0 +1,61 @@
+# Standard task-runner surface for a scaffolded project (composition contract,
+# templates/_TEMPLATE-README.md). Every block wires its runnable behavior
+# into these targets rather than inventing its own. On the empty Stage 1
+# skeleton (no packages under apps/ or packages/ yet), the pnpm-backed
+# targets are clean no-ops thanks to `--if-present`.
+#
+# NOTE on naming: the composition contract names these targets with a
+# colon (e.g. `docs:generate`, matching the pnpm-script convention used
+# elsewhere in the kit). `just` (stable, 1.21.x) does not allow `:` in a
+# recipe or alias name — it's reserved for the dependency separator — so
+# these are implemented as dash-named recipes (`docs-generate`) instead.
+# See this step's decision log.
+
+set shell := ["bash", "-uc"]
+
+# List available targets.
+default:
+    @just --list
+
+# Install workspace dependencies.
+install:
+    pnpm install
+
+# Run every package's dev script in parallel (no-op on an empty workspace).
+dev:
+    pnpm -r --if-present --parallel run dev
+
+# Run every package's test script (no-op on an empty workspace).
+test:
+    pnpm -r --if-present run test
+
+# Lint every package (no-op on an empty workspace).
+lint:
+    pnpm -r --if-present run lint
+
+# Typecheck every package (no-op on an empty workspace).
+typecheck:
+    pnpm -r --if-present run typecheck
+
+# Build every package (no-op on an empty workspace).
+build:
+    pnpm -r --if-present run build
+
+# Regenerate the typed api-client from the backend's OpenAPI schema.
+# wired in Step 2 (packages/api-client + orval config land there).
+client-generate:
+    @echo "client:generate: not wired yet — lands in Stage 1 Step 2 (packages/api-client, orval)." && exit 0
+
+# Deploy the project. Backed once an infra/devops block is scaffolded in.
+deploy:
+    @echo "deploy: not wired yet — backed once a deployment target is scaffolded in (devops stage)." && exit 0
+
+# Regenerate the root README from every block's co-located doc fragment.
+# wired in Step 4 (docs aggregation script).
+docs-generate:
+    @echo "docs:generate: not wired yet — lands in Stage 1 Step 4 (doc fragment aggregation script)." && exit 0
+
+# Check the root README isn't stale relative to the doc fragments.
+# wired in Step 4 (docs aggregation script).
+docs-check:
+    @echo "docs:check: not wired yet — lands in Stage 1 Step 4 (doc fragment aggregation script)." && exit 0

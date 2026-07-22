@@ -1,0 +1,17 @@
+{
+  "name": "monorepo-root",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Scaffolded monorepo root. Rename before shipping a real project.",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm -r --if-present --parallel run dev",
+    "build": "pnpm -r --if-present run build",
+    "lint": "pnpm -r --if-present run lint",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test"
+  }
+}

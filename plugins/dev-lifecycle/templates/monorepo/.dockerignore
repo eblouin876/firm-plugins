@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+.turbo
+**/.turbo
+coverage
+**/coverage
+.env
+.env.*
+.git
+.gitignore
+*.md
