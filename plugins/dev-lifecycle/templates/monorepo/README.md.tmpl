@@ -1,0 +1,95 @@
+<!--
+This is a PAYLOAD template, not plugin canon: it materializes into a
+scaffolded project as that project's own root README.md (scaffolding
+strips the `.tmpl` suffix). It is not linted by this plugin's header-lint
+(references/ + templates/ *.md checks — see scripts/validate_plugin.py)
+and is never auto-loaded as this repo's own docs. `<placeholders>` like
+<project-name> are substituted by scaffolding at materialization time.
+
+Canonical source for this body: references/authoring/documentation-standard.md
+("The root README template"). Keep the two in sync — this file is the
+materialized copy, that document is the source of truth.
+
+DOC-FRAGMENT AGGREGATION REGIONS (consumed by Step 4's docs-generate script;
+see references/authoring/documentation-standard.md and
+templates/_TEMPLATE-README.md's composition contract):
+- Every template block/catalog component/recipe ships a co-located doc
+  fragment (its own README.md) with sub-sections matching the four
+  aggregating sections below (Setup / Deployment / Maintenance / Secrets).
+- `just docs-generate` copies each composed block's fragment content into
+  the matching section here, wrapping each block's contribution in its own
+  anchor-marker pair so later runs can find, replace, and reorder it
+  without touching hand-written prose above it or another block's region:
+    an HTML comment reading exactly  BEGIN block:<layer>/<name>
+    ... that block's fragment content for this section, verbatim ...
+    an HTML comment reading exactly  END block:<layer>/<name>
+  <layer>/<name> matches the block's own placement (e.g. backend/fastapi,
+  packages/api-client) so the generator and a human diff can tell which
+  block a region came from at a glance.
+- Never hand-edit content between a block's markers directly — the next
+  `just docs-generate` silently overwrites it. Edit that block's own
+  README.md doc fragment instead, then regenerate. `just docs-check`
+  fails the build if this file has drifted from the fragments it should
+  reflect.
+- On a fresh scaffold (no blocks composed in yet) each aggregation region
+  below is empty, holding only a single placeholder marker pair that shows
+  the exact syntax future block authors and the Step 4 script agree on.
+-->
+
+# <project-name>
+
+One-line description of what this project is and who it's for.
+
+## Setup
+Prerequisites, install, and the shortest path to running the project locally.
+Aggregates each block's own setup steps (backend, frontend, mobile, infra) —
+right-size to what's actually present in this project.
+
+<!-- BEGIN block:<layer>/<name> -->
+<!-- No blocks composed yet. `just docs-generate` fills this region with
+     one BEGIN/END block:<layer>/<name> pair per composed block, each
+     wrapping that block's Setup fragment content. -->
+<!-- END block:<layer>/<name> -->
+
+## Deployment
+How the project ships: the pipeline, environments, and how to trigger a deploy.
+Aggregates each block's/component's deploy notes (e.g. infra block's Terraform
+apply, backend/frontend build+deploy steps).
+
+<!-- BEGIN block:<layer>/<name> -->
+<!-- No blocks composed yet. `just docs-generate` fills this region with
+     one BEGIN/END block:<layer>/<name> pair per composed block, each
+     wrapping that block's Deployment fragment content. -->
+<!-- END block:<layer>/<name> -->
+
+## Maintenance
+Routine upkeep: how dependencies are updated, how the compatibility matrix is
+tracked, how the freshness audit surfaces drift, and how to run the standard
+`justfile` targets (`test`, `lint`, `dev`, `build`, `deploy`, `docs-generate`,
+`docs-check`).
+
+<!-- BEGIN block:<layer>/<name> -->
+<!-- No blocks composed yet. `just docs-generate` fills this region with
+     one BEGIN/END block:<layer>/<name> pair per composed block, each
+     wrapping that block's Maintenance fragment content. -->
+<!-- END block:<layer>/<name> -->
+
+## Secrets
+Every secret this project needs, and **where to get each one** — not the
+secret values themselves. Aggregates each block's/recipe's secrets subsection
+(e.g. a payments recipe's API keys, an infra block's cloud credentials).
+
+| Secret | Used by | Where to get it |
+| --- | --- | --- |
+<!-- BEGIN block:<layer>/<name> -->
+<!-- No blocks composed yet. `just docs-generate` fills this region with
+     one BEGIN/END block:<layer>/<name> pair per composed block, each
+     wrapping that block's secrets table rows. -->
+<!-- END block:<layer>/<name> -->
+
+## Structure
+A short orientation to the monorepo layout — the workspace packages and
+where each block/component lives — so a reader can find their way around
+without reading every directory. Not an aggregation region (unlike the
+sections above): scaffolding/the docs skill writes this directly from
+what's actually present, rather than copying it from a per-block fragment.

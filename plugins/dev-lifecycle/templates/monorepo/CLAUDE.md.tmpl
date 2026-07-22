@@ -1,0 +1,39 @@
+<!--
+This is a PAYLOAD template, not plugin canon: it materializes into a
+scaffolded project as that project's own root CLAUDE.md (scaffolding
+strips the `.tmpl` suffix). It is not linted by this plugin's header-lint
+and — because it keeps the `.tmpl` suffix here in firm-plugins — it is
+never mistaken for this repo's own CLAUDE.md and auto-loaded into this
+plugin's sessions. `<placeholders>` like <project-name> are substituted
+by scaffolding at materialization time.
+
+Canonical source for this body: references/authoring/documentation-standard.md
+("The project CLAUDE.md template"). Keep the two in sync — this file is
+the materialized copy, that document is the source of truth.
+-->
+
+# CLAUDE.md
+
+Guidance for any Claude instance working in this repository.
+
+## What this project is
+One or two sentences: purpose, and the blocks composed into it (backend,
+frontend, mobile, infra) per `templates/_TEMPLATE-README.md`'s composition
+contract.
+
+## Structure
+Pointer to the root README's Structure section — do not duplicate; link to it.
+
+## Keeping the README current
+The root README aggregates a doc fragment from every block, component, and
+recipe in this project. When you add, remove, or materially change one:
+1. Update (or add) that artifact's own co-located doc fragment first —
+   it is the source fact.
+2. Re-run `just docs-generate` (or the project's equivalent) so the root
+   README reflects the change, and `just docs-check` before committing to
+   catch drift.
+3. Never hand-edit an aggregated section of the root README directly without
+   also updating the fragment it came from — the next regeneration will
+   silently overwrite a hand-edit that has no fragment behind it.
+A stale README is treated as a bug: the `documentation` and `code-review`
+skills flag it.
