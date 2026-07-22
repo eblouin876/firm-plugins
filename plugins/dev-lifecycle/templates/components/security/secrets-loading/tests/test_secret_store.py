@@ -1,6 +1,6 @@
-"""Tests for the secrets-loading drop-in. Values used throughout are
-obviously fake (e.g. "s3cr3t-value-not-real") — no real credential ever
-appears in this file.
+"""Tests for the secrets-loading drop-in (secret_store.py). Values used
+throughout are obviously fake (e.g. "s3cr3t-value-not-real") — no real
+credential ever appears in this file.
 """
 
 from __future__ import annotations
@@ -10,10 +10,11 @@ import sys
 
 import pytest
 
-import secrets as secrets_mod
-from secrets import (
+import secret_store as secret_store_mod
+from secret_store import (
     MissingSecretsError,
     SecretNotFoundError,
+    SecretShapeError,
     get_secret,
     validate_required,
 )
@@ -23,9 +24,9 @@ from secrets import (
 def _reset_asm_cache():
     """Every test starts with no cached ASM client, and leaves none behind
     for the next test."""
-    secrets_mod._reset_asm_client_cache_for_tests()
+    secret_store_mod._reset_asm_client_cache_for_tests()
     yield
-    secrets_mod._reset_asm_client_cache_for_tests()
+    secret_store_mod._reset_asm_client_cache_for_tests()
 
 
 class FakeSecretsManagerClient:
@@ -100,7 +101,7 @@ def test_validate_required_lists_every_missing_name(monkeypatch):
 
 def test_successful_resolution_never_logs_the_value(monkeypatch, caplog):
     monkeypatch.setenv("LOGGED_SECRET", "should-never-appear-in-logs")
-    with caplog.at_level(logging.DEBUG, logger="secrets"):
+    with caplog.at_level(logging.DEBUG, logger="secret_store"):
         get_secret("LOGGED_SECRET")
     assert "should-never-appear-in-logs" not in caplog.text
     assert "LOGGED_SECRET" in caplog.text  # the NAME is fine to log
@@ -164,6 +165,101 @@ def test_asm_not_consulted_when_backend_not_configured(monkeypatch):
     monkeypatch.delenv("UNCONFIGURED_BACKEND_SECRET", raising=False)
     with pytest.raises(SecretNotFoundError):
         get_secret("UNCONFIGURED_BACKEND_SECRET", client=FakeSecretsManagerClient({}))
+
+
+# --- ASM JSON-blob shape mismatch: raise, don't return the raw blob (L3) --
+
+
+def test_asm_json_blob_without_matching_key_raises_shape_error(monkeypatch):
+    monkeypatch.delenv("SHAPE_MISMATCH_SECRET", raising=False)
+    monkeypatch.setenv("SECRETS_BACKEND", "aws-secrets-manager")
+    fake_client = FakeSecretsManagerClient(
+        {"SHAPE_MISMATCH_SECRET": '{"DB_USER": "app", "DB_HOST": "db.internal"}'}
+    )
+
+    with pytest.raises(SecretShapeError) as exc_info:
+        get_secret("SHAPE_MISMATCH_SECRET", client=fake_client)
+    assert exc_info.value.name == "SHAPE_MISMATCH_SECRET"
+    # The message can only ever contain the name -- never the JSON blob's
+    # actual field values, which is exactly the point.
+    assert "SHAPE_MISMATCH_SECRET" in str(exc_info.value)
+    assert "DB_HOST" not in str(exc_info.value)
+    assert "db.internal" not in str(exc_info.value)
+
+
+def test_asm_scalar_json_value_is_not_affected_by_shape_check(monkeypatch):
+    # A JSON-encoded scalar (e.g. the secret happens to be the string "42")
+    # is not a dict at all -- the shape check only applies to JSON objects.
+    # It returns the raw SecretString as-is (pre-existing behavior,
+    # unaffected by SecretShapeError, which only fires for a dict without
+    # a matching key).
+    monkeypatch.delenv("SCALAR_JSON_SECRET", raising=False)
+    monkeypatch.setenv("SECRETS_BACKEND", "aws-secrets-manager")
+    fake_client = FakeSecretsManagerClient({"SCALAR_JSON_SECRET": '"just-a-string-fake"'})
+
+    assert get_secret("SCALAR_JSON_SECRET", client=fake_client) == '"just-a-string-fake"'
+
+
+# --- ASM lookup failure logs the exception TYPE, never the message (L2) --
+
+
+class _FakeClientError(Exception):
+    """Mimics the cheaply-available shape of a real boto3 ClientError
+    (a `.response["Error"]["Code"]` dict) without depending on boto3."""
+
+    def __init__(self, code: str) -> None:
+        self.response = {"Error": {"Code": code, "Message": "fake-message-not-real"}}
+        super().__init__(f"fake {code} message that must never be logged")
+
+
+class _RaisingSecretsManagerClient:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def get_secret_value(self, *, SecretId: str) -> dict:
+        raise self.exc
+
+
+def test_asm_access_denied_logs_client_error_code(monkeypatch, caplog):
+    monkeypatch.setenv("SECRETS_BACKEND", "aws-secrets-manager")
+    monkeypatch.delenv("ACCESS_DENIED_SECRET", raising=False)
+    fake_client = _RaisingSecretsManagerClient(_FakeClientError("AccessDeniedException"))
+
+    with caplog.at_level(logging.WARNING, logger="secret_store"):
+        with pytest.raises(SecretNotFoundError):
+            get_secret("ACCESS_DENIED_SECRET", client=fake_client)
+
+    assert "AccessDeniedException" in caplog.text
+    assert "fake-message-not-real" not in caplog.text
+    assert "must never be logged" not in caplog.text
+
+
+def test_asm_resource_not_found_logs_distinguishable_client_error_code(monkeypatch, caplog):
+    monkeypatch.setenv("SECRETS_BACKEND", "aws-secrets-manager")
+    monkeypatch.delenv("RESOURCE_NOT_FOUND_SECRET", raising=False)
+    fake_client = _RaisingSecretsManagerClient(_FakeClientError("ResourceNotFoundException"))
+
+    with caplog.at_level(logging.WARNING, logger="secret_store"):
+        with pytest.raises(SecretNotFoundError):
+            get_secret("RESOURCE_NOT_FOUND_SECRET", client=fake_client)
+
+    assert "ResourceNotFoundException" in caplog.text
+    assert "AccessDeniedException" not in caplog.text
+
+
+def test_asm_generic_exception_without_client_error_shape_logs_type_name(monkeypatch, caplog):
+    # No `.response` attribute at all (e.g. a plain network-level
+    # exception, or the fake client used elsewhere in this file raising
+    # KeyError) -- falls back to the exception's own class name.
+    monkeypatch.setenv("SECRETS_BACKEND", "aws-secrets-manager")
+    monkeypatch.delenv("GENERIC_ERROR_SECRET", raising=False)
+    fake_client = FakeSecretsManagerClient({})  # empty store -> raises KeyError internally
+
+    with caplog.at_level(logging.WARNING, logger="secret_store"):
+        with pytest.raises(SecretNotFoundError):
+            get_secret("GENERIC_ERROR_SECRET", client=fake_client)
+
+    assert "KeyError" in caplog.text
 
 
 # --- lazy boto3 import (no real boto3 required) -------------------------

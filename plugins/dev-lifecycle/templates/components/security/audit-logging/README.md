@@ -110,14 +110,32 @@ Concretely:
 
 ## Redaction
 
-`redact()` replaces any key matching `sensitive_keys` (case-insensitive
-exact match on the key name) with `REDACTED`, recursing into nested
-mappings. `DEFAULT_SENSITIVE_KEYS` covers the common credential/PII-adjacent
-key names (`password`, `token`, `api_key`, `ssn`, `card_number`, ...) — pass
-`sensitive_keys=DEFAULT_SENSITIVE_KEYS | {"your_field"}` at a call site to
-extend it for a domain-specific field, never to shrink it. Redaction does
-**not** descend into lists of dicts — keep `extra` payloads flat rather than
-relying on it to reach inside a list.
+`redact()` replaces any key matching `sensitive_keys` with `REDACTED`, via
+two layers:
+
+1. **Exact match** (case-insensitive) against `DEFAULT_SENSITIVE_KEYS` —
+   the common credential/PII-adjacent key names: `password`, `passwd`,
+   `pwd`, `passphrase`, `secret`, `client_secret`, `secret_key`,
+   `aws_secret_access_key`, `private_key`, `token`, `access_token`,
+   `refresh_token`, `api_key`, `apikey`, `authorization`, `cookie`,
+   `set_cookie`, `session_id`, `ssn`, `credit_card`, `card_number`, `cvv`.
+   Pass `sensitive_keys=DEFAULT_SENSITIVE_KEYS | {"your_field"}` at a call
+   site to extend it for a domain-specific field, never to shrink it.
+2. **Bounded substring match** (case-insensitive, always applied — not
+   configurable per call site) — a key that *contains* `secret`, `token`,
+   `password`, `passwd`, or `private_key` is redacted even if its exact
+   name isn't in `DEFAULT_SENSITIVE_KEYS`. This is what catches a call
+   site's own naming variant (`stripe_secret_key`, `db_password_hash`,
+   `oauth_token_value`) that an exact-match set alone would miss. The
+   substring list is deliberately short and specific — not a bare `key` or
+   `id` — so it doesn't over-redact ordinary fields.
+
+Redaction recurses into nested mappings, and into mappings nested inside
+lists or tuples (e.g. `{"changed": [{"token": "..."}]}` redacts the
+`token` inside the list), preserving the original list/tuple structure.
+The recursion follows the payload's own nesting with no fixed depth
+limit — keep `extra` payloads reasonably shallow as a matter of good
+practice, not because redaction stops working at some depth.
 
 ## Request-id binding (for Step 3 middleware)
 
@@ -136,8 +154,16 @@ timestamp validity, that the emitted log line is valid JSON, request-id
 resolution (unbound → `None`, contextvar fallback, explicit-argument
 override), that `redact()` actually replaces sensitive values
 (case-insensitively, recursing into nested dicts, without mutating the
-input), and — the load-bearing test — that a redacted value **never reaches
-the actual log line's text**, not just the returned record.
+input), every previously-missing `DEFAULT_SENSITIVE_KEYS` entry
+(`client_secret`, `secret_key`, `aws_secret_access_key`, `private_key`,
+`cookie`, `pwd`, `passphrase`, `authorization`, `set_cookie`,
+`access_token`, `refresh_token`, `api_key`), the bounded substring match
+catching a naming variant (`stripe_secret_key`, `db_password_hash`,
+`SECRET_TOKEN`) without over-redacting an unrelated key (`key`, `user_id`),
+recursion into a mapping nested inside a list and inside a tuple
+(preserving the sequence type) and through a mixed nested structure, and —
+the load-bearing test — that a redacted value **never reaches the actual
+log line's text**, not just the returned record.
 
 Run: `uv run --python 3.13 --with pydantic --with pytest -- pytest templates/components/security/audit-logging/tests/ -q`
 (`pydantic` isn't imported by this module; the `--with` list matches the
@@ -153,7 +179,17 @@ firm-wide verification invocation used across the three Step 2 components).
   contract and redacting `extra` is judged the right layer for a stdlib-only
   component, with the fuller check pushed to `code-review`'s security
   dimension per `references/security/attack-surfaces.md`.
-- **Redaction doesn't descend into lists.** Recursing into arbitrarily nested
-  lists-of-dicts adds real complexity for a case `extra` shouldn't need if
-  callers keep it flat (documented above) — accepted as a documented limit
-  rather than building it out unused.
+- **Redaction now descends into lists/tuples of mappings, unbounded depth.**
+  An earlier version of this module treated "redaction doesn't reach inside
+  a list" as an acceptable documented limit; a review finding (M4) judged
+  that a real call site's `extra` payload is realistically going to include
+  a list of changed-field dicts or similar, and a redaction gap there is a
+  leak, not a convenience trade-off. The recursion has no depth limit,
+  matching the existing Mapping recursion's behavior rather than adding an
+  inconsistent cutoff.
+- **The substring match list is short and specific on purpose.** `key` and
+  `id` were deliberately left off `_SENSITIVE_SUBSTRINGS` even though they
+  appear in many credential-adjacent names (`api_key`, `session_id`) —
+  those two are already covered by exact matches in `DEFAULT_SENSITIVE_KEYS`
+  and are common enough as ordinary field names (`user_id`, `sort_key`)
+  that adding them to the substring list would over-redact.

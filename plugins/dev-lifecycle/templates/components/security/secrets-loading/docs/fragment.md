@@ -1,7 +1,7 @@
 <!-- fragment: block:components/security/secrets-loading -->
 
 ## Setup
-Copy `secrets.py` into `app/core/security/secrets.py`. At app startup, call
+Copy `secret_store.py` into `app/core/security/secret_store.py`. At app startup, call
 `validate_required([...])` with every secret name the app needs so a missing
 one fails fast before the app serves a single request, not deep inside a
 request. Import `get_secret(name)` anywhere a secret is needed instead of

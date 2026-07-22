@@ -27,21 +27,30 @@ logger = logging.getLogger("audit")
 
 # Keys whose VALUES are redacted before an audit event is ever serialized
 # or logged, regardless of which call site supplied them. Case-insensitive
-# exact match on the key name. This is the floor, not a ceiling — pass
-# `sensitive_keys=` to audit_event() to extend it per call site (e.g. a
-# domain-specific field like "ssn_last4" if a project wants it withheld
-# too), never to shrink it.
+# exact match on the key name (see _SENSITIVE_SUBSTRINGS below for the
+# bounded substring match that catches names not on this exact list). This
+# is the floor, not a ceiling — pass `sensitive_keys=` to audit_event() to
+# extend it per call site (e.g. a domain-specific field like "ssn_last4" if
+# a project wants it withheld too), never to shrink it.
 DEFAULT_SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
     {
         "password",
         "passwd",
+        "pwd",
+        "passphrase",
         "secret",
+        "client_secret",
+        "secret_key",
+        "aws_secret_access_key",
+        "private_key",
         "token",
+        "access_token",
+        "refresh_token",
         "api_key",
         "apikey",
         "authorization",
-        "access_token",
-        "refresh_token",
+        "cookie",
+        "set_cookie",
         "session_id",
         "ssn",
         "credit_card",
@@ -50,7 +59,35 @@ DEFAULT_SENSITIVE_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
+# Bounded substring match, applied in addition to the exact-match set above:
+# a key CONTAINING one of these substrings (case-insensitive) is redacted
+# even if the exact key name isn't in DEFAULT_SENSITIVE_KEYS. This is what
+# catches a call site's own naming variant — "stripe_secret_key",
+# "db_password_hash", "user_passwd_confirm" — that an exact-match set alone
+# would miss. Deliberately short and specific (not e.g. bare "key" or "id",
+# which would over-redact): each substring here is itself a strong signal of
+# a credential-shaped value, not a common English word.
+_SENSITIVE_SUBSTRINGS: Final[tuple[str, ...]] = (
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "private_key",
+)
+
 REDACTED: Final[str] = "***REDACTED***"
+
+
+def _is_sensitive_key(key: str, sensitive_keys: frozenset[str]) -> bool:
+    """A key is sensitive if it exact-matches `sensitive_keys`
+    (case-insensitive) or CONTAINS one of `_SENSITIVE_SUBSTRINGS`
+    (case-insensitive) — the bounded substring check that catches a naming
+    variant not on the exact list (e.g. "stripe_secret_key")."""
+    lowered = key.lower()
+    if lowered in sensitive_keys:
+        return True
+    return any(marker in lowered for marker in _SENSITIVE_SUBSTRINGS)
+
 
 # Set once per request by per-framework middleware (bind_request_id), read
 # by every audit_event() call in that request/task context that doesn't
@@ -76,25 +113,46 @@ def reset_request_id(token: contextvars.Token[str | None]) -> None:
     request_id_var.reset(token)
 
 
+def _redact_value(value: Any, *, sensitive_keys: frozenset[str]) -> Any:
+    """Recurse into a value that isn't itself a top-level sensitive key's
+    value: a nested Mapping is redacted recursively; a list/tuple is walked
+    element-by-element, redacting any Mapping found inside (preserving the
+    original sequence type — a list stays a list, a tuple stays a tuple);
+    anything else (str, int, a plain non-dict object, ...) is returned
+    unchanged. Recursion depth is unbounded — it follows the payload's own
+    nesting exactly, the same as the Mapping-only recursion this replaces;
+    a pathologically deep `extra` payload is a caller problem, not one this
+    helper guards against."""
+    if isinstance(value, Mapping):
+        return redact(value, sensitive_keys=sensitive_keys)
+    if isinstance(value, (list, tuple)):
+        redacted_items = [_redact_value(item, sensitive_keys=sensitive_keys) for item in value]
+        return type(value)(redacted_items)
+    return value
+
+
 def redact(
     payload: Mapping[str, Any],
     *,
     sensitive_keys: frozenset[str] = DEFAULT_SENSITIVE_KEYS,
 ) -> dict[str, Any]:
     """Return a copy of `payload` with any key matching `sensitive_keys`
-    (case-insensitive) replaced by REDACTED. Recurses into nested mappings
-    so a sensitive key buried in a nested extra blob is still caught.
-    Does not descend into lists of dicts — a documented limit; keep audit
-    `extra` payloads flat rather than relying on redaction to reach inside
-    a list."""
+    (case-insensitive exact match, plus a bounded case-insensitive
+    substring match — see `_is_sensitive_key`) replaced by REDACTED.
+    Recurses into nested mappings, and into mappings nested inside lists or
+    tuples (e.g. `{"changed": [{"token": "..."}]}`), so a sensitive key
+    buried anywhere in the payload's own nested shape is still caught — the
+    recursion follows the payload's actual structure with no fixed depth
+    limit and no special-casing of how deep a mapping or sequence is
+    nested. A non-mapping, non-sequence value (a bare `str`, `int`, custom
+    object, ...) is returned unchanged since there is no key to redact
+    inside it."""
     out: dict[str, Any] = {}
     for key, value in payload.items():
-        if key.lower() in sensitive_keys:
+        if _is_sensitive_key(key, sensitive_keys):
             out[key] = REDACTED
-        elif isinstance(value, Mapping):
-            out[key] = redact(value, sensitive_keys=sensitive_keys)
         else:
-            out[key] = value
+            out[key] = _redact_value(value, sensitive_keys=sensitive_keys)
     return out
 
 

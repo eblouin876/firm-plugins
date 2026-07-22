@@ -120,6 +120,102 @@ def test_redact_recurses_into_nested_mappings():
     assert result["user"]["token"] == REDACTED
 
 
+# --- redaction: extended DEFAULT_SENSITIVE_KEYS coverage (M2) ------------
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "client_secret",
+        "secret_key",
+        "aws_secret_access_key",
+        "private_key",
+        "cookie",
+        "pwd",
+        "passphrase",
+        "authorization",
+        "set_cookie",
+        "access_token",
+        "refresh_token",
+        "api_key",
+    ],
+)
+def test_redact_covers_previously_leaking_sensitive_key_names(key):
+    payload = {key: "fake-sensitive-value", "username": "alice"}
+    result = redact(payload)
+    assert result[key] == REDACTED
+    assert result["username"] == "alice"
+
+
+# --- redaction: bounded substring matching (M2) ---------------------------
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "stripe_secret_key",
+        "db_password_hash",
+        "user_passwd_confirm",
+        "oauth_token_value",
+        "vendor_private_key_pem",
+        "SECRET_TOKEN",  # case-insensitive
+    ],
+)
+def test_redact_matches_sensitive_substrings_in_key_names(key):
+    payload = {key: "fake-sensitive-value", "username": "alice"}
+    result = redact(payload)
+    assert result[key] == REDACTED
+    assert result["username"] == "alice"
+
+
+def test_redact_does_not_over_redact_unrelated_keys():
+    # Sanity check the substring match is bounded, not a blanket "contains
+    # a common word" rule -- "key" alone (not "secret_key"/"api_key" etc.)
+    # and "id" are not sensitive-shaped substrings.
+    payload = {"key": "not-actually-sensitive", "user_id": "42", "display_name": "alice"}
+    result = redact(payload)
+    assert result["key"] == "not-actually-sensitive"
+    assert result["user_id"] == "42"
+    assert result["display_name"] == "alice"
+
+
+# --- redaction: recursion into sequences of mappings (M4) -----------------
+
+
+def test_redact_recurses_into_mappings_nested_in_lists():
+    payload = {"changed": [{"token": "fake-list-token", "field": "email"}]}
+    result = redact(payload)
+    assert result["changed"][0]["token"] == REDACTED
+    assert result["changed"][0]["field"] == "email"
+    assert isinstance(result["changed"], list)
+
+
+def test_redact_recurses_into_mappings_nested_in_tuples():
+    payload = {"changed": ({"password": "fake-tuple-password", "field": "email"},)}
+    result = redact(payload)
+    assert result["changed"][0]["password"] == REDACTED
+    assert isinstance(result["changed"], tuple)
+
+
+def test_redact_recurses_through_mixed_nested_structures():
+    payload = {
+        "audit_trail": [
+            {"actor": "user:1", "details": {"secret": "fake-deep-secret"}},
+            {"actor": "user:2", "details": {"note": "fine"}},
+        ]
+    }
+    result = redact(payload)
+    assert result["audit_trail"][0]["details"]["secret"] == REDACTED
+    assert result["audit_trail"][1]["details"]["note"] == "fine"
+
+
+def test_redact_leaves_lists_of_non_mapping_values_untouched():
+    payload = {"tags": ["billing", "urgent"], "counts": [1, 2, 3]}
+    result = redact(payload)
+    assert result["tags"] == ["billing", "urgent"]
+    assert result["counts"] == [1, 2, 3]
+
+
 def test_redact_does_not_mutate_original():
     payload = {"password": "hunter2-not-real"}
     redact(payload)
@@ -140,6 +236,19 @@ def test_audit_event_redacts_extra_before_logging(caplog):
     assert record["extra"]["display_name"] == "alice"
     # And critically: the raw value never reaches the actual log line.
     assert "hunter2-not-real" not in caplog.text
+
+
+def test_audit_event_redacts_mapping_nested_in_list_extra(caplog):
+    with caplog.at_level(logging.INFO, logger="audit"):
+        record = audit_event(
+            "user.update",
+            actor="user:1",
+            resource="user:1",
+            outcome="success",
+            changed=[{"token": "fake-changed-token"}],
+        )
+    assert record["extra"]["changed"][0]["token"] == REDACTED
+    assert "fake-changed-token" not in caplog.text
 
 
 def test_audit_event_call_site_can_extend_sensitive_keys(caplog):

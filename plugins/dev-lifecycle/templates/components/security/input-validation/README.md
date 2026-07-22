@@ -55,8 +55,8 @@ not an app-layer template block.
 
 **EXPOSES**
 - `StrictModel` — a `BaseModel` subclass with `extra="forbid"`,
-  `str_strip_whitespace=True`, `validate_assignment=True`. The base every
-  hardened input model extends.
+  `str_strip_whitespace=True`, `validate_assignment=True`, `strict=True`.
+  The base every hardened input model extends.
 - Reusable `Annotated` field types: `ShortStr`, `SafeText`, `SafeIdentifier`,
   `Slug`, `Email`, `SafeFilename` — import and use directly as a field's
   type annotation.
@@ -83,6 +83,17 @@ closes the matching gap on the other end — a model built valid and then
 mutated (`instance.field = bad_value`) re-validates on assignment rather
 than silently holding an invalid value afterward.
 
+`StrictModel` also sets `strict=True`, so Pydantic's lax-mode coercion is
+off entirely: a JSON `"123"` string is **not** accepted for an `int` field,
+`1`/`0` is **not** accepted for a `bool` field, and `"yes"`/`"on"`/`"true"`
+strings are **not** accepted for a `bool` field either — every field must
+arrive as its declared JSON type or the whole model fails validation. This
+is deliberate, not an omission: JSON has real int and bool types, and an
+external-input boundary should never treat "looks like the right type" the
+same as "is the right type." A project that genuinely wants coercion for a
+specific field opts back in per-field (Pydantic's `Field(strict=False)` or
+an explicit `BeforeValidator`), not by weakening `StrictModel` globally.
+
 ## The hardened field types
 
 | Type | Shape | Use for |
@@ -95,12 +106,16 @@ than silently holding an invalid value afterward.
 | `SafeFilename` | ≤255 chars, traversal-safe (see below) | A bare uploaded/stored file's basename |
 
 `safe_filename()` rejects `..`, any `/` or `\` separator, a leading dot, a
-null byte, and control characters — a filename is a single path *segment*,
-never a path. It validates the name only: still join the validated result
-against a known-safe storage directory with a real path-safe API
-(`pathlib.Path(base) / safe_name`, then confirm `.resolve()` stays under
-`base`) as defense in depth, rather than trusting string concatenation even
-after this check passes.
+trailing dot or trailing space (both silently stripped by Windows), a `:`
+(the NTFS alternate-data-stream separator), a Windows reserved device name
+(`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, case-insensitive,
+with or without an extension — `"con.txt"` is exactly as reserved as
+`"con"`), a null byte, and control characters — a filename is a single path
+*segment*, never a path. It validates the name only: still join the
+validated result against a known-safe storage directory with a real
+path-safe API (`pathlib.Path(base) / safe_name`, then confirm `.resolve()`
+stays under `base`) as defense in depth, rather than trusting string
+concatenation even after this check passes.
 
 ## Reject, don't sanitize-and-continue
 
@@ -113,6 +128,19 @@ whoever debugs the resulting report later. A caller-visible
 malformed," distinct from "this input needs light normalization" (which
 `str_strip_whitespace` on `StrictModel` still handles automatically for
 plain leading/trailing whitespace).
+
+Beyond category-Cc controls, `no_control_chars()` also rejects a
+deliberately narrow set of high-risk Unicode "format" (category Cf)
+characters: the bidirectional override/isolate controls (`U+202A`-`U+202E`,
+`U+2066`-`U+2069`) behind Trojan-Source-style attacks, where these
+characters make displayed text read differently than the underlying byte
+order (disguising a malicious identifier or filename as a benign one); the
+zero-width marks (`U+200B`-`U+200F`), the BOM (`U+FEFF`), and the soft
+hyphen (`U+00AD`) — all invisible-or-near-invisible characters usable to
+smuggle content into an otherwise-plain string or evade a naive filter.
+This is a named, bounded list, **not** a rejection of Unicode category Cf
+wholesale — ordinary international text (`é`, `中`, emoji, and so on) is
+untouched; only these specific attack-shaped characters are rejected.
 
 ## Django/DRF note
 
@@ -129,14 +157,22 @@ the validation layer for its request/response cycle, per
 ## Testing
 
 `tests/test_validation.py` covers: `StrictModel` rejecting an unknown field
-and re-validating on assignment, `no_control_chars()` rejecting the null
-byte / ESC / CR-LF / bell attack shapes, `safe_filename()` rejecting every
-traversal shape (`../../etc/passwd`, `..`, a subdirectory segment, Windows
-`\`-separators, a leading dot, a null byte) while accepting a plain
-filename, `SafeIdentifier`/`Slug` pattern boundaries, both size-limit
-helpers rejecting an oversize payload, and an end-to-end composed model
-(`ExampleHardenedInput`) exercising all of the above together plus the
-mass-assignment rejection.
+and re-validating on assignment, `StrictModel`'s `strict=True` rejecting
+lax-mode type coercion (`"123"` for an `int` field, `1` or `"yes"` for a
+`bool` field) while still accepting well-typed values, `no_control_chars()`
+rejecting the null byte / ESC / CR-LF / bell attack shapes *and* the bidi
+override/isolate / zero-width / BOM / soft-hyphen attack shapes while still
+accepting ordinary international text (accented Latin, CJK, emoji, mixed
+scripts), `safe_filename()` rejecting every traversal shape
+(`../../etc/passwd`, `..`, a subdirectory segment, Windows `\`-separators,
+a leading dot, a null byte), every Windows reserved device name
+(`CON`/`PRN`/`AUX`/`NUL`/`COM1`-`9`/`LPT1`-`9`, with or without an
+extension), a trailing dot, a trailing space, and a `:`, while accepting a
+plain filename and a name that merely *contains* a reserved word as a
+substring (`"console.txt"`), `SafeIdentifier`/`Slug` pattern boundaries,
+both size-limit helpers rejecting an oversize payload, and an end-to-end
+composed model (`ExampleHardenedInput`) exercising all of the above
+together plus the mass-assignment rejection.
 
 Run: `uv run --python 3.13 --with pydantic --with pytest -- pytest templates/components/security/input-validation/tests/ -q`
 (no `email-validator` extra installed for this run — deliberate; see
@@ -158,3 +194,16 @@ Run: `uv run --python 3.13 --with pydantic --with pytest -- pytest templates/com
 - **`no_control_chars`/`safe_filename` reject rather than sanitize.** See
   "Reject, don't sanitize-and-continue" above — a deliberate security
   posture choice, not an oversight.
+- **`StrictModel` uses real strict mode (`strict=True`), not just
+  `extra="forbid"`.** A project migrating existing code onto `StrictModel`
+  should expect previously-tolerated coercions (numeric strings for `int`
+  fields, `0`/`1` or `"yes"`/`"no"` for `bool` fields) to start failing
+  validation — this is the intended effect at an external-input boundary,
+  not a regression to work around by loosening the base model.
+- **`no_control_chars` rejects a named, bounded list of Cf characters, not
+  all of category Cf.** Unicode category Cf is large and includes marks
+  that are part of normal text rendering in some scripts; rejecting the
+  whole category would over-reject legitimate international input. Only
+  the specific bidi-override/isolate, zero-width, BOM, and soft-hyphen
+  characters documented above (and in the `_HIGH_RISK_FORMAT_CHARS`
+  docstring in `validation.py`) are rejected.

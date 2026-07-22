@@ -46,11 +46,53 @@ def test_strict_model_revalidates_on_assignment():
         widget.name = 12345  # not a str -- must fail post-construction too
 
 
+# --- StrictModel: strict=True (no lax-mode type coercion) ----------------
+
+
+class _TypedModel(StrictModel):
+    count: int
+    active: bool
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("count", "123"),  # numeric string -- lax mode would coerce to int
+        ("active", 1),  # int -- lax mode would coerce to bool
+        ("active", "yes"),  # string -- lax mode would coerce to bool
+    ],
+)
+def test_strict_model_rejects_type_coercion(field, value):
+    payload = {"count": 1, "active": True}
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        _TypedModel(**payload)
+
+
+def test_strict_model_accepts_well_typed_values():
+    model = _TypedModel(count=1, active=True)
+    assert model.count == 1
+    assert model.active is True
+
+
 # --- no_control_chars ----------------------------------------------------
 
 
 def test_no_control_chars_accepts_normal_text():
     assert no_control_chars("hello world") == "hello world"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "café",  # accented Latin
+        "中文",  # CJK
+        "😀 emoji",  # emoji
+        "Zürich, Москва, 東京",  # mixed scripts
+    ],
+)
+def test_no_control_chars_accepts_legitimate_international_text(text):
+    assert no_control_chars(text) == text
 
 
 @pytest.mark.parametrize(
@@ -63,6 +105,24 @@ def test_no_control_chars_accepts_normal_text():
     ],
 )
 def test_no_control_chars_rejects_control_characters(attack):
+    with pytest.raises(ValueError, match="control character"):
+        no_control_chars(attack)
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "safe\u202eevil",  # RLO -- Trojan-Source-style bidi override
+        "safe\u202devil",  # LRO
+        "safe\u2066evil",  # LRI bidi isolate
+        "safe\u200bevil",  # ZWSP -- zero-width smuggling
+        "safe\u200devil",  # ZWJ
+        "safe\u200eevil",  # LRM
+        "\ufeffsafe",  # BOM / zero-width no-break space
+        "safe\xadevil",  # soft hyphen
+    ],
+)
+def test_no_control_chars_rejects_bidi_and_format_controls(attack):
     with pytest.raises(ValueError, match="control character"):
         no_control_chars(attack)
 
@@ -93,6 +153,46 @@ def test_safe_filename_accepts_plain_name():
 def test_safe_filename_rejects_attack_shapes(attack):
     with pytest.raises(ValueError):
         safe_filename(attack)
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "CON",
+        "con",
+        "con.txt",
+        "CON.TXT",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "com9.log",
+        "LPT1",
+        "lpt9.log",
+    ],
+)
+def test_safe_filename_rejects_windows_reserved_names(attack):
+    with pytest.raises(ValueError, match="reserved device name"):
+        safe_filename(attack)
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "report.txt.",  # trailing dot
+        "report.txt ",  # trailing space
+        "report:txt",  # colon -- NTFS ADS separator
+    ],
+)
+def test_safe_filename_rejects_trailing_dot_space_and_colon(attack):
+    with pytest.raises(ValueError):
+        safe_filename(attack)
+
+
+def test_safe_filename_accepts_name_that_merely_contains_reserved_substring():
+    # "console.txt" is not the reserved name "CON" -- only an exact
+    # base-name match (before the first dot) is rejected.
+    assert safe_filename("console.txt") == "console.txt"
 
 
 def test_safe_filename_rejects_oversize_name():

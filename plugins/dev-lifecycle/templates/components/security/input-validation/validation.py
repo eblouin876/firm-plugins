@@ -7,9 +7,9 @@ encoding") and references/security/attack-surfaces.md ("Input channels",
 "File uploads").
 
 Drop-in: copy this file into app/core/security/validation.py. Pydantic v2
-only (pinned references/compatibility-matrix.md, Backend — Python:
-2.13.x) — the one validation dependency both the FastAPI and Django/DRF
-stacks in this kit carry. DRF serializers stay DRF at the HTTP request
+only (pinned per references/compatibility-matrix.md's Backend — Python row
+to Pydantic v2, 2.13.x) — the one validation dependency both the FastAPI
+and Django/DRF stacks in this kit carry. DRF serializers stay DRF at the HTTP request
 boundary; this module is for the shared/service layer underneath both
 (see the component README's "Django/DRF" note — this file deliberately
 contains no DRF code).
@@ -40,12 +40,23 @@ class StrictModel(BaseModel):
     passing extra client data through. Whitespace is stripped by default,
     and re-assigning an attribute on an already-constructed instance
     re-validates it too (validate_assignment) — a model can't be built
-    valid and then mutated invalid."""
+    valid and then mutated invalid.
+
+    `strict=True`: Pydantic's lax-mode coercion (a JSON `"123"` string
+    silently accepted for an `int` field, `true`/`false` accepted for a
+    `0`/`1` int, `"yes"`/`"on"` accepted for a `bool`) is convenient for a
+    form POST but is exactly the kind of silent type-juggling an external
+    input boundary shouldn't do: a field the caller declared as `int`
+    should only ever accept a JSON number, never a string that merely
+    looks like one. Deliberate: this trades a little local convenience
+    (a project that genuinely wants coercion opts out per-model, not
+    globally) for input arriving well-typed or not at all."""
 
     model_config = ConfigDict(
         extra="forbid",
         str_strip_whitespace=True,
         validate_assignment=True,
+        strict=True,
     )
 
 
@@ -54,30 +65,96 @@ class StrictModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# A deliberately narrow set of high-risk Unicode "format" (category Cf)
+# characters, rejected alongside Cc controls even though Cf itself is a much
+# larger category most of which is legitimate (e.g. the joiners inside some
+# scripts' normal rendering). Each entry here is a specific, named attack
+# shape, not "all of Cf":
+#   - U+202A-U+202E (LRE, RLE, PDF, LRO, RLO) and U+2066-U+2069 (LRI, RLI,
+#     FSI, PDI): bidirectional-override/isolate controls — the mechanism
+#     behind Trojan-Source-style attacks, where these characters make
+#     displayed text read differently than the underlying byte order (e.g.
+#     disguising a malicious filename or identifier as a benign one).
+#   - U+200B-U+200F (ZWSP, ZWNJ, ZWJ, LRM, RLM): zero-width/invisible marks
+#     used to smuggle invisible characters into an otherwise-plain string
+#     (homoglyph/lookalike spoofing, filter evasion).
+#   - U+FEFF (BOM / zero-width no-break space): invisible mid-string; also
+#     spoofing/evasion-shaped.
+#   - U+00AD (soft hyphen): invisible unless the renderer breaks the line
+#     there — the same "characters that don't visibly appear" spoofing risk.
+# Deliberately NOT rejected: ordinary international text (é, 中, emoji, and
+# so on) — none of that is Cc or in this set, so it passes through
+# unaffected. Over-rejecting legitimate Unicode is its own kind of bug.
+_HIGH_RISK_FORMAT_CHARS: frozenset[str] = (
+    frozenset(
+        {
+            "\u00ad",  # soft hyphen
+            "\u200b",  # zero width space
+            "\u200c",  # zero width non-joiner
+            "\u200d",  # zero width joiner
+            "\u200e",  # left-to-right mark
+            "\u200f",  # right-to-left mark
+            "\ufeff",  # BOM / zero width no-break space
+        }
+    )
+    | {chr(cp) for cp in range(0x202A, 0x202F)}  # LRE, RLE, PDF, LRO, RLO
+    | {chr(cp) for cp in range(0x2066, 0x206A)}  # LRI, RLI, FSI, PDI
+)
+
+
 def no_control_chars(value: str) -> str:
     """Rejects any Unicode control character (category Cc — the C0 set,
-    including NUL and DEL) anywhere in the string. Deliberately rejects
-    rather than strips: a caller-visible ValueError beats a silently
-    mutated value that hides a log-injection or terminal-escape-injection
-    attempt from whoever reads the resulting report later."""
+    including NUL and DEL) anywhere in the string, plus a deliberately
+    narrow set of high-risk Unicode "format" (Cf) characters — bidi
+    override/isolate controls, zero-width marks, the BOM, and the soft
+    hyphen; see `_HIGH_RISK_FORMAT_CHARS` for exactly which and why
+    (Trojan-Source-style bidi spoofing and invisible-character smuggling).
+    Ordinary international text — accented Latin, CJK, emoji, and so on —
+    is untouched; only this specific, named set is rejected, not all of Cf.
+    Deliberately rejects rather than strips: a caller-visible ValueError
+    beats a silently mutated value that hides a log-injection, terminal-
+    escape-injection, or spoofing attempt from whoever reads the resulting
+    report later."""
     for ch in value:
-        if unicodedata.category(ch) == "Cc":
+        if unicodedata.category(ch) == "Cc" or ch in _HIGH_RISK_FORMAT_CHARS:
             raise ValueError("value must not contain control characters")
     return value
 
 
 _PATH_TRAVERSAL_MARKERS = ("..", "/", "\\")
 
+# Windows reserved device names — creating/opening a file with one of these
+# as its base name (the part before the first '.') fails or behaves
+# unexpectedly on Windows regardless of extension ("con.txt" is just as
+# reserved as "con"), case-insensitively. Rejected here even on a
+# non-Windows storage backend because this validator has no visibility into
+# where the name ultimately lands (a project's storage could move to a
+# Windows-backed share, or a client on Windows could be handed the name back
+# for local use), and there is no legitimate reason a real document would
+# need exactly one of these names.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{n}" for n in range(1, 10)}
+    | {f"LPT{n}" for n in range(1, 10)}
+)
+
 
 def safe_filename(value: str) -> str:
     """Validates a bare filename — a single path SEGMENT, never a path:
     rejects traversal shapes (`..`, any `/` or `\\` separator), a leading
-    dot (dotfile/hidden-file smuggling), a null byte, and control
-    characters. This validates the name only — still join it against a
-    known-safe storage directory with a real path-safe API
-    (`pathlib.Path(base) / safe_name`, then confirm `.resolve()` stays
-    under `base`) rather than trusting string concatenation, as defense
-    in depth on top of this check, not instead of it."""
+    dot (dotfile/hidden-file smuggling), a null byte, control characters,
+    a trailing dot or trailing space (both silently stripped by Windows,
+    so `"report.txt "` and `"report.txt"` can collide or a trailing-dot
+    name can dodge naive extension checks), a `:` (the NTFS alternate-
+    data-stream separator — also just an invalid character on Windows),
+    and a Windows reserved device name (`CON`, `PRN`, `AUX`, `NUL`,
+    `COM1`-`COM9`, `LPT1`-`LPT9`, case-insensitive, with or without an
+    extension — `"con.txt"` is exactly as reserved as `"con"`). This
+    validates the name only — still join it against a known-safe storage
+    directory with a real path-safe API (`pathlib.Path(base) / safe_name`,
+    then confirm `.resolve()` stays under `base`) rather than trusting
+    string concatenation, as defense in depth on top of this check, not
+    instead of it."""
     if not value or value in (".", ".."):
         raise ValueError("filename must not be empty, '.', or '..'")
     if "\x00" in value:
@@ -87,6 +164,13 @@ def safe_filename(value: str) -> str:
             raise ValueError(f"filename must not contain {marker!r}")
     if value.startswith("."):
         raise ValueError("filename must not start with '.'")
+    if value.endswith(".") or value.endswith(" "):
+        raise ValueError("filename must not end with '.' or a space")
+    if ":" in value:
+        raise ValueError("filename must not contain ':'")
+    base_name = value.split(".", 1)[0]
+    if base_name.upper() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"filename must not use the reserved device name {base_name!r}")
     return no_control_chars(value)
 
 
