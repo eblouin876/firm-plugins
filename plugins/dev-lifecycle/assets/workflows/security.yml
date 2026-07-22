@@ -244,6 +244,13 @@ jobs:
 
       - name: Build and scan each Dockerfile
         if: steps.docker.outputs.present == 'true'
+        # Pass the detected paths through the environment, never interpolate the
+        # ${{ }} expression into the run: body — a Dockerfile path is
+        # contributor-influenceable on pull_request, so expanding it into the
+        # shell script is a GitHub Actions script-injection sink. Reading it as
+        # "$DOCKERFILES" keeps the value as data, not code.
+        env:
+          DOCKERFILES: ${{ steps.docker.outputs.files }}
         run: |
           set -e
           i=0
@@ -258,4 +265,4 @@ jobs:
             echo "::group::trivy image $tag"
             trivy image --format table --severity CRITICAL,HIGH --exit-code 1 "$tag"
             echo "::endgroup::"
-          done <<< "${{ steps.docker.outputs.files }}"
+          done <<< "$DOCKERFILES"
