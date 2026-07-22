@@ -12,21 +12,38 @@ whole test. Configuring the engine here (before the app/TestClient exist)
 and creating/dropping tables inside `_test_lifespan` keeps that StaticPool
 detail entirely inside the test suite; app/main.py's real lifespan is
 never modified to know about it.
+
+Stage 3 Step 3b (#26): `app/main.py`'s `create_app()` now resolves
+`Settings()` (directly, or via `get_settings()`) at APP-CONSTRUCTION time,
+not just inside `lifespan`, to wire CORS/rate-limiting/security-header
+config — see that module's "Security composition" docstring. Importing
+`app.main` (below) runs its module-level `app = create_app()` immediately,
+which now needs a valid `DATABASE_URL` to construct `Settings()` even
+though this suite's actual engine is configured separately, directly, via
+`configure_engine()` + `StaticPool` in the `client` fixture below (never
+through `settings.database_url` — see `_test_lifespan` above). The
+`setdefault` below supplies a placeholder that is never used to open a
+real connection; it only satisfies `AppSettings.database_url`'s
+required-field construction check.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+import os
 
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy.pool import StaticPool
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
 
-from app.core.db import Base, configure_engine, get_engine
-from app.core.db.session import _reset_engine_for_tests
-from app.main import create_app
+from collections.abc import AsyncIterator, Iterator  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+
+import pytest  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+from app.core.db import Base, configure_engine, get_engine  # noqa: E402
+from app.core.db.session import _reset_engine_for_tests  # noqa: E402
+from app.main import create_app  # noqa: E402
 
 # Import side effect: registers every model on Base.metadata so
 # Base.metadata.create_all()/drop_all() below actually create/drop each
