@@ -13,3 +13,8 @@ trim_trailing_whitespace = false
 
 [Makefile]
 indent_style = tab
+
+# just requires consistent indentation within a recipe body; recipes here use
+# 4 spaces, so pin it or an editor's 2-space default corrupts the file.
+[{justfile,Justfile}]
+indent_size = 4

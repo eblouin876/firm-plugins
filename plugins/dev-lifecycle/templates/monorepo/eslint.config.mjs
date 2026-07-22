@@ -12,7 +12,10 @@ export default [
     ignores: ["**/dist/**", "**/build/**", "**/node_modules/**", "**/.turbo/**", "**/coverage/**"],
   },
   {
-    files: ["**/*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"],
+    // JS-only at the base: espree cannot parse TypeScript, so .ts/.tsx files
+    // are covered per-package by typescript-eslint (each TS package layers
+    // its own parser via `languageOptions.parser`) rather than here.
+    files: ["**/*.{js,mjs,cjs,jsx}"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
