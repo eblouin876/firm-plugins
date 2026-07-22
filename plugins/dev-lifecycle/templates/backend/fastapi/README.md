@@ -412,6 +412,27 @@ schema or migration uses an 18-only feature, but a genuine 18 run has not
 been performed — re-verify against 18 before treating this as a full
 matrix-compliant proof.
 
+## Dev run (Docker)
+
+`Dockerfile` + `docker-compose.yml` (this directory) boot this block for
+local development — `just dev` (monorepo `justfile`) drives them for a
+materialized project. Not a production deploy manifest — see each file's
+own header comment; Stage 9's devops/infrastructure block owns real
+deployment.
+
+- **`Dockerfile`**: `python:3.13-slim-bookworm`, uv-installed (pinned via
+  `ghcr.io/astral-sh/uv:0.11.31` — see `references/compatibility-matrix.md`'s
+  "Containers" row), non-root `app` user, `uv sync --no-dev` (the `dev`
+  dependency-group — pytest/httpx/aiosqlite — never lands in this image).
+  `CMD` runs `uvicorn ... --reload`, matching the compose file's bind mounts.
+- **`docker-compose.yml`**: a `db` service (`postgres:18-bookworm`, matrix-pinned,
+  dev-only credentials) with a healthcheck, and an `api` service that waits
+  on it, runs `alembic upgrade head`, then boots `uvicorn --reload` with
+  `./app` and `./alembic` bind-mounted over the image's copied-in source
+  for live reload. Run directly with `docker compose up --build` from this
+  directory, or via `just dev` once materialized (see the justfile's own
+  comment for how it detects a Python app).
+
 ## Testing
 
 Hermetic integration tests (`tests/`, aiosqlite + `StaticPool`) exercise

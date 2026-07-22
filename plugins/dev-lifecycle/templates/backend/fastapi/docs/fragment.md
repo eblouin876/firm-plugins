@@ -6,15 +6,21 @@ Materializes into `apps/api/`. Requires Python 3.13.x + uv (`uv sync
 (`postgresql+asyncpg://...` in dev/prod, `sqlite+aiosqlite://` in
 hermetic tests — see `app/core/settings.py`). Run migrations with
 `uv run alembic upgrade head`, then serve with
-`uv run uvicorn app.main:app --port 8000`. `GET /health` is the liveness
-probe (no DB); `GET /readyz` is readiness (`SELECT 1`). Full CRUD lives at
-`/items`; `/auth/login`, `/auth/refresh`, `/auth/me` are Stage-5 stubs
-(501) with their schemas and the `HTTPBearer` scheme already locked into
-`/openapi.json`. Optional config, all with secure defaults: `RATE_LIMIT_
-CAPACITY` (60) / `RATE_LIMIT_REFILL_PER_SECOND` (1.0) / `RATE_LIMIT_
-TRUSTED_HOPS` (0 — distrust `X-Forwarded-For`; set to the exact trusted
-reverse-proxy hop count per environment), `SECURITY_HEADERS_HSTS_PRELOAD`
-(false), `CORS_ALLOWED_ORIGINS` (`[]` — CORS is unwired entirely until set).
+`uv run uvicorn app.main:app --port 8000` — or `just dev` /
+`docker compose up --build` (this directory's `Dockerfile` +
+`docker-compose.yml`) to boot the API against a real Postgres without a
+local Python install. `GET /health` is the liveness probe (no DB);
+`GET /readyz` is readiness (`SELECT 1`). Full CRUD lives at `/items`;
+`/auth/login`, `/auth/refresh`, `/auth/me` are Stage-5 stubs (501) with
+their schemas and the `HTTPBearer` scheme already locked into
+`/openapi.json`. `python -m app.export_openapi` exports that schema
+without a live database — the mechanism `packages/api-client`'s
+`client-generate` recipe uses. Optional config, all with secure defaults:
+`RATE_LIMIT_CAPACITY` (60) / `RATE_LIMIT_REFILL_PER_SECOND` (1.0) /
+`RATE_LIMIT_TRUSTED_HOPS` (0 — distrust `X-Forwarded-For`; set to the exact
+trusted reverse-proxy hop count per environment),
+`SECURITY_HEADERS_HSTS_PRELOAD` (false), `CORS_ALLOWED_ORIGINS` (`[]` —
+CORS is unwired entirely until set).
 
 ## Security composition
 Wired by default in `app/main.py`'s `create_app()`, outermost to innermost:
@@ -48,9 +54,12 @@ and re-sync instead. Six subpackages' worth of vendored security code, plus
 two pieces of new (non-vendored) glue — `app/core/security/audit_logging/
 middleware.py` (request-id binding) and each subpackage's `__init__.py`
 (relative-import re-export seams, same pattern as `app/core/db/
-__init__.py`) — landed in this update; see the block README's "Vendored
+__init__.py`) — landed in Step 3b; see the block README's "Vendored
 components" and "Security composition" sections for the full drift/wiring
-detail. OpenAPI export and the Dockerfile/compose deploy path are Step 4's.
-Verified online against PostgreSQL 16 (the pinned matrix target is 18.x —
-re-verify against 18 before treating this as a full matrix-compliant
-proof).
+detail. Step 4 (this update) added the OpenAPI export
+(`app/export_openapi.py`), the `ErrorEnvelope`-accurate schema fixup
+(`app/main.py`'s `_install_error_envelope_openapi`), and the dev
+Dockerfile/compose run path — see the block README's "OpenAPI export" and
+"Dev run (Docker)" sections. Verified online against PostgreSQL 16 (the
+pinned matrix target is 18.x — re-verify against 18 before treating this
+as a full matrix-compliant proof).

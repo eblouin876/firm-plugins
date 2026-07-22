@@ -1,0 +1,64 @@
+# Dev-only Docker Compose (Stage 3 #26, Step 4): boots this block's API
+# alongside a real Postgres for local development — `just dev` (see the
+# monorepo justfile) wires this in for a materialized project. NOT a
+# production deploy manifest (no secrets management, no replicas, a
+# throwaway local DB password) — Stage 9's devops/infrastructure block
+# owns real deployment.
+#
+# Postgres image tag per references/compatibility-matrix.md's "Data" row
+# (PostgreSQL 18.x) — Bookworm-based to match this repo's other pinned
+# base images (python:3.13-slim-bookworm, node:24-bookworm-slim). NOTE: a
+# sandboxed/CI verification environment without internet access to pull
+# a fresh 18.x image may only have Postgres 16 locally installed
+# (`pg_ctlcluster 16 main`, not this compose file) to prove the
+# alembic/asyncpg path against — that's a verification-environment
+# constraint, not a reason to pin this file to 16. See this block's
+# README.md "Database & migrations" section.
+
+services:
+  db:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - fastapi-block-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Dev-only credentials, matching the `db` service above — never
+      # reused for a real environment. `asyncpg` driver per
+      # db-session/README.md's fail-fast DATABASE_URL scheme guard.
+      DATABASE_URL: postgresql+asyncpg://app:app@db:5432/app
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount over the image's copied-in source so `uvicorn --reload`
+      # (Dockerfile's CMD) picks up host edits live — the image build
+      # itself (`uv sync`) still bakes in dependencies, only source is
+      # live-mounted.
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+    depends_on:
+      db:
+        condition: service_healthy
+    # Applies pending migrations before serving traffic — the same
+    # "migrate then boot" order a real deploy pipeline uses (Stage 9), so
+    # `just dev` never hands you a running API against a schema-less DB.
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  fastapi-block-db-data:

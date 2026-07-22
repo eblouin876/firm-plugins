@@ -22,9 +22,27 @@ default:
 install:
     pnpm install
 
-# Run every package's dev script in parallel (no-op on an empty workspace).
+# Run every package's dev script in parallel (no-op on an empty workspace),
+# AND boot a Python API app's dev stack (Docker Compose: the app + its own
+# Postgres) alongside it if one has been scaffolded in. Gated on
+# `apps/api/docker-compose.yml` existing — a JS-only project (no Python
+# app materialized) never sees `docker compose` invoked at all, matching
+# the pnpm side's own `--if-present` no-op-when-absent behavior. The
+# `trap` tears the compose stack down on exit (including Ctrl+C stopping
+# the pnpm dev servers) so `just dev` never leaves orphaned containers
+# running after the recipe itself has stopped.
 dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f apps/api/docker-compose.yml ]; then
+        (cd apps/api && docker compose up --build) &
+        compose_pid=$!
+        trap '(cd apps/api && docker compose down) >/dev/null 2>&1 || true' EXIT
+    fi
     pnpm -r --if-present --parallel run dev
+    if [ -f apps/api/docker-compose.yml ]; then
+        wait "$compose_pid"
+    fi
 
 # Run every package's test script (no-op on an empty workspace).
 test:
@@ -42,8 +60,17 @@ typecheck:
 build:
     pnpm -r --if-present run build
 
-# Regenerate the typed api-client from the backend's OpenAPI schema.
+# Regenerate the typed api-client from the backend's OpenAPI schema:
+# re-exports openapi.json fresh from apps/api's own app factory (no live
+# DB needed — see that app's `app/export_openapi.py`), THEN runs orval
+# against that freshly exported file, so the committed schema and the
+# generated client it drives never drift apart. No-op-safe only in the
+# sense that `--if-present`-style guards aren't needed here: a project
+# without apps/api hasn't scaffolded the FastAPI block, in which case
+# packages/api-client (which needs a schema to generate from) wouldn't be
+# scaffolded in either.
 client-generate:
+    cd apps/api && uv run --no-dev python -m app.export_openapi ../../packages/api-client/openapi.json
     pnpm --filter @repo/api-client run generate
 
 # Deploy the project. Unwired until an infra/devops block is scaffolded in

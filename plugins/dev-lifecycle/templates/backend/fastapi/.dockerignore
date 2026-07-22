@@ -1,0 +1,22 @@
+# Dockerfile only COPYs pyproject.toml/app/alembic/alembic.ini explicitly
+# (no `COPY . .`), so most of this is belt-and-suspenders for anyone who
+# later changes the Dockerfile to a broader COPY — but .env staying out of
+# the build context is load-bearing regardless: it must never be baked
+# into an image layer.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.git/
+.gitignore
+.env
+.env.*
+uv.lock
+tests/
+docs/
+README.md
+Dockerfile
+docker-compose.yml
+.dockerignore
