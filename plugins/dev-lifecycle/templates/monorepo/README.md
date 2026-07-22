@@ -31,7 +31,13 @@ a new project's root.
   `dev`, `build`, `deploy`, `docs-generate`, `docs-check`, `install`,
   `typecheck`) every block wires into rather than inventing its own task
   runner, plus the `client-generate` wiring point that regenerates
-  `packages/api-client` once a backend block lands (Stage 3).
+  `packages/api-client` once a backend block lands (Stage 3). `docs-generate`
+  / `docs-check` are wired as of Stage 1 Step 4 to `scripts/docs-aggregate.mjs`
+  (this directory's `scripts/`), which aggregates every composed block's
+  `docs/fragment.md` into the root README's marker regions — see
+  `references/authoring/documentation-standard.md`. `deploy` stays unwired
+  until an infra/devops block lands (Stage 9), but fails loudly (`exit 1`)
+  rather than silently no-opping.
 - **Shared root config** — `eslint.config.mjs`, `tsconfig.base.json`,
   `.prettierrc`, `.editorconfig`, `.gitignore`/`.dockerignore`,
   `.env.example` — every block extends these rather than redefining them.
@@ -57,9 +63,9 @@ exempt from the `last-verified` header this file itself carries; and a
 `.tmpl` file is never mistaken for a real `CLAUDE.md`/`README.md` and
 auto-loaded into a session working in `firm-plugins` itself. Every other file
 in this directory (`justfile`, `package.json`, `pnpm-workspace.yaml`,
-`tsconfig.base.json`, `eslint.config.mjs`, dotfiles) is plugin canon copied
-verbatim — no `.tmpl` suffix, because scaffolding materializes those as-is
-with no placeholder substitution.
+`tsconfig.base.json`, `eslint.config.mjs`, `scripts/docs-aggregate.mjs`,
+dotfiles) is plugin canon copied verbatim — no `.tmpl` suffix, because
+scaffolding materializes those as-is with no placeholder substitution.
 
 ## How scaffolding uses it
 `scaffolding` copies this whole directory into the new project's root, strips
