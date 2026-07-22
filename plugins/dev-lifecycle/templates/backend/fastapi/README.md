@@ -330,7 +330,43 @@ catches every `AppError` subclass (`NotFoundError` -> 404,
 `ConflictError` -> 409, ...) and renders `exc.to_envelope()` with
 `exc.status_code`. A third, broader `Exception` handler (a judgment call —
 see below) catches anything neither of those catches and renders a generic
-500 `internal_error` envelope, never leaking `str(exc)` to the client.
+500 `internal_error` envelope, never leaking `str(exc)` to the client — and
+(Stage 3 Step 4 review fix) stamps the security headers and `x-request-id`
+onto that response itself, since `ServerErrorMiddleware` (the Starlette
+internal that serves this one handler) sits OUTSIDE every
+`add_middleware()` layer this app registers — see
+`_make_unhandled_exception_handler`'s docstring in `app/main.py` for the
+mechanics, and "Security composition" above for the middleware order this
+is an exception to.
+
+The 422/404 shapes above are also what the exported OpenAPI schema
+documents — see "OpenAPI export" next; without that fixup, FastAPI's
+auto-generated schema would describe the native `HTTPValidationError` shape
+for 422 instead of the `ErrorEnvelope` this app actually sends.
+
+## OpenAPI export
+
+`python -m app.export_openapi [output_path]` (writes to `output_path`, or
+stdout if omitted) exports this block's OpenAPI 3.1 schema **without a live
+database** — `app/export_openapi.py`'s `export_openapi_schema()` builds a
+fresh app via `create_app()`'s `settings=` injection seam and calls
+`.openapi()` directly, never starting an ASGI server or running `lifespan`
+(the only place a real `DATABASE_URL` is ever touched). This is the
+mechanism `packages/api-client` uses to keep its committed `openapi.json`
+(and the client generated from it) in sync with what this block actually
+serves — see that package's README's "Stage 3: the live schema" section.
+
+`app/main.py`'s `create_app()` also installs `_install_error_envelope_openapi`,
+which overrides `app.openapi()` (FastAPI's standard customization point) to
+replace every operation's native `HTTPValidationError`-shaped 422 response
+with `ErrorEnvelope` — the shape `_validation_exception_handler` actually
+sends — and to drop `HTTPValidationError`/`ValidationError` from
+`components/schemas` once nothing references them. `NotFoundError`'s 404 is
+documented per-route instead (`responses={404: {"model": ErrorEnvelope}}`
+on `app/api/routers/items.py`'s three ID-addressed routes), since only
+those routes can actually 404. This fixup runs identically whether the
+schema is served live at `/openapi.json` or exported via this script — both
+paths call the same `app.openapi()`.
 
 ## Auth stubs (Stage 5 seam)
 

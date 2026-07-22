@@ -73,12 +73,15 @@ the "call N of 4" position.**
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 
 from app.api.routers import auth, health, items
 from app.core.config import Settings, get_settings
@@ -211,6 +214,78 @@ def _make_unhandled_exception_handler(
     return _unhandled_exception_handler
 
 
+def _install_error_envelope_openapi(app: FastAPI) -> None:
+    """JUDGMENT CALL (Stage 3 #26, Step 4 — surfaced by actually exporting
+    the schema, see app/export_openapi.py): FastAPI's auto-generated
+    OpenAPI schema documents every operation's 422 response using its OWN
+    native `HTTPValidationError` model (the `{"detail": [{"loc", "msg",
+    "type"}]}` shape) — but `_validation_exception_handler` above remaps
+    every one of those at runtime into THIS app's `ErrorEnvelope` before it
+    ever reaches a client (see that handler's docstring and error-envelope/
+    errors.py's own "ONE error shape, not two"). Left alone, the exported
+    schema — and therefore any client generated from it (packages/
+    api-client's orval regen) — would type every 422 response as a shape
+    this app never actually sends, silently reintroducing the exact
+    two-shapes problem the error-envelope component exists to prevent.
+
+    This monkey-patches `app.openapi()` (the standard FastAPI customization
+    point — https://fastapi.tiangolo.com/how-to/extending-openapi/) to
+    swap the 422 response schema from `HTTPValidationError` to
+    `ErrorEnvelope` on every operation that has one, adds `ErrorEnvelope`
+    (and its nested `ErrorBody`/`ErrorDetail`/`ErrorCode` defs) to
+    `components/schemas` via `TypeAdapter(ErrorEnvelope).json_schema(...)`
+    (resolves nested refs the same way FastAPI's own schema builder does),
+    and drops `HTTPValidationError`/`ValidationError` from
+    `components/schemas` once nothing references them anymore — leaving
+    them in place would ship two competing shapes for the same status code
+    in the schema, confusing rather than merely redundant. Per-route 404s
+    (`NotFoundError`) are documented separately, at the call site
+    (`responses={404: {"model": ErrorEnvelope, ...}}` in items.py) — this
+    function only owns the 422 case because EVERY operation gets FastAPI's
+    native 422 by default, making it the one response worth fixing
+    centrally instead of per-route.
+
+    Caches onto `app.openapi_schema` exactly like FastAPI's own default
+    `.openapi()` does, so this still only computes the schema once."""
+
+    def _custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            summary=app.summary,
+            description=app.description,
+            routes=app.routes,
+        )
+        schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+
+        envelope_schema = TypeAdapter(ErrorEnvelope).json_schema(ref_template="#/components/schemas/{model}")
+        schemas.update(envelope_schema.pop("$defs", {}))
+        schemas["ErrorEnvelope"] = envelope_schema
+
+        error_envelope_ref = {"$ref": "#/components/schemas/ErrorEnvelope"}
+        for path_item in schema.get("paths", {}).values():
+            for operation in path_item.values():
+                responses = operation.get("responses", {})
+                validation_response = responses.get("422")
+                if validation_response is None:
+                    continue
+                validation_response["description"] = "Validation Error"
+                for media_type in validation_response.get("content", {}).values():
+                    media_type["schema"] = error_envelope_ref
+
+        still_referenced = "HTTPValidationError" in json.dumps(schema.get("paths", {}))
+        if not still_referenced:
+            schemas.pop("HTTPValidationError", None)
+            schemas.pop("ValidationError", None)
+
+        app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = _custom_openapi
+
+
 def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> FastAPI:
     """`lifespan_ctx` is overridable (defaults to the real `lifespan`
     above) purely so the hermetic test suite can substitute a lifespan that
@@ -251,6 +326,13 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
     app.add_exception_handler(AppError, _app_error_handler)
     app.add_exception_handler(Exception, _make_unhandled_exception_handler(security_headers_policy))
+
+    # Stage 3 Step 4 (#26): make the exported/served OpenAPI schema
+    # describe the 422 responses this app actually sends (ErrorEnvelope),
+    # not FastAPI's un-remapped native shape — see
+    # _install_error_envelope_openapi's own docstring for why this matters
+    # for packages/api-client's generated client.
+    _install_error_envelope_openapi(app)
 
     # --- Security composition (Stage 3 #26, Step 3b) ----------------------
     # See the module docstring's "Security composition" section for the

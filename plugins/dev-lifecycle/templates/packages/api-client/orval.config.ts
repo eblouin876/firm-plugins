@@ -1,12 +1,14 @@
 // orval config: React Query hooks generated with a custom `fetch` mutator
-// (no axios). `input.target` points at the committed sample fixture until
-// Stage 3 swaps it for the live backend OpenAPI schema — see README.md.
+// (no axios). `input.target` points at the committed, LIVE-exported
+// backend OpenAPI schema (see README.md's "Stage 3: the live schema") —
+// `openapi.json` here is the output of the FastAPI block's
+// `python -m app.export_openapi`, not a hand-built fixture.
 import { defineConfig } from "orval";
 
 export default defineConfig({
   apiClient: {
     input: {
-      target: "./openapi.sample.json",
+      target: "./openapi.json",
     },
     output: {
       mode: "tags-split",

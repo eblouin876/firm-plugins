@@ -24,7 +24,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 - The mutator's response shape
 - Dep vs peerDep
 - Materialized-location paths
-- Stage 3: swapping in the live schema
+- Stage 3: the live schema
 - Testing
 
 ## Composition contract
@@ -36,7 +36,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 
 **EXPOSES**
 - **Workspace package** `@repo/api-client` — import hooks/types from its root export (`index.ts`), not by deep-importing `src/generated/*` (those paths are `client-generate` output and reshuffle across regenerations).
-- **Its generated contract** — the hooks, request/response types, and models mirror whatever OpenAPI schema `orval.config.ts`'s `input.target` currently points at (the sample fixture today; the live backend schema from Stage 3 on).
+- **Its generated contract** — the hooks, request/response types, and models mirror `openapi.json`, a committed export of the live backend's actual OpenAPI schema (Stage 3 on — see "Stage 3: the live schema" below).
 
 ## What it is / isn't
 - **Is:** the one typed client web and mobile both import, so request/response types are the API contract rather than hand-copied interfaces that drift (see `references/frontend/typescript.md`, "Types from a single source of truth").
@@ -88,8 +88,12 @@ Orval's `fetch` client mode expects the mutator to resolve `{ data, status, head
 
 `tsconfig.json` also overrides the root's `module`/`moduleResolution` (`NodeNext`/`NodeNext`) to `ESNext`/`bundler`: this package is consumed by bundler-based apps (Vite for web, Metro for mobile) rather than executed directly under Node's ESM loader, and orval's generated imports don't carry the explicit `.js` extensions `NodeNext` resolution requires. `tsconfig.build.json` extends `tsconfig.json` and additionally excludes `*.test.ts`, so `pnpm run build`'s `dist/` doesn't ship test files while `pnpm run typecheck` still type-checks them.
 
-## Stage 3: swapping in the live schema
-`openapi.sample.json` is a **standalone stand-in** — a tiny (2-tag, 3-operation) OpenAPI 3.1 fixture shaped like FastAPI 0.139's actual output (the `anyOf`-nullable style on optional fields, the `HTTPValidationError`/`ValidationError` pair FastAPI emits for 422s), so `client-generate` produces realistic hooks without a running backend. Stage 3 (backend block lands, epic #22) points `orval.config.ts`'s `input.target` at the live backend's `/openapi.json` (or a build-time-exported copy of it) instead of this file — the generated output's shape changes to match, but the `client-generate` recipe, the mutator, and everything consumers import from `src/index.ts` stay the same.
+## Stage 3: the live schema
+`openapi.json` **is** the live schema now — not a hand-built fixture. It's a committed, point-in-time export of `plugins/dev-lifecycle/templates/backend/fastapi`'s actual OpenAPI 3.1 output, produced by that block's `python -m app.export_openapi` (see that block's README's "OpenAPI export" section): the real `ErrorEnvelope` error shape (not FastAPI's native `HTTPValidationError`/`ValidationError` pair — the backend block's `app/main.py` remaps its own schema to match what it actually sends, see `_install_error_envelope_openapi`), `Page[ItemOut]`, `/items`, `/health`, `/readyz`, the `/auth/*` stubs, and the bearer security scheme. `orval.config.ts`'s `input.target` points at this file directly.
+
+The now-retired `openapi.sample.json` fixture served the same shaping purpose before a real backend existed to export from — that stand-in is gone; `client-generate`'s recipe and everything downstream of it (the mutator, `src/index.ts`'s exports) are unchanged by the swap.
+
+**Regenerating from a real project (materialized, not this template repo):** `just client-generate` re-exports the schema fresh from `apps/api` (`python -m app.export_openapi > packages/api-client/openapi.json`, run from the FastAPI app's own environment) and then runs `pnpm --filter @repo/api-client run generate` (orval) against the freshly exported file — so the committed `openapi.json` and the generated client it drives never drift from what the backend block actually serves. Re-run it any time the backend's routes/schemas change, and commit both the updated `openapi.json` and the regenerated `src/generated/**` diff together.
 
 ## Testing
 `pnpm run test` runs `vitest run` against `src/mutator.test.ts` — a smoke test of the mutator's request/response handling (JSON body parsing, the `{data, status, headers}` shape, default-`Content-Type` merging) using a stubbed global `fetch`. It does not exercise the generated hooks themselves (those are orval's output, not this package's logic to test) — a consuming app's component tests are where hook usage gets covered, per `references/testing/frontend-testing.md`.
