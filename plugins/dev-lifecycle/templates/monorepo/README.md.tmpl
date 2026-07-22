@@ -16,8 +16,9 @@ DOC-FRAGMENT AGGREGATION REGIONS, summarized (full spec in
 references/authoring/documentation-standard.md's "Aggregation markers"
 section — read that before touching this contract):
 - Every template block/catalog component/recipe ships a co-located doc
-  fragment (its own README.md) with sub-sections matching the four
-  aggregating sections below (Setup / Deployment / Maintenance / Secrets).
+  fragment (`docs/fragment.md` inside its own directory) with sub-sections
+  matching the four aggregating sections below (Setup / Deployment /
+  Maintenance / Secrets).
 - `just docs-generate` copies each composed block's fragment content into
   the matching section here, wrapping each block's contribution in its own
   `<!-- BEGIN block:<layer>/<name> -->` / `<!-- END block:<layer>/<name> -->`
@@ -28,9 +29,9 @@ section — read that before touching this contract):
   itself is reserved as the empty-state sentinel and is never a real
   block's id.
 - Never hand-edit content between a block's markers directly — the next
-  `just docs-generate` silently overwrites it. Edit that block's own
-  README.md doc fragment instead, then regenerate. `just docs-check`
-  fails the build if this file has drifted from the fragments it should
+  `just docs-generate` silently overwrites it. Edit that block's
+  `docs/fragment.md` instead, then regenerate. `just docs-check` fails
+  the build if this file has drifted from the fragments it should
   reflect.
 - On a fresh scaffold (no blocks composed in yet) each aggregation region
   below holds only the sentinel marker pair shown above.

@@ -342,8 +342,19 @@ function buildRegionLines(sectionName, fragments) {
 /** Replace one "## <name>" section's region span in-place within the full README lines. */
 function regenerateSection(lines, sectionName, fragments) {
   // Trailing-whitespace tolerant, symmetric with FRAGMENT_SECTION_RE's
-  // `\s*$` — still an exact match on the heading text itself.
-  const startIdx = lines.findIndex((l) => l.replace(/\s+$/, "") === `## ${sectionName}`);
+  // `\s*$` — still an exact match on the heading text itself. Fence-aware,
+  // like every other heading/marker scan in this file: a fenced example line
+  // reading "## <name>" (e.g. inside an earlier section's region content)
+  // never anchors the section.
+  let startIdx = -1;
+  const startFenceTracker = createFenceTracker();
+  for (let i = 0; i < lines.length; i++) {
+    if (startFenceTracker(lines[i])) continue;
+    if (lines[i].replace(/\s+$/, "") === `## ${sectionName}`) {
+      startIdx = i;
+      break;
+    }
+  }
   if (startIdx === -1) {
     throw malformed(`README is missing the required "## ${sectionName}" heading`);
   }
