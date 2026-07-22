@@ -1,7 +1,7 @@
 <!--
 block: packages/api-client                # catalog component (shared pnpm workspace package), not an app-level block
 needs:
-  - env var: API_BASE_URL — the backend origin the mutator prepends to every generated request path (unset resolves to "", i.e. relative URLs against a same-origin dev proxy)
+  - runtime config: consumers call configureApiClient({ baseUrl }) once at startup, sourcing baseUrl from their own framework-prefixed env var (VITE_API_BASE_URL / NEXT_PUBLIC_API_BASE_URL / EXPO_PUBLIC_API_BASE_URL — see "Configuration" below); unconfigured resolves to "", i.e. relative URLs against a same-origin dev proxy
   - shared workspace package consumers: any app importing @repo/api-client (web, mobile) must supply react + @tanstack/react-query themselves (peer dependencies, see "Dep vs peerDep" below)
 exposes:
   - workspace package: @repo/api-client — typed React Query hooks + models generated from an OpenAPI schema
@@ -19,6 +19,8 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 - Composition contract (v0)
 - What it is / isn't
 - How `client-generate` works
+- Configuration
+- Bundler-only package
 - The mutator's response shape
 - Dep vs peerDep
 - Materialized-location paths
@@ -28,7 +30,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 ## Composition contract (v0)
 
 **NEEDS**
-- **Env vars** — `API_BASE_URL`: the backend origin prepended to every request path by `src/mutator.ts`. Unset resolves to `""` (relative URLs against a same-origin dev proxy); a real deployment always sets it.
+- **Runtime configuration** — `configureApiClient({ baseUrl })`, called once at app startup by the consuming app. Not an env var this package reads itself (see "Configuration" below for why) — unconfigured (or `baseUrl: ""`) resolves to `""`, i.e. same-origin relative URLs against a reverse proxy that forwards API paths to the backend.
 - **Shared workspace packages** — none; this package has no internal workspace dependencies. It is depended *on*, not a dependent.
 - **From consumers** — any app importing this package supplies its own `react` and `@tanstack/react-query` instances (peer dependencies — see "Dep vs peerDep").
 
@@ -47,8 +49,36 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 
 The generated output **is committed** (small, since the fixture is small) so a clean clone builds offline without an orval run. Regenerate after any schema change and commit the diff — don't hand-edit generated files.
 
+## Configuration
+The mutator does **not** read `process.env` — a bare `process.env.API_BASE_URL` at module load breaks every documented consumer: Vite ships no `process` global in the browser bundle (`ReferenceError: process is not defined` at import time), and Next/Expo only statically inline framework-prefixed env vars (`NEXT_PUBLIC_*`/`EXPO_PUBLIC_*`) — a bare `API_BASE_URL` read there silently resolves to `""` even when the var is set in the shell/CI environment. Instead, call `configureApiClient({ baseUrl })` once at app startup, before any generated hook fires a request, using whatever env var naming convention the consuming framework requires:
+
+```ts
+// Vite (web) — apps/web/src/main.tsx, before rendering
+import { configureApiClient } from "@repo/api-client";
+configureApiClient({ baseUrl: import.meta.env.VITE_API_BASE_URL ?? "" });
+```
+
+```ts
+// Next.js (App Router) — a client-side root layout/providers file
+import { configureApiClient } from "@repo/api-client";
+configureApiClient({ baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "" });
+```
+
+```ts
+// Expo (mobile) — apps/mobile/App.tsx, before rendering
+import { configureApiClient } from "@repo/api-client";
+configureApiClient({ baseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "" });
+```
+
+A trailing slash on `baseUrl` is trimmed automatically. Leaving it unconfigured (or passing `baseUrl: ""`) resolves every request to a same-origin relative URL — a sane default behind a reverse proxy that forwards API paths to the backend, and handy for local dev.
+
+## Bundler-only package
+`dist/` (this package's build output) uses extensionless relative imports, matching what orval generates — not the explicit `.js`-suffixed imports Node's own ESM loader (`NodeNext` resolution) requires. That's intentional (see "Materialized-location paths" below) and it means this package only resolves correctly under a bundler with Node-style extensionless resolution — Vite, Metro, webpack — not `node dist/index.js` directly. Don't add a build step to emit extensions; consume it from a bundler-based app as designed.
+
 ## The mutator's response shape
 Orval's `fetch` client mode expects the mutator to resolve `{ data, status, headers }`, not just the parsed body — the generated response types (e.g. a 201-vs-422 union) are discriminated on `.status`, so callers pattern-match on it instead of relying on a thrown error for a documented non-2xx response. `customFetch` in `src/mutator.ts` builds that shape; a rejected promise is reserved for what the OpenAPI contract can't describe — a network failure, not a 4xx/5xx the schema documents.
+
+**Response shape covers documented statuses only.** The generated union is built from whatever status codes the OpenAPI schema documents per operation (e.g. 200/201/422) — it does not include statuses the backend can still return but the schema doesn't declare (a proxy's 502/503, a load balancer's 429, an unhandled 500). Those resolve with `.status` outside the typed union, so any code that pattern-matches on `.status` needs a `default`/fallback branch alongside the documented cases, not an exhaustive switch that assumes the union is the full set of possible responses.
 
 ## Dep vs peerDep
 `react` and `@tanstack/react-query` are **peerDependencies** here, pinned again as exact-ish `devDependencies` for this package's own build/lint/test. Rationale: this package is imported by both a web app and a mobile app, each with its own React tree and its own `QueryClient`. If this package declared `react`/`@tanstack/react-query` as regular `dependencies`, pnpm could resolve a second copy in a consumer whose own version differs even slightly — React's hook rules require exactly one `react` instance in the tree, and TanStack Query hooks require exactly one `QueryClient` provider matching the `@tanstack/react-query` instance the hooks were built against. Peer dependencies make the consumer supply (and own) that single instance; the `devDependencies` entries here exist only so this package's own `build`/`typecheck`/`lint`/`test` scripts have something to compile and test against locally.

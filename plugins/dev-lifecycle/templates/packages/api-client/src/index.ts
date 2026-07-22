@@ -5,5 +5,5 @@
 export * from "./generated/endpoints/health/health.js";
 export * from "./generated/endpoints/items/items.js";
 export * from "./generated/models/index.js";
-export { customFetch } from "./mutator.js";
+export { configureApiClient, customFetch } from "./mutator.js";
 export type { ApiClientResponse } from "./mutator.js";

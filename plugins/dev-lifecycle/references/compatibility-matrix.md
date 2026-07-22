@@ -79,7 +79,7 @@ Re-verify against official release notes/registries before bumping any line — 
 | Dep | Pinned line | Why this line |
 | --- | --- | --- |
 | orval | **8.22.x** (8.22.0) | Current stable (Jul 14 2026). Generates the shared `packages/api-client` from the backend's OpenAPI schema — React Query hooks over a custom `fetch` mutator, no axios (gate-1 locked choice). |
-| @tanstack/react-query | **5.101.x** (5.101.3) | Current v5 line. **Judgment call:** the true latest patch at verification time, 5.101.4, was published within pnpm 11's default `minimumReleaseAge` supply-chain window (packages published in roughly the last day are rejected by the workspace's lockfile policy check unless explicitly excluded) — 5.101.3 (one day older) clears it cleanly, so pin that instead of fighting the gate with a per-version exclusion that goes stale on the next bump. Re-check next quarter; by then 5.101.4+ will have aged out of the window on its own. |
+| @tanstack/react-query | **5.101.x** (5.101.3) | Current v5 line. **Judgment call:** the true latest patch at verification time, 5.101.4, falls inside the workspace's configured `minimumReleaseAge` supply-chain window (`templates/monorepo/pnpm-workspace.yaml`; packages newer than that window are rejected by pnpm's install-time check unless explicitly excluded) — 5.101.3 (older) clears it, so pin that instead of fighting the gate with a per-version exclusion that goes stale on the next bump. Re-check next quarter; by then 5.101.4+ will have aged out of the window on its own. |
 
 ## Mobile
 | Dep | Pinned line | Why this line |
@@ -93,6 +93,7 @@ Re-verify against official release notes/registries before bumping any line — 
 | ESLint | **10.x** (10.7.0) | Current stable major (released Feb 2026); flat config (`eslint.config.mjs`) has been the default since ESLint 9 and continues unchanged into 10 — the monorepo skeleton's flat config from Step 1 needs no changes for this pin. **Judgment call:** this line was previously drafted as "9.x" before verification; 10.x was already current stable at pin time and typescript-eslint 8.65.x supports it (`peerDependencies.eslint: "^8.57.0 \|\| ^9.0.0 \|\| ^10.0.0"`), so pin the true current line rather than the stale draft value. |
 | typescript-eslint | **8.65.x** (8.65.0) | Current stable; supports both TypeScript 6.0.x (`peerDependencies.typescript: ">=4.8.4 <6.1.0"`) and ESLint 10 — the pair every TS package in the kit layers on top of the JS-only base config (see `eslint.config.mjs`'s own note). |
 | Prettier | **3.9.x** (3.9.6) | Current stable major; also orval's own formatting peer dependency (`peerDependencies.prettier: ">=3.0.0"`) for its generated output. |
+| vitest | **4.1.x** (4.1.10) | Current stable line (`latest` dist-tag); v5 exists only as a `5.0.0-beta.x` prerelease, not GA — do not adopt pre-GA. Runs `packages/api-client`'s test suite (`vitest run`) against a stubbed global `fetch`. |
 
 ## Data
 | Dep | Pinned line | Why this line |

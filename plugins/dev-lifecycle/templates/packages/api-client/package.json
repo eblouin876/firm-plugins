@@ -6,6 +6,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "//exports": "Bundler-only package: dist/ uses extensionless relative imports (no NodeNext-style .js suffixes), so it resolves under Vite/Metro/webpack but not Node's own ESM loader. See README's \"Bundler-only package\" note.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

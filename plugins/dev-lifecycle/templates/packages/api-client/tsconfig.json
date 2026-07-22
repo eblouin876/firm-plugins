@@ -19,7 +19,15 @@
     "moduleResolution": "bundler",
     "lib": ["ES2023", "DOM"],
     "jsx": "react-jsx",
-    "types": ["node"],
+    // No "types" override: nothing under src/ reads Node globals (the
+    // mutator takes its base URL via `configureApiClient`, not
+    // `process.env` — see src/mutator.ts) and this package ships to
+    // bundler-consumed browser/RN targets, not a Node runtime. Leaving
+    // "types" unset lets TS auto-include whatever @types/* packages are
+    // actually present (currently just @types/node, kept as a devDependency
+    // for tooling) rather than pinning to node types this package doesn't
+    // use. Re-add a scoped "types" override (or a tests-only tsconfig) if a
+    // future test needs Node ambient types.
     "rootDir": "src",
     "outDir": "dist"
   },

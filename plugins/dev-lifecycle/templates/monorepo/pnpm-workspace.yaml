@@ -1,5 +1,20 @@
 packages:
   - "apps/*"
   - "packages/*"
+# Supply-chain window: reject a dependency version (direct or transitive)
+# until it has been published this many minutes — lets a compromised
+# release (e.g. a Shai-Hulud-style worm publish) get pulled/flagged before
+# the workspace can install it. Pinned explicitly (rather than left to
+# pnpm 11's own default of 1440) so the policy survives a future pnpm
+# default change; 1440 (1 day) is also the widest window that still
+# clears the kit's current tooling pins verified in-sandbox (a wider,
+# 2-day window rejected @tanstack/react-query 5.101.3 and
+# typescript-eslint 8.65.0 as too fresh) — revisit alongside the matrix's
+# quarterly re-verification. See references/compatibility-matrix.md's
+# "Client codegen" section for a pin this window directly affects.
+minimumReleaseAge: 1440
 allowBuilds:
+  # vitest's esbuild dependency needs its postinstall build script to run
+  # under pnpm 11's build-script gate (native binary install). Trusted,
+  # scoped to esbuild only — not a blanket allow.
   esbuild: true
