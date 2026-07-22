@@ -1,6 +1,7 @@
 # Vendored from templates/components/backend/repository; keep in sync via the weekly freshness audit.
 # Do not hand-edit below this line except for this header — see that component's README
 # for the composition contract this file is part of.
+# DRIFT: imports adapted to relative for in-app packaging (see block README).
 
 """A generic async repository over SQLAlchemy 2.0: get/list/create/update/
 delete for any mapped model, integrating pagination/ (query.py's
@@ -48,8 +49,12 @@ from typing import Any, Generic, Sequence, TypeVar
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from query import paginate_select
-from schema import PageParams, PageResult
+# DRIFT from the vendored source (which imports these as flat sibling
+# modules, per the docstring above): this app composes app/core/db as a
+# real intra-package, so the imports are relative here — see
+# app/core/db/__init__.py's docstring and README.md's "Vendored components".
+from .query import paginate_select
+from .schema import PageParams, PageResult
 
 ModelT = TypeVar("ModelT")
 

@@ -1,6 +1,7 @@
 # Vendored from templates/components/backend/pagination (query.py); keep in sync via the weekly freshness audit.
 # Do not hand-edit below this line except for this header — see that component's README
 # for the composition contract this file is part of.
+# DRIFT: imports adapted to relative for in-app packaging (see block README).
 
 """The SQLAlchemy-specific half of pagination: applies a `PageParams`
 (from the neutral schema.py in this same directory) to a `select()`
@@ -34,7 +35,11 @@ from typing import Any, TypeVar
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from schema import PageParams, PageResult
+# DRIFT from the vendored source (which imports `from schema import ...` as a
+# flat sibling module, per the docstring above): this app composes app/core/db
+# as a real intra-package, so the import is relative here — see
+# app/core/db/__init__.py's docstring and README.md's "Vendored components".
+from .schema import PageParams, PageResult
 
 RowT = TypeVar("RowT")
 

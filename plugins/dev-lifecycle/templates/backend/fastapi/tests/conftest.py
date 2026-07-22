@@ -28,11 +28,12 @@ from app.core.db import Base, configure_engine, get_engine
 from app.core.db.session import _reset_engine_for_tests
 from app.main import create_app
 
-# Import side effect: registers Item on Base.metadata so
-# Base.metadata.create_all()/drop_all() below actually create/drop the
-# "items" table. Needed even though nothing else in this file references
-# `Item` directly.
-import app.models.item  # noqa: F401,E402
+# Import side effect: registers every model on Base.metadata so
+# Base.metadata.create_all()/drop_all() below actually create/drop each
+# model's table. Goes through the app/models/__init__.py aggregator (Stage
+# 3 #26, Step 3a) rather than importing `app.models.item` directly, so a
+# future model added there is picked up here automatically.
+import app.models  # noqa: F401,E402
 
 
 @asynccontextmanager

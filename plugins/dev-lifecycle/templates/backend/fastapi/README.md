@@ -99,6 +99,28 @@ vendored copy (below the header) against the current source and flags
 drift. Don't hand-edit a vendored file's logic directly — edit the source
 component, then re-sync the copy.
 
+**INVARIANT (Stage 3 #26, Step 3a): each vendored component lands as a
+self-contained subpackage using relative imports — never a global
+`sys.path` manipulation.** The component catalog's own `db-mixins`/
+`db-session`/`repository`/`pagination` sources use flat, directory-local
+sibling imports (`from schema import ...`, `from query import ...`) so a
+project can vendor just one directory with no package-path assumptions
+(see each component's own README). Composed into a real app package,
+though, that convention would need *something* to put the directory on
+`sys.path` to resolve — and doing that once, process-wide, exposes generic
+module names (`schema`, `query`) as top-level imports any other in-process
+package could collide with silently. Instead, vendoring into this app
+REWRITES those bare sibling imports to package-relative ones
+(`from .schema import ...`, `from .query import ...`) in the two files
+that have them (`app/core/db/query.py`, `app/core/db/repository.py`) —
+each carries a `DRIFT:` header line noting the adaptation, since this
+means those two files are no longer byte-identical to their
+component-catalog source below the header. `app/core/db/mixins.py`,
+`session.py`, and `schema.py` have no cross-imports to adapt and stay
+byte-identical. Step 3b's security components follow the same invariant:
+each one copied into `app/core/security/<name>/` as its own subpackage,
+relative imports only, no `sys.path.insert` anywhere in the app.
+
 ## App layout
 
 ```
@@ -115,13 +137,14 @@ app/
     settings.py           # vendored AppSettings (see table above)
     errors.py              # vendored ErrorEnvelope/AppError hierarchy
     db/
-      __init__.py           # package seam: sys.path shim + re-exports (see its own docstring)
+      __init__.py           # package seam: relative-import re-exports (see its own docstring)
       mixins.py               # vendored Base/UUIDPrimaryKey/TimestampMixin/SoftDeleteMixin
       session.py                # vendored configure_engine/get_db
       repository.py              # vendored AsyncRepository
       query.py                    # vendored paginate_select
       schema.py                    # vendored PageParams/Page/PageResult
   models/
+    __init__.py            # aggregator: imports every model (Item today) so nothing is missed by migrations/tests
     item.py               # the Item ORM model (contract exemplar)
   schemas/
     item.py                # ItemCreate/ItemUpdate/ItemOut
@@ -136,13 +159,17 @@ docs/
 `app/core/db/__init__.py` is the one piece of this tree that is **not** a
 vendored file — it's new glue. The five SQLAlchemy-specific vendored files
 in that directory (`mixins.py`, `session.py`, `repository.py`, `query.py`,
-`schema.py`) are authored as flat, directory-local drop-ins (`repository.py`
-imports `from query import paginate_select`; `query.py` imports `from
-schema import ...` — not package-relative), so `app/core/db/__init__.py`
-puts its own directory on `sys.path` before importing them, then
-re-exports the names the rest of the app needs
-(`from app.core.db import Base, get_db, AsyncRepository, Page, PageParams,
-PageResult`). See that file's own docstring and "Judgment calls" below.
+`schema.py`) are authored in the component catalog as flat, directory-local
+drop-ins (`repository.py` imports `from query import paginate_select`;
+`query.py` imports `from schema import ...` — not package-relative). This
+app REWRITES those two files' cross-imports to package-relative
+(`from .query import paginate_select`; `from .schema import ...`) rather
+than putting the directory on `sys.path`, per the "Vendored components"
+invariant above — `app/core/db/__init__.py` then just imports from its
+relatively-importing siblings and re-exports the names the rest of the app
+needs (`from app.core.db import Base, get_db, AsyncRepository, Page,
+PageParams, PageResult`). See that file's own docstring and "Judgment
+calls" below.
 
 ## Error contract
 
@@ -232,15 +259,22 @@ Or, once materialized into a project: `uv sync --all-groups && uv run pytest`.
   future backend block copying the same components will do, and avoids a
   split-brain "two documented target paths" problem for the freshness
   audit.
-- **`app/core/db/__init__.py` is new glue, not a vendored byte-copy.** The
+- **`app/core/db/__init__.py` is new glue, not a vendored byte-copy.**
+  Originally (Step 2) it put its own directory on `sys.path` so the
   vendored files' flat sibling imports (`from query import ...`, `from
-  schema import ...`) are deliberately not package-relative (see each
-  component's own README on why — a project can vendor just one directory
-  with no package-path assumptions). Making that resolve inside a real
-  `app.core.db` package needs *something* to put the directory on
-  `sys.path`; putting it in `__init__.py` (executed exactly once, at first
-  import of `app.core.db`) is the smallest seam that doesn't touch any
-  vendored file's own import statements.
+  schema import ...` — deliberately not package-relative in the component
+  catalog itself, see each component's own README) would resolve unmodified.
+  **Step 3a (#26) replaced that with the opposite approach**: rewrite
+  `query.py`'s and `repository.py`'s cross-imports to package-relative
+  (`from .schema import ...`, `from .query import ...`) instead, so
+  `__init__.py` needs no `sys.path` manipulation at all. The sys.path
+  approach was reconsidered because it makes generic module names
+  (`schema`, `query`) importable as TOP-LEVEL, process-wide modules — a
+  silent collision risk once Step 3b vendors security components as
+  further siblings. Relative imports cost losing byte-identity on the two
+  touched files (documented via each one's `DRIFT:` header line) but close
+  that seam entirely; see "Vendored components" above for the resulting
+  invariant every future vendored subpackage in this app follows.
 - **Auth stubs return a plain `HTTPException(501)`, not an
   `ErrorEnvelope`.** See "Auth stubs" above — `ErrorCode` is locked, and
   adding a member for a temporary stub is a bigger contract decision than

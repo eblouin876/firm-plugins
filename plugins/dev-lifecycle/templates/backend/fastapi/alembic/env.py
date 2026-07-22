@@ -21,9 +21,11 @@ from app.core.config import get_settings
 from app.core.db import Base
 
 # Import side effect: registers every model on Base.metadata so autogenerate
-# (and this migration environment generally) sees the full schema. Only
-# `Item` exists as of Step 2.
-import app.models.item  # noqa: F401,E402
+# (and this migration environment generally) sees the full schema. Goes
+# through the app/models/__init__.py aggregator (Stage 3 #26, Step 3a) so a
+# future model added there is picked up here automatically, rather than
+# needing this import list hand-maintained per model.
+import app.models  # noqa: F401,E402
 
 config = context.config
 
