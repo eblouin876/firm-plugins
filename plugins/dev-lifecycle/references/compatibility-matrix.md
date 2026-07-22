@@ -1,6 +1,6 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07"
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07"
 last-verified: 2026-07-22
 provenance: manual
 sources:
@@ -28,6 +28,17 @@ sources:
   - https://www.npmjs.com/package/eslint
   - https://www.npmjs.com/package/typescript-eslint
   - https://www.npmjs.com/package/prettier
+  - https://pypi.org/project/bandit/
+  - https://pypi.org/project/semgrep/
+  - https://pypi.org/project/pip-audit/
+  - https://pypi.org/project/uv/
+  - https://docs.astral.sh/uv/concepts/projects/export/ (CLI flags cross-checked against `uv export --help`, uv 0.8.17)
+  - https://pypi.org/project/checkov/
+  - https://github.com/gitleaks/gitleaks/releases
+  - https://github.com/aquasecurity/trivy/releases
+  - https://github.com/aquasecurity/trivy/blob/main/contrib/install.sh
+  - https://github.com/pypa/gh-action-pip-audit/tags
+  - https://www.env0.com/blog/best-iac-scan-tool-comparing-checkov-vs-tfsec-vs-terrascan
 -->
 
 # Compatibility matrix
@@ -45,6 +56,7 @@ sources:
 - Data
 - Infra
 - Containers
+- Security tooling (CI scanners)
 
 ## Version check (do this first)
 Re-verify against official release notes/registries before bumping any line — recall is not a source. Three lines are deliberately held back from the newest available release; see the judgment calls inline. Re-run this check at least once a quarter or when a new template block is authored, whichever is sooner.
@@ -111,6 +123,20 @@ Re-verify against official release notes/registries before bumping any line — 
 | --- | --- | --- |
 | Python base image | **`python:3.13-slim-bookworm`** | Matches the Python pin above; explicit Debian codename (not floating `slim`) for reproducible builds. |
 | Node base image | **`node:24-bookworm-slim`** | Matches the Node LTS pin above; Bookworm remains in full support through 2026+. |
+
+## Security tooling (CI scanners)
+The pin set `assets/workflows/security.yml` (the firm's security-gate workflow, `references/security/secure-baseline.md`'s CI-scanning section) runs against. Each tool's **binary/CLI** is invoked at an exact pinned version so a gate's pass/fail is reproducible run to run — that part is not a moving target. **Caveat:** semgrep's two rulesets (`p/ci`, `p/owasp-top-ten`) are pulled live from Semgrep's public registry on every run and are *not* pinned — they float by design, since a pinned/vendored ruleset would mean either a Semgrep AppSec Platform login (to pull a fixed registry snapshot) or hand-maintaining the rule set ourselves. Accepted tradeoff for staying unauthenticated on `GITHUB_TOKEN` only: the semgrep binary version is reproducible, its finding set is not.
+
+| Dep | Pinned line | Why this line |
+| --- | --- | --- |
+| bandit | **1.9.4** | Current stable (PyPI, Feb 25 2026); Python SAST — AST-based checks for common insecure patterns (`subprocess` with `shell=True`, weak hashes, hardcoded binds). Installed via `pip install bandit==1.9.4`, not a dedicated Action — PyCQA doesn't publish one. |
+| semgrep | **1.170.1** | Current stable (PyPI, Jul 21 2026). Multi-language SAST. Run as `semgrep scan --config=p/ci --config=p/owasp-top-ten`, the free public-registry rulesets — deliberately not `--config=auto`, which now expects a Semgrep AppSec Platform login; `p/ci` and `p/owasp-top-ten` are documented as usable from the CLI with no account, keeping the gate on the default `GITHUB_TOKEN` only. |
+| pip-audit | **2.10.1** (`pypa/gh-action-pip-audit@v1.1.0`) | Current stable (PyPI, Jun 10 2026); official PyPA action, current tag (Aug 2024, still latest). Dependency-CVE scan for Python; requirements/`pyproject.toml` resolved against the PyPI Advisory Database + OSV. Consumes a `requirements.txt` — for a uv-managed project with no committed one, the `deps` job resolves `uv.lock` to that format first via the `uv` row below. |
+| uv | **0.11.31** | Current stable (PyPI, Jul 22 2026). Not itself a security scanner — pinned here because `assets/workflows/security.yml`'s `deps` job installs it as a prerequisite step, to turn a uv-managed project's `pyproject.toml`/`uv.lock` (the firm-standard Python setup — no committed `requirements.txt`; see Backend — Python) into a `requirements.txt` pip-audit can read: `uv export --frozen --no-emit-project --format requirements.txt`. `--frozen` deliberately errors out on a missing/stale lockfile rather than silently re-resolving one, so a CVE gate always audits what's actually locked. |
+| pnpm audit | *(bundled with the pinned pnpm — see Frontend/web row)* | For the JS stack, **judgment call:** use `pnpm audit` rather than adding a separate scanner (`osv-scanner`) — the kit already pins pnpm as its package manager, so the audit command ships for free with no new dependency to track on this matrix. Revisit if a project's `pnpm audit` false-positive rate becomes a problem; `google/osv-scanner-action` is the fallback. |
+| gitleaks | **v8.30.1** (CLI, via `ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f`) | Current stable (GitHub releases, Mar 21 2026). Pinned by digest (the multi-arch manifest-list digest, resolved via `docker buildx imagetools inspect`), not just the tag, so the image can't move under the pin. **Judgment call:** run the pinned Docker image directly (`docker run ... git`) rather than `gitleaks/gitleaks-action@v3` — the Action is free only for personal-account repos; an org-owned repo (this one included) needs a `GITLEAKS_LICENSE` secret for more than one scanned repo. Running the raw MIT-licensed binary keeps the gate on the default `GITHUB_TOKEN` with no extra secret, matching the "self-contained payload" constraint every `assets/workflows/*.yml` file is held to. |
+| checkov | **3.2.526** | Current stable (PyPI, Jun 30 2026). Chosen as the **primary IaC scanner** (Terraform, at minimum). **Judgment call — tfsec vs. checkov:** tfsec is frozen — Aqua Security merged its check library into Trivy in 2024 and stopped adding new checks/Terraform-feature coverage there; picking it for new adoption in 2026 means picking a tool that's stopped moving. checkov (Prisma Cloud/Palo Alto Networks) is actively maintained with a materially larger, more frequently updated policy library. **Alternate:** Trivy already ships `trivy config` for IaC misconfiguration scanning and is already a pinned dependency below for the containers job — a project that wants one fewer tool in the pipeline can point `trivy config` at `infra/` instead of running checkov separately; the security workflow's `iac` job runs checkov by default. |
+| trivy | **0.70.0** core, installed via trivy's own pinned install script (`contrib/install.sh -b /usr/local/bin v0.70.0`) | Current stable at the time this line was pinned; bundled with `aquasecurity/trivy-action@v0.36.0` originally, but the `containers` job now installs the CLI directly instead of using that Action — a project can have more than one Dockerfile, and building+scanning each one by its own path/context needs a shell loop, which a marketplace `uses:` step can't participate in. Trivy core version pin unchanged by that switch. Container image scanning. **Inspection-only in this sandbox** — see `assets/workflows/security.yml`'s `containers` job comment; the detect+build+scan shell logic was verified against fixture Dockerfiles (constructed commands echoed), not by actually running `docker build`/`trivy image` (no dockerd socket in-sandbox). |
 
 ## How blocks consume this
 - A block's `README.md` `versions-pinned-to` field points at the row(s) here it depends on — it does not restate the version.

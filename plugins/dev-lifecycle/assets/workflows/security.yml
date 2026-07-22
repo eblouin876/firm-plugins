@@ -1,0 +1,268 @@
+# Firm security-gate workflow — the standard CI security gate scaffolded
+# projects receive, enforcing plugins/dev-lifecycle/references/security/
+# secure-baseline.md's "Dependency, SAST, and IaC scanning in CI" section.
+#
+# What this gates: SAST (bandit + semgrep), secret scanning (gitleaks),
+# dependency-CVE scanning (pip-audit / pnpm audit, per stack present),
+# IaC misconfiguration (checkov), and container image findings (trivy,
+# inspection-only where noted below). Tool versions and the scanner choice
+# per surface are pinned in references/compatibility-matrix.md's "Security
+# tooling (CI scanners)" section — bump versions there, not here.
+#
+# Copied by scaffolding into a project's .github/workflows/ alongside
+# claude.yml / claude-review.yml / epic-checkoff.yml. Self-contained: no
+# plugin, no extra secrets — runs entirely on the default GITHUB_TOKEN.
+# Each job is conditional-smart so a project missing a given stack (no
+# Python, no Terraform, ...) skips that job cleanly instead of failing.
+#
+# Per the firm definition-of-done, this is a REQUIRED check: a red gate
+# blocks merge. Make it a required status check in branch protection when
+# wiring up a new repo (see the devops/scaffolding skills).
+
+name: Security gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sast:
+    name: SAST (bandit + semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Python
+        id: py
+        run: |
+          if [ -n "$(find . -name '*.py' -not -path '*/node_modules/*' -print -quit)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        # Unconditional: semgrep below needs pip regardless of whether this
+        # repo has Python source (setup-python is the only thing standing
+        # between it and relying on ambient pip on the runner image).
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: bandit (Python SAST)
+        if: steps.py.outputs.present == 'true'
+        run: |
+          pip install --disable-pip-version-check bandit==1.9.4
+          # -r recursive; -ll reports medium+ severity only (severity and
+          # confidence are separate filters — confidence would be -i/-ii/-iii,
+          # not enabled here, so all confidence levels are still reported).
+          # -x excludes venvs/node_modules/tests/migrations; */migrations/*
+          # (not ./**/migrations) is required for nested dirs — bandit's -x
+          # matches via fnmatch.fnmatch(full_path, glob) plus a plain
+          # substring check, and neither matches files *under* a directory
+          # unless the glob itself has a trailing /* segment.
+          bandit -r . -ll -x './.venv,./venv,./node_modules,./tests,*/migrations/*'
+
+      - name: semgrep (multi-language SAST)
+        # Runs regardless of Python presence — semgrep covers JS/TS/etc too.
+        run: |
+          pip install --disable-pip-version-check semgrep==1.170.1
+          # Free public registry rulesets — deliberately not `--config=auto`,
+          # which expects a Semgrep AppSec Platform login. p/ci and
+          # p/owasp-top-ten run unauthenticated, keeping this on GITHUB_TOKEN
+          # only (references/compatibility-matrix.md, Security tooling row).
+          semgrep scan --error --config=p/ci --config=p/owasp-top-ten .
+
+  secrets:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history — gitleaks scans git log, not just the working tree.
+
+      - name: gitleaks
+        run: |
+          # Pinned CLI via the official image, run directly rather than
+          # gitleaks/gitleaks-action@v3: that Action requires a paid
+          # GITLEAKS_LICENSE for org-owned repos scanning more than one
+          # repo. The raw MIT-licensed binary needs no extra secret.
+          # Pinned by digest (multi-arch index for v8.30.1, resolved via
+          # `docker buildx imagetools inspect`), not just tag, so the image
+          # can't move under the pin.
+          docker run --rm -v "${PWD}:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git /repo --redact -v
+
+  deps:
+    name: Dependency CVE scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Python deps
+        id: py
+        run: |
+          if [ -f requirements.txt ]; then
+            echo "reqs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reqs=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f pyproject.toml ]; then
+            echo "pyproject=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pyproject=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect pnpm deps
+        id: js
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: pip-audit (Python, requirements.txt)
+        if: steps.py.outputs.reqs == 'true'
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements.txt
+
+      - name: pip-audit (Python, uv-managed pyproject.toml)
+        # Firm-standard Python projects are uv + pyproject.toml with no
+        # committed requirements.txt (references/compatibility-matrix.md,
+        # Backend — Python), so the requirements.txt-input step above has
+        # nothing to read in that case. pip-audit doesn't parse
+        # pyproject.toml/uv.lock itself, so resolve the locked dependency
+        # set to a requirements file first, then audit that.
+        if: steps.py.outputs.reqs == 'false' && steps.py.outputs.pyproject == 'true'
+        run: |
+          pip install --disable-pip-version-check uv==0.11.31
+          # --frozen refuses to silently re-resolve/update uv.lock — a
+          # missing or stale lockfile fails loudly here instead of auditing
+          # a dependency set that doesn't match what's actually locked.
+          # --no-emit-project excludes the project's own (unpublished)
+          # package from the exported requirements.
+          uv export --frozen --no-emit-project --format requirements.txt -o /tmp/audit-reqs.txt || {
+            echo "::error::'uv export --frozen' failed — commit an up-to-date uv.lock (run 'uv lock') so the dependency-CVE gate has a locked dependency set to audit." >&2
+            exit 1
+          }
+          uvx pip-audit==2.10.1 -r /tmp/audit-reqs.txt
+
+      - name: Set up Node.js
+        if: steps.js.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: pnpm audit (JS/TS)
+        if: steps.js.outputs.present == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: pnpm audit run
+        if: steps.js.outputs.present == 'true'
+        run: pnpm audit --audit-level=high
+
+  iac:
+    name: IaC scan (checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Terraform
+        id: tf
+        run: |
+          if [ -n "$(find . -name '*.tf' -print -quit)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.tf.outputs.present == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: checkov
+        if: steps.tf.outputs.present == 'true'
+        run: |
+          # Primary IaC scanner (references/compatibility-matrix.md judgment
+          # call: tfsec is frozen — merged into Trivy in 2024, no new checks
+          # since). Alternate: `trivy config` on the same directories, if a
+          # project prefers one fewer tool over the containers job's trivy.
+          pip install --disable-pip-version-check checkov==3.2.526
+          checkov --directory . --framework terraform --compact --quiet
+
+  containers:
+    name: Container scan (trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Dockerfiles
+        id: docker
+        run: |
+          # Capture every Dockerfile* path found (not just presence) — a
+          # project can have more than one (e.g. docker/Dockerfile.api,
+          # docker/Dockerfile.worker), each with its own build context.
+          mapfile -t files < <(find . -iname 'Dockerfile*' -not -path '*/node_modules/*' -not -path '*/.git/*' | sort)
+          if [ "${#files[@]}" -gt 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "files<<DOCKERFILES_EOF"
+              printf '%s\n' "${files[@]}"
+              echo "DOCKERFILES_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # NOTE (inspection-only, not run here): building and scanning an image
+      # needs a real Docker daemon and, for base-image CVE lookups,
+      # registry/network access this sandbox doesn't have (no dockerd socket
+      # in-sandbox). This step is correct as written and is what scaffolded
+      # projects run — verified by extracting this exact detect+build+scan
+      # shell logic into a scratch script against fixture Dockerfiles and
+      # echoing the constructed docker/trivy commands, not by executing them
+      # here. Trivy is installed via its own pinned install script (not
+      # aquasecurity/trivy-action) because each detected Dockerfile needs
+      # its own `docker build -f ... <context>` + `trivy image` pair inside
+      # one shell loop — a marketplace `uses:` step can't be looped, only a
+      # `run:` step can. Trivy core version pin unchanged from the matrix
+      # (0.70.0); only the installation mechanism changed.
+      - name: Install trivy
+        if: steps.docker.outputs.present == 'true'
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.70.0
+
+      - name: Build and scan each Dockerfile
+        if: steps.docker.outputs.present == 'true'
+        # Pass the detected paths through the environment, never interpolate the
+        # ${{ }} expression into the run: body — a Dockerfile path is
+        # contributor-influenceable on pull_request, so expanding it into the
+        # shell script is a GitHub Actions script-injection sink. Reading it as
+        # "$DOCKERFILES" keeps the value as data, not code.
+        env:
+          DOCKERFILES: ${{ steps.docker.outputs.files }}
+        run: |
+          set -e
+          i=0
+          while IFS= read -r dockerfile; do
+            [ -z "$dockerfile" ] && continue
+            i=$((i + 1))
+            context="$(dirname "$dockerfile")"
+            tag="security-gate-scan:${{ github.sha }}-${i}"
+            echo "::group::docker build -f $dockerfile -t $tag $context"
+            docker build -f "$dockerfile" -t "$tag" "$context"
+            echo "::endgroup::"
+            echo "::group::trivy image $tag"
+            trivy image --format table --severity CRITICAL,HIGH --exit-code 1 "$tag"
+            echo "::endgroup::"
+          done <<< "$DOCKERFILES"

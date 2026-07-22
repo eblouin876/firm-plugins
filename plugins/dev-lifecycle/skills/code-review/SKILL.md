@@ -33,7 +33,7 @@ Evaluate the change and its blast radius against each dimension:
 1. **Correctness & regression** — logic errors, unhandled cases, broken contracts, type mismatches, races, broken/missing tests. → `${CLAUDE_PLUGIN_ROOT}/references/review/review-dimensions.md`.
 2. **Best practices & conventions** — idiomatic for the installed versions, consistent with the codebase. → same reference.
 3. **DRY** — genuine duplication introduced; don't force premature abstraction. → same reference.
-4. **Security** — every touched path against the OWASP Top 10:2025. → `${CLAUDE_PLUGIN_ROOT}/references/security/owasp.md`.
+4. **Security** — every touched path against the OWASP Top 10:2025 and against `${CLAUDE_PLUGIN_ROOT}/references/security/secure-baseline.md`; flag any diff that ships an insecure default the baseline forbids. → `${CLAUDE_PLUGIN_ROOT}/references/security/owasp.md`.
 5. **Performance & scalability** — N+1, unbounded queries, missing indexes, blocking calls on async paths. → review-dimensions reference.
 
 Severity: 🔴 Blocker (breaks functionality, security hole, data loss — must fix) · 🟠 High (real bug / meaningful perf or best-practice problem — should fix) · 🟡 Medium (DRY, maintainability, missing tests) · ⚪ Nit (style/naming).

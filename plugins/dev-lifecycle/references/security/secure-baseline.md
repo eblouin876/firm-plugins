@@ -1,13 +1,14 @@
 <!--
 library: secure-baseline
 versions-covered: "OWASP Top 10:2025, OWASP ASVS 5.0"
-last-verified: 2026-07-21
+last-verified: 2026-07-22
 provenance: manual
 sources:
   - https://owasp.org/Top10/
   - https://owasp.org/www-project-application-security-verification-standard/
   - https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html
   - https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+  - references/compatibility-matrix.md (Security tooling (CI scanners) section)
 -->
 
 # Secure baseline
@@ -26,6 +27,7 @@ sources:
 - Dependency, SAST, and IaC scanning in CI
 - Audit logging
 - Least privilege
+- Secure-by-default conventions (template blocks)
 - Related canon
 
 ## Version check (do this first)
@@ -80,6 +82,17 @@ Set on every HTTP response by default (middleware, not per-route opt-in):
 ## Least privilege
 - IAM roles, DB users, and service accounts scoped to exactly what a task needs — no wildcard admin roles used out of convenience. CI and workload identity via OIDC-assumed roles, not long-lived static credentials.
 - Network segmentation by default: data stores in private subnets, nothing public that doesn't need to be, security groups scoped tight rather than default-open.
+
+## Secure-by-default conventions (template blocks)
+Concrete defaults a scaffolded project ships with — the enforcement half of this baseline, not restating the sections above. Every catalog component and template block conforms to these; `code-review`'s security dimension and `security-audit`'s config-hygiene step both check diffs against them.
+
+- **Non-root containers.** Every Dockerfile runs the app as a created, unprivileged user (`USER app`, not root) — never the image default. See `references/compatibility-matrix.md`'s Containers row for the base images this assumes.
+- **`.env.example` only.** A repo ships `.env.example` with placeholder values and nothing else; real `.env` files are gitignored and never committed. This is the concrete rule behind "Secrets never in code or images" above.
+- **Settings deny-read `.env*`.** Editor/agent settings (`.claude/settings.json` and equivalents) explicitly deny reading `.env` and its variants, not just `.gitignore`-hide them — a secret an agent can read it can leak into a transcript or a generated file.
+- **Least-privilege IAM by default.** Terraform modules in the catalog scope IAM policies to the exact actions/resources a role needs — no `Action: "*"` or `Resource: "*"` shipped as a starting point that a team is expected to tighten later. Concretizes "Least privilege" above.
+- **Encrypted at rest.** RDS and S3 resources in the catalog set encryption (`storage_encrypted = true`, default SSE) by default, not as an opt-in flag a project has to remember to set.
+- **Secrets never in images or code.** No `ARG`/`ENV` bakes a secret into a Docker layer, no default value in code is a real credential (placeholders are obviously fake — see the planted-violation convention in this workflow's own test fixtures). Full lifecycle in `references/security/secrets-management.md`.
+- **CI security gates required, not advisory.** `assets/workflows/security.yml` — the firm-standard scaffolded workflow — is a required check, not a report-only job: `sast` (bandit + semgrep), `secrets` (gitleaks), `deps` (pip-audit / pnpm audit), `iac` (checkov), and `containers` (trivy) each fail their job on a finding at or above the configured severity, and a red gate blocks merge per `${CLAUDE_PLUGIN_ROOT}/shared/definition-of-done.md`. Pinned tool versions and the choice of scanner per stack are recorded in `references/compatibility-matrix.md`'s Security tooling section — that matrix, not this doc, is where a version bump happens.
 
 ## Related canon
 This is the hub; the other three security references specialize it:

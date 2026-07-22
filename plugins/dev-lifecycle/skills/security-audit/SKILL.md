@@ -31,12 +31,12 @@ Establish what kind of thing is being audited: application type(s) — web front
 Instantiate the applicable taxonomy sections against *this* project: the actual routes, input channels, upload paths, webhooks, jobs, workflows — located by search, not by reading the tree. The enumeration doubles as the report's attack-surface map and the audit's checklist.
 
 ### 3. Assess each surface
-For each enumerated surface, read the deciding spans and classify: ✅ Handled (evidence cited), 🔴/🟠/🟡/⚪ finding (impact, evidence, remediation sketch), or N/A (one line why). Use `${CLAUDE_PLUGIN_ROOT}/references/security/owasp.md` as the per-surface vulnerability checklist.
+For each enumerated surface, read the deciding spans and classify: ✅ Handled (evidence cited), 🔴/🟠/🟡/⚪ finding (impact, evidence, remediation sketch), or N/A (one line why). Use `${CLAUDE_PLUGIN_ROOT}/references/security/owasp.md` as the per-surface vulnerability checklist. Also assess each surface against `${CLAUDE_PLUGIN_ROOT}/references/security/secure-baseline.md`, crediting what it satisfies and faulting what it violates alongside the OWASP-based findings.
 
 ### 4. Run mechanical scans (read-only)
 - **Dependencies:** the ecosystem's native audit (`pip-audit`, `npm audit`), per `dependency-maintenance` conventions — results fold in as the supply-chain surface.
 - **Secrets:** pattern scan of the tree and git history (`gitleaks` if available; targeted grep for key/token/password patterns otherwise).
-- **Config:** debug flags, exposed docs/admin endpoints, CORS, security headers, Dockerfile/CI hygiene.
+- **Config:** debug flags, exposed docs/admin endpoints, CORS, security headers, Dockerfile/CI hygiene — checked against `${CLAUDE_PLUGIN_ROOT}/references/security/secure-baseline.md`'s CI-scanning, security-headers, and CORS-lockdown sections, not just general judgment.
 
 Record every scan that was skipped and why — these go in the report's scope section.
 
