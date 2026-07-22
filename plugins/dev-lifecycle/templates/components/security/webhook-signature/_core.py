@@ -19,8 +19,18 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import time
 from dataclasses import dataclass
+
+# A candidate signature must be pure lowercase-or-uppercase hex -- the shape
+# an HMAC-SHA256 hexdigest always is. Enforced before any
+# `hmac.compare_digest` call over a header-supplied candidate: `compare_digest`
+# raises `TypeError` for a non-ASCII `str` argument (CPython restricts str
+# comparison to ASCII-only), which would otherwise surface as an unhandled
+# 500 the moment a webhook sender (or an attacker probing the endpoint)
+# sends a `v1=` value containing a non-hex/non-ASCII character.
+_HEX_CANDIDATE_PATTERN = re.compile(r"^[0-9a-fA-F]+$")
 
 
 class WebhookVerificationError(Exception):
@@ -135,7 +145,19 @@ def verify(
     entries during a secret rotation) is checked via
     `hmac.compare_digest` -- constant-time, so an attacker measuring
     response timing cannot use it to guess the correct signature one byte
-    at a time. A single match is sufficient."""
+    at a time. A single match is sufficient. A candidate that isn't
+    pure hex (e.g. non-ASCII bytes) can never equal a hex digest, so it is
+    skipped rather than handed to `hmac.compare_digest` -- see
+    `_HEX_CANDIDATE_PATTERN`'s module-level comment for why: passing a
+    non-ASCII `str` to `compare_digest` raises `TypeError`, not a clean
+    verification failure."""
+    if not secret or not secret.strip():
+        # An empty/blank secret must never be treated as "no secret
+        # configured, so allow everything" (fail OPEN) -- raise before any
+        # HMAC is computed, so a deployer's missing/blank secret env var
+        # rejects every webhook instead of silently accepting all of them.
+        raise WebhookVerificationError("empty webhook secret")
+
     if not signature_header:
         raise MissingSignatureHeaderError("webhook request is missing its signature header")
 
@@ -149,5 +171,12 @@ def verify(
         )
 
     expected = compute_signature(secret, parsed.timestamp, raw_body)
-    if not any(hmac.compare_digest(expected, candidate) for candidate in parsed.signatures):
+    matched = False
+    for candidate in parsed.signatures:
+        if not _HEX_CANDIDATE_PATTERN.match(candidate):
+            continue
+        if hmac.compare_digest(expected, candidate):
+            matched = True
+            break
+    if not matched:
         raise SignatureMismatchError("no candidate signature in the header matched")

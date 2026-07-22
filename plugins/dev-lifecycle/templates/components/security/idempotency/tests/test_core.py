@@ -180,3 +180,131 @@ def test_no_redis_module_imported_anywhere(core_mod):
     import sys
 
     assert "redis" not in sys.modules
+
+
+# --- BLOCKER-1: compute_storage_key() principal scoping ---------------------
+
+
+def test_compute_storage_key_differs_for_different_principals_same_key(core_mod):
+    a = core_mod.compute_storage_key("alice", "shared-key")
+    b = core_mod.compute_storage_key("bob", "shared-key")
+    assert a != b
+
+
+def test_compute_storage_key_is_deterministic(core_mod):
+    a = core_mod.compute_storage_key("alice", "order-1")
+    b = core_mod.compute_storage_key("alice", "order-1")
+    assert a == b
+
+
+def test_compute_storage_key_does_not_collide_across_the_separator(core_mod):
+    # "a" + NUL + "bc" must not equal "ab" + NUL + "c" -- the composed
+    # inputs must not collide just because concatenation without a
+    # separator would.
+    a = core_mod.compute_storage_key("a", "bc")
+    b = core_mod.compute_storage_key("ab", "c")
+    assert a != b
+
+
+def test_check_and_record_response_use_the_composed_storage_key(core_mod, store):
+    """Demonstrates the full cross-principal-safety property at the
+    check()/record_response() level (the adapters' actual call pattern):
+    the same idempotency key from two different principals produces two
+    independent records, so the second principal's request is NOT treated
+    as a replay of the first's."""
+    alice_key = core_mod.compute_storage_key("alice", "shared-key")
+    bob_key = core_mod.compute_storage_key("bob", "shared-key")
+
+    alice_outcome = core_mod.check(store, alice_key, "fp-1")
+    assert alice_outcome.is_replay is False
+    core_mod.record_response(
+        store, alice_key, "fp-1", core_mod.StoredResponse(status_code=200, headers=(), body=b"alice")
+    )
+
+    bob_outcome = core_mod.check(store, bob_key, "fp-1")
+    assert bob_outcome.is_replay is False  # NOT a replay of alice's response
+
+
+# --- HIGH-2: sensitive headers are stripped before storage ------------------
+
+
+def test_record_response_strips_set_cookie(core_mod, store):
+    response = core_mod.StoredResponse(
+        status_code=200, headers=(("Set-Cookie", "session=abc"), ("X-Other", "1")), body=b"ok"
+    )
+    core_mod.record_response(store, "key-1", "fp-1", response)
+    stored = store.get("key-1")
+    header_names = {name.lower() for name, _ in stored.response.headers}
+    assert "set-cookie" not in header_names
+    assert "x-other" in header_names
+
+
+def test_record_response_strips_every_denylisted_header(core_mod, store):
+    headers = tuple((name, "value") for name in core_mod.REPLAY_HEADER_DENYLIST) + (("Content-Type", "text/plain"),)
+    response = core_mod.StoredResponse(status_code=200, headers=headers, body=b"ok")
+    core_mod.record_response(store, "key-1", "fp-1", response)
+    stored = store.get("key-1")
+    header_names = {name.lower() for name, _ in stored.response.headers}
+    assert header_names == {"content-type"}
+
+
+def test_strip_non_replayable_headers_is_case_insensitive(core_mod):
+    filtered = core_mod.strip_non_replayable_headers((("SET-COOKIE", "x"), ("Content-Type", "y")))
+    assert filtered == (("Content-Type", "y"),)
+
+
+# --- LOW-9: InMemoryIdempotencyStore TTL / cap eviction ---------------------
+
+
+def test_stale_record_is_evicted_after_ttl(core_mod, monkeypatch):
+    # get() (unlike put(), which takes an explicit `now`) reads the real
+    # wall clock via `time.time()` -- monkeypatch it for a deterministic
+    # "current time" on the read side too.
+    fake_now = [0.0]
+    monkeypatch.setattr(core_mod.time, "time", lambda: fake_now[0])
+
+    store = core_mod.InMemoryIdempotencyStore(ttl_seconds=100.0)
+    response = core_mod.StoredResponse(status_code=200, headers=(), body=b"ok")
+    core_mod.record_response(store, "key-1", "fp-1", response, now=0.0)
+
+    # Still within TTL.
+    fake_now[0] = 50.0
+    core_mod.record_response(store, "key-2", "fp-1", response, now=50.0)
+    assert store.get("key-1") is not None
+
+    # Past TTL relative to key-1's creation -- next access sweeps it.
+    fake_now[0] = 200.0
+    core_mod.record_response(store, "key-3", "fp-1", response, now=200.0)
+    assert store.get("key-1") is None
+    assert store.get("key-3") is not None  # the fresh record survives
+
+
+def test_ttl_disabled_when_zero_or_negative(core_mod, monkeypatch):
+    monkeypatch.setattr(core_mod.time, "time", lambda: 1_000_000.0)
+    store = core_mod.InMemoryIdempotencyStore(ttl_seconds=0)
+    response = core_mod.StoredResponse(status_code=200, headers=(), body=b"ok")
+    core_mod.record_response(store, "key-1", "fp-1", response, now=0.0)
+    core_mod.record_response(store, "key-2", "fp-1", response, now=1_000_000.0)
+    assert store.get("key-1") is not None  # never swept when ttl_seconds <= 0
+
+
+def test_max_keys_cap_evicts_oldest(core_mod, monkeypatch):
+    monkeypatch.setattr(core_mod.time, "time", lambda: 2.0)
+    store = core_mod.InMemoryIdempotencyStore(ttl_seconds=10_000.0, max_keys=2)
+    response = core_mod.StoredResponse(status_code=200, headers=(), body=b"ok")
+    core_mod.record_response(store, "key-1", "fp-1", response, now=0.0)
+    core_mod.record_response(store, "key-2", "fp-1", response, now=1.0)
+    core_mod.record_response(store, "key-3", "fp-1", response, now=2.0)
+
+    assert store.get("key-1") is None  # oldest, evicted over the cap
+    assert store.get("key-2") is not None
+    assert store.get("key-3") is not None
+
+
+def test_max_keys_disabled_by_default(core_mod, monkeypatch):
+    monkeypatch.setattr(core_mod.time, "time", lambda: 49.0)
+    store = core_mod.InMemoryIdempotencyStore(ttl_seconds=10_000.0)
+    response = core_mod.StoredResponse(status_code=200, headers=(), body=b"ok")
+    for i in range(50):
+        core_mod.record_response(store, f"key-{i}", "fp-1", response, now=float(i))
+    assert store.get("key-0") is not None  # nothing evicted without max_keys set

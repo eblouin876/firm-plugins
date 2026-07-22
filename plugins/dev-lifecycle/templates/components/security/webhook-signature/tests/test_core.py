@@ -182,3 +182,55 @@ def test_exception_messages_never_contain_the_signature_or_secret(core_mod):
     message = str(exc_info.value)
     assert sig not in message
     assert FAKE_SECRET not in message
+
+
+# --- MEDIUM-5: empty/blank secret fails CLOSED, never open ------------------
+
+
+def test_empty_secret_raises_verification_error(core_mod):
+    body = b"{}"
+    header = _sign(core_mod, 1_000_000, body)
+    with pytest.raises(core_mod.WebhookVerificationError):
+        core_mod.verify(body, header, "", now=1_000_000)
+
+
+def test_blank_secret_raises_verification_error(core_mod):
+    body = b"{}"
+    header = _sign(core_mod, 1_000_000, body)
+    with pytest.raises(core_mod.WebhookVerificationError):
+        core_mod.verify(body, header, "   ", now=1_000_000)
+
+
+def test_empty_secret_is_rejected_before_any_signature_would_match(core_mod):
+    """Fails-open regression: even a header carrying a signature computed
+    with the empty string itself must not pass -- an empty secret is
+    rejected outright, not merely "unlikely to match"."""
+    body = b"{}"
+    sig_with_empty_secret = core_mod.compute_signature("", 1_000_000, body)
+    header = f"t=1000000,v1={sig_with_empty_secret}"
+    with pytest.raises(core_mod.WebhookVerificationError):
+        core_mod.verify(body, header, "", now=1_000_000)
+
+
+# --- LOW-8: non-hex/non-ASCII v1 candidate never crashes compare_digest -----
+
+
+def test_non_hex_candidate_is_rejected_cleanly_not_a_crash(core_mod):
+    body = b"{}"
+    header = "t=1000000,v1=not-hex-at-all!!"
+    with pytest.raises(core_mod.SignatureMismatchError):
+        core_mod.verify(body, header, FAKE_SECRET, now=1_000_000)
+
+
+def test_non_ascii_candidate_is_rejected_cleanly_not_a_crash(core_mod):
+    body = b"{}"
+    header = "t=1000000,v1=café"  # non-ASCII byte would crash a naive compare_digest call
+    with pytest.raises(core_mod.SignatureMismatchError):
+        core_mod.verify(body, header, FAKE_SECRET, now=1_000_000)
+
+
+def test_non_hex_candidate_alongside_a_valid_one_still_matches(core_mod):
+    body = b"{}"
+    valid_sig = core_mod.compute_signature(FAKE_SECRET, 1_000_000, body)
+    header = f"t=1000000,v1=not-hex!!,v1={valid_sig}"
+    core_mod.verify(body, header, FAKE_SECRET, now=1_000_000)  # must not raise

@@ -1,17 +1,17 @@
 <!--
 block: components/security/rate-limiting  # catalog component
+last-verified: 2026-07-22
+provenance: manual
+versions-pinned-to: references/compatibility-matrix.md
 needs:
   - starlette/fastapi (via the project's FastAPI install): the dependency + middleware variants in fastapi.py
   - django (5.2.x): the middleware variant in django.py
   - a shared store for multi-process/multi-replica deployments (optional, Stage 11): InMemoryBucketStore is per-process only -- see Judgment calls
 exposes:
-  - BucketStore (Protocol), InMemoryBucketStore, RateLimitResult, check(store, key, *, capacity, refill_per_second, now=None), client_ip_key(remote_addr, forwarded_for, *, trust_proxy=False) -- in _core.py
-  - fastapi.py: make_rate_limit_dependency(store, *, capacity, refill_per_second, key_func=None, trust_proxy=False), RateLimitMiddleware
-  - django.py: RateLimitMiddleware (settings-configurable: RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL_PER_SECOND, RATE_LIMIT_TRUST_PROXY)
+  - BucketStore (Protocol), InMemoryBucketStore, RateLimitResult, check(store, key, *, capacity, refill_per_second, now=None), client_ip_key(remote_addr, forwarded_for, *, trusted_hops=0), validate_refill_rate(refill_per_second) -- in _core.py
+  - fastapi.py: make_rate_limit_dependency(store, *, capacity, refill_per_second, key_func=None, trusted_hops=0), RateLimitMiddleware
+  - django.py: RateLimitMiddleware (settings-configurable: RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL_PER_SECOND, RATE_LIMIT_TRUSTED_HOPS)
   - its co-located doc fragment: docs/fragment.md
-versions-pinned-to: references/compatibility-matrix.md
-last-verified: 2026-07-22
-provenance: manual
 -->
 
 # rate-limiting
@@ -36,8 +36,8 @@ not an app-layer template block.
 ## Contents
 - Composition contract
 - The token bucket
-- Storage: pluggable, Redis stubbed for Stage 11
-- The default key function and its proxy-trust posture
+- Storage: pluggable, Redis stubbed for Stage 11; bounded by idle-TTL/cap
+- The default key function: rightmost-minus-trusted-hops
 - FastAPI: dependency vs. middleware
 - Django: settings-configurable
 - Testing
@@ -54,16 +54,18 @@ not an app-layer template block.
 
 **EXPOSES**
 - `BucketStore` (a `Protocol` — the storage seam), `InMemoryBucketStore`
-  (the stdlib implementation), `RateLimitResult` (`allowed`, `remaining`,
-  `retry_after`), `check(store, key, *, capacity, refill_per_second,
-  now=None)` (the convenience wrapper both adapters call),
-  `client_ip_key(remote_addr, forwarded_for, *, trust_proxy=False)` (the
-  default key function's logic) — all in `_core.py`.
+  (the stdlib implementation, with `ttl_seconds`/`max_keys` bounds),
+  `RateLimitResult` (`allowed`, `remaining`, `retry_after`), `check(store,
+  key, *, capacity, refill_per_second, now=None)` (the convenience wrapper
+  both adapters call), `client_ip_key(remote_addr, forwarded_for, *,
+  trusted_hops=0)` (the default key function's logic),
+  `validate_refill_rate(refill_per_second)` (construction-time guard
+  against `refill_per_second<=0`) — all in `_core.py`.
 - `fastapi.py`: `make_rate_limit_dependency(store, *, capacity,
-  refill_per_second, key_func=None, trust_proxy=False)` (per-route),
+  refill_per_second, key_func=None, trusted_hops=0)` (per-route),
   `RateLimitMiddleware` (whole-app).
 - `django.py`: `RateLimitMiddleware`, configurable via `RATE_LIMIT_CAPACITY`
-  / `RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUST_PROXY` settings or
+  / `RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` settings or
   direct constructor kwargs.
 - Its co-located doc fragment: `docs/fragment.md`.
 
@@ -78,7 +80,7 @@ exactly reproducible given an injected `now` (which is exactly how
 `tests/test_core.py` gets deterministic refill assertions without sleeping
 in a test).
 
-## Storage: pluggable, Redis stubbed for Stage 11
+## Storage: pluggable, Redis stubbed for Stage 11; bounded by idle-TTL/cap
 
 `BucketStore` is a `Protocol` — `take(key, *, capacity, refill_per_second,
 now) -> RateLimitResult`. `InMemoryBucketStore` is the stdlib
@@ -90,20 +92,42 @@ Protocol without either framework adapter changing; that's the whole point
 of the seam being a `Protocol` rather than `InMemoryBucketStore` being
 hard-wired into `fastapi.py`/`django.py`.
 
-## The default key function and its proxy-trust posture
+`InMemoryBucketStore(ttl_seconds=900.0, max_keys=None)` bounds itself: every
+`take()` sweeps buckets idle beyond `ttl_seconds` (default 15 minutes — a
+bucket idle that long has fully refilled to `capacity` anyway, so evicting
+it changes nothing observable), and an optional `max_keys` cap evicts the
+single oldest-by-last-touch bucket whenever a `take()` would exceed it.
+Without this, a high-cardinality key space (e.g. per-IP keys under churn
+from many distinct clients) would grow the store's `dict` without bound.
 
-`client_ip_key(remote_addr, forwarded_for, *, trust_proxy=False)` is
-**PROXY-TRUSTED-ONLY**: `X-Forwarded-For` is a plain request header any
-client can set to anything, so honoring it (`trust_proxy=True`) is only
-correct once a project has confirmed its edge (ALB, CloudFront, a correctly
-configured nginx/Caddy) strips or overwrites any inbound
-`X-Forwarded-For` from the real client before appending its own hop.
-Default is `trust_proxy=False` — `remote_addr` (the actual TCP peer) is
-used and the header is ignored outright, which is safe everywhere but rate-
-limits a proxy's own IP as if it were every client behind it if the app
-genuinely sits behind an unconfirmed proxy. Both framework adapters thread
-`trust_proxy` straight through to this function — set it to `True`
-deliberately, per-environment, never as a blanket default.
+## The default key function: rightmost-minus-trusted-hops
+
+**Corrected posture (previously stated backwards):** an edge proxy (ALB,
+CloudFront, a correctly configured nginx/Caddy) **APPENDS** its observed
+peer address to `X-Forwarded-For` when forwarding a request — it does
+**NOT** strip or overwrite whatever the client already put there. A client
+fully controls the header's contents; only entries appended by a proxy
+this project actually controls are trustworthy, and those are always the
+RIGHTMOST entries, never the leftmost.
+
+`client_ip_key(remote_addr, forwarded_for, *, trusted_hops=0)`:
+- `trusted_hops=0` (the default) — ignore `X-Forwarded-For` entirely, use
+  `remote_addr` (the actual TCP peer). Safe everywhere, including with no
+  proxy at all or an unconfirmed proxy config.
+- `trusted_hops=N` (`N >= 1`) — take the Nth-from-right entry: the address
+  the OUTERMOST of the N trusted proxies in front of this app saw when it
+  received the request. **ALB example:** a single ALB directly in front of
+  the app, nothing else — `trusted_hops=1` reads the rightmost entry, the
+  address ALB itself observed. A project MUST set `trusted_hops` to the
+  exact number of trusted proxies it controls, deliberately, per
+  environment — never guessed, and never higher than the real proxy count
+  (that would trust an entry the client could have supplied itself). If
+  the header has fewer entries than `trusted_hops`, this falls back to
+  `remote_addr` rather than guessing.
+
+Both framework adapters thread `trusted_hops` straight through to this
+function — set it deliberately, per environment, never as a blanket
+default.
 
 ## FastAPI: dependency vs. middleware
 
@@ -119,28 +143,36 @@ with a different key, since they're independent by construction.
 Django instantiates a `MIDDLEWARE` entry with only `get_response` — there's
 no way to pass constructor kwargs from `settings.MIDDLEWARE` itself — so
 `RateLimitMiddleware` reads `RATE_LIMIT_CAPACITY` /
-`RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUST_PROXY` from
+`RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` from
 `django.conf.settings` by default, falling back to `capacity=60`,
-`refill_per_second=1.0`, `trust_proxy=False` if unset. Explicit constructor
+`refill_per_second=1.0`, `trusted_hops=0` if unset. Explicit constructor
 kwargs (used throughout this component's own tests) override the
 settings-derived value when passed, for a project wiring the middleware by
-hand.
+hand. `refill_per_second` is validated (`validate_refill_rate`) at
+construction time regardless of where it came from.
 
 ## Testing
 
 `tests/test_core.py` covers the refill math with explicit deterministic
 `now` values (first request allowed, burst-to-capacity then denied, exact
 one-token-per-second refill, retry-after shrinking as elapsed time grows,
-the bucket never exceeding `capacity`), per-key isolation, and every branch
-of `client_ip_key`'s trust posture (XFF ignored by default, honored and
-leftmost-entry-selected when trusted, falling back on an absent or blank
-XFF even when trusted). `tests/test_fastapi.py` exercises both the
-middleware and dependency variants against a real FastAPI `TestClient`
-(allow-then-429, `Retry-After` present, an undecorated route unaffected by
-a decorated one's drained bucket). `tests/test_django.py` exercises the
-middleware via `RequestFactory` the same way, plus the XFF-ignored-by-
-default vs. XFF-honored-when-`trust_proxy=True` behavior specifically
-against `REMOTE_ADDR`/`HTTP_X_FORWARDED_FOR`.
+the bucket never exceeding `capacity`), per-key isolation, every branch of
+`client_ip_key`'s corrected trust posture (XFF ignored by default,
+rightmost-entry selection when trusted, a spoofed LEFTMOST entry NOT
+changing the selected key with `trusted_hops=1`, multi-hop selection,
+falling back to `remote_addr` on an absent/blank/insufficient XFF),
+`validate_refill_rate`'s rejection of zero/negative rates, and
+`InMemoryBucketStore`'s idle-TTL eviction and `max_keys` cap.
+`tests/test_fastapi.py` exercises both the middleware and dependency
+variants against a real FastAPI `TestClient` (allow-then-429,
+`Retry-After` present, an undecorated route unaffected by a decorated
+one's drained bucket, and construction-time rejection of
+`refill_per_second<=0` for both variants). `tests/test_django.py`
+exercises the middleware via `RequestFactory` the same way, plus the
+XFF-ignored-by-default vs. rightmost-entry-honored-when-`trusted_hops=1`
+behavior (including that a spoofed leftmost entry does not bypass the
+limit) against `REMOTE_ADDR`/`HTTP_X_FORWARDED_FOR`, and the same
+construction-time `refill_per_second<=0` rejection.
 
 Run:
 ```
@@ -172,7 +204,35 @@ uv run --python 3.13 --with fastapi --with httpx --with pytest --with 'django==5
 - **`client_ip_key` defaults to distrusting `X-Forwarded-For`.** The unsafe
   default here would be trusting it — a spoofable header trusted by
   default turns the whole rate limiter into "attacker picks their own
-  bucket key," a total bypass. Requiring an explicit `trust_proxy=True`
+  bucket key," a total bypass. Requiring an explicit `trusted_hops>=1`
   opt-in, with the risk spelled out in the docstring right next to the
   parameter, matches secure-baseline's "deny by default, explicit opt-out"
   posture applied to a trust decision instead of an access decision.
+- **`trusted_hops: int`, not `trust_proxy: bool`.** A boolean flag can only
+  express "trust the whole header" or "trust nothing" — it can't express
+  "trust exactly the entries my own N proxies appended," which is the only
+  thing that's actually safe to trust. An integer hop count is both more
+  correct (it matches how XFF is actually built, hop by hop) and
+  self-documenting at the call site (`trusted_hops=1` reads as "one proxy
+  in front of this app," not an opaque `True`).
+- **Insufficient `X-Forwarded-For` entries fall back to `remote_addr`,
+  not to whatever's leftmost.** If `trusted_hops=2` but the header only has
+  one entry, something is wrong (a misconfigured proxy chain, or a
+  malformed/attacker-supplied header) — silently taking whatever's there
+  would be guessing. Falling back to the real peer address is the same
+  "can't verify, use the safe default" posture the whole default-`trust`
+  design already takes.
+- **`InMemoryBucketStore`'s idle-TTL default (15 min) is chosen for "no
+  observable behavior change," not an arbitrary round number.** A bucket
+  idle for 15 minutes has necessarily refilled to full `capacity` (for any
+  `refill_per_second` a sane rate limit would use) — evicting it and
+  starting fresh on the next `take()` produces IDENTICAL behavior to
+  keeping it around, so the TTL closes the unbounded-memory-growth risk
+  with zero functional downside for a legitimately-behaving client.
+- **`refill_per_second<=0` rejected at construction, not handled at
+  `check()`-time with a capped `retry_after`.** A limiter that never
+  refills isn't a token bucket — it's a different feature (a fixed,
+  one-time quota) wearing this component's API. Rejecting it loudly at
+  construction surfaces a misconfiguration immediately, at startup/wiring
+  time, rather than lying dormant until the bucket first empties and a
+  real caller's 429 response crashes into a 500.

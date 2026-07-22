@@ -43,6 +43,7 @@ not an app-layer template block.
 - CSP: strict default, explicit relaxation
 - Permissions-Policy: minimal by default
 - Headers interplay (judgment call)
+- Deployment note: HSTS behind a TLS-terminating proxy
 - Testing
 - Judgment calls
 
@@ -164,6 +165,35 @@ bottom-to-top (reverse of `MIDDLEWARE`'s order), so list
 `django.middleware.security.SecurityMiddleware` to guarantee it runs last
 and gets the final word — see `django.py`'s module docstring for the full
 placement rationale.
+
+## Deployment note: HSTS behind a TLS-terminating proxy
+
+`is_https` is computed from what the app's OWN process observes about the
+connection — `scope["scheme"]` in ASGI, `request.is_secure()` in Django —
+not from a static config flag. **Behind a TLS-terminating proxy or load
+balancer (ALB, nginx, Caddy terminating TLS and forwarding plain HTTP to
+the app — the common production shape), the app's own server sees a
+plain-HTTP connection even when the original client used HTTPS**, unless
+that prerequisite is explicitly wired up. When it isn't,
+`Strict-Transport-Security` is silently never sent — no error, no warning,
+just a header quietly missing in production while a local HTTPS check
+looks fine.
+
+**FastAPI/Starlette (Uvicorn):** run with `--proxy-headers` (and
+`--forwarded-allow-ips=<proxy IP/CIDR>` if the proxy isn't on localhost) so
+Uvicorn trusts `X-Forwarded-Proto` from the proxy and rewrites
+`scope["scheme"]` accordingly.
+
+**Django:** set `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO",
+"https")` in `settings.py` so `request.is_secure()` honors the proxy's
+`X-Forwarded-Proto` header.
+
+Both require the proxy to be trusted to set that header correctly (i.e.
+the proxy strips/overwrites any client-supplied `X-Forwarded-Proto` before
+forwarding) — the same proxy-trust precondition rate-limiting's
+`client_ip_key` documents for `X-Forwarded-For`. Verify by checking for
+`Strict-Transport-Security` on an actual deployed response behind the real
+proxy, not just a local check where the app itself terminates TLS.
 
 ## Testing
 

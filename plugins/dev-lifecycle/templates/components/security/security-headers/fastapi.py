@@ -15,6 +15,25 @@ directory is on it once installed — no code change needed either way.
 
 FastAPI/Starlette only (`starlette`) — no third-party dependency beyond the
 project's own FastAPI install.
+
+--- Deployment note: HSTS behind a TLS-terminating proxy (MEDIUM-6) ---
+`is_https` (below) is read from `scope.get("scheme") == "https"` -- the
+ASGI scheme Uvicorn/Hypercorn set for the connection THEY see. If this app
+sits behind a TLS-terminating proxy/load balancer (the common case: ALB,
+nginx, Caddy terminate TLS and forward plain HTTP to the app), the app's
+own ASGI server sees a plain-HTTP connection even though the original
+client used HTTPS -- `scope["scheme"]` is `"http"`, `is_https` evaluates
+`False`, and `Strict-Transport-Security` is SILENTLY never sent, with no
+error or warning anywhere. This is not a bug in this middleware; it is a
+missing prerequisite: the ASGI server MUST be told to trust and honor the
+proxy's `X-Forwarded-Proto` header and rewrite `scope["scheme"]`
+accordingly. For Uvicorn: run with `--proxy-headers` (and, if the proxy
+isn't on localhost, `--forwarded-allow-ips=<proxy IP or CIDR>`); Uvicorn
+then sets `scope["scheme"] = "https"` itself when
+`X-Forwarded-Proto: https` arrives from a trusted peer. Verify this is
+actually wired up in production by confirming `Strict-Transport-Security`
+is present on a real deployed response, not just in a local dev check
+where the app IS the TLS terminator.
 """
 
 from __future__ import annotations

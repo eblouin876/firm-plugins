@@ -57,7 +57,13 @@ class CORSPolicy:
                 "that is a public, unauthenticated API and does not need this "
                 "component's allowlist model at all."
             )
-        if self.allow_credentials and any(origin.strip() == "" for origin in self.allow_origins):
+        if any(origin.strip() == "" for origin in self.allow_origins):
+            # Rejected unconditionally, not only when allow_credentials=True
+            # -- a blank origin entry is never meaningful (it can't match a
+            # real `Origin` header) regardless of the credentials setting,
+            # so gating this check on allow_credentials only caught the
+            # narrower, credentials-specific case and let a blank entry
+            # slip through silently for a no-credentials policy.
             raise InsecureCORSPolicyError("CORSPolicy origins must not contain a blank entry")
 
     def to_starlette_kwargs(self) -> dict:

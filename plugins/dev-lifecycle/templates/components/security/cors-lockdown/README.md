@@ -74,7 +74,10 @@ raises `InsecureCORSPolicyError` if:
   `allow_credentials` (see "Judgment calls" for why this component is
   stricter than the baseline's literal "never wildcard with credentials"
   rule), or
-- `allow_credentials=True` and any origin entry is blank.
+- any origin entry is blank — **unconditionally, not only when
+  `allow_credentials=True`** (a blank entry can never match a real
+  `Origin` header regardless of the credentials setting, so it's rejected
+  the same way either way).
 
 Defaults beyond the required origins list are minimal: `allow_methods=("GET",
 "HEAD", "POST")`, `allow_headers=("Content-Type", "Authorization")`,
@@ -118,8 +121,9 @@ injection if placed after it.
 ## Testing
 
 `tests/test_core.py` covers every `InsecureCORSPolicyError` trigger
-(wildcard alone, wildcard with credentials, empty allowlist, blank origin
-with credentials), the minimal defaults, and both translation functions'
+(wildcard alone, wildcard with credentials, empty allowlist, a blank
+origin entry both with and without credentials, and a whitespace-only
+origin entry), the minimal defaults, and both translation functions'
 exact output shape. `tests/test_fastapi.py` exercises a real Starlette
 `TestClient` against `add_cors()`-wired app: a preflight from an allowed
 origin gets the correct `Access-Control-Allow-*`/`Max-Age` headers, a

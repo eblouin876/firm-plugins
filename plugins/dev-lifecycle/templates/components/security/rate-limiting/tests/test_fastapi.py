@@ -80,3 +80,32 @@ def test_dependency_variant_does_not_affect_undecorated_routes(fastapi_mod, core
     client.post("/login")
     client.post("/login")  # drains the login-only limiter
     assert client.get("/health").status_code == 200  # unaffected -- different bucket entirely
+
+
+# --- MEDIUM-7: refill_per_second<=0 rejected at construction ---------------
+
+
+def test_dependency_construction_rejects_zero_refill_rate(core_mod, fastapi_mod):
+    import pytest
+
+    store = core_mod.InMemoryBucketStore()
+    with pytest.raises(ValueError):
+        fastapi_mod.make_rate_limit_dependency(store, capacity=1, refill_per_second=0)
+
+
+def test_middleware_construction_rejects_zero_refill_rate(core_mod, fastapi_mod):
+    import pytest
+
+    store = core_mod.InMemoryBucketStore()
+    app = FastAPI()
+
+    @app.get("/")
+    def homepage():
+        return {"ok": True}
+
+    app.add_middleware(fastapi_mod.RateLimitMiddleware, store=store, capacity=1, refill_per_second=0)
+    # Starlette builds the middleware stack (and so instantiates
+    # RateLimitMiddleware) lazily, on first request -- the ValueError from
+    # __init__ surfaces here.
+    with pytest.raises(ValueError):
+        TestClient(app).get("/")

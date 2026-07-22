@@ -49,7 +49,7 @@ def test_middleware_ignores_xff_by_default(django_mod, core_mod):
     )
     factory = RequestFactory()
     # Two requests from the same REMOTE_ADDR but spoofed, different XFF --
-    # without trust_proxy, XFF must be ignored, so both bucket on the same
+    # without trusted_hops, XFF must be ignored, so both bucket on the same
     # REMOTE_ADDR and the second is denied.
     first = factory.get("/", REMOTE_ADDR="203.0.113.9", HTTP_X_FORWARDED_FOR="1.2.3.4")
     second = factory.get("/", REMOTE_ADDR="203.0.113.9", HTTP_X_FORWARDED_FOR="5.6.7.8")
@@ -58,15 +58,44 @@ def test_middleware_ignores_xff_by_default(django_mod, core_mod):
     assert middleware(second).status_code == 429
 
 
-def test_middleware_honors_xff_when_trust_proxy_set(django_mod, core_mod):
+def test_middleware_honors_xff_rightmost_when_trusted_hops_set(django_mod, core_mod):
     store = core_mod.InMemoryBucketStore()
     middleware = django_mod.RateLimitMiddleware(
-        _get_response, store=store, capacity=1, refill_per_second=0.001, trust_proxy=True
+        _get_response, store=store, capacity=1, refill_per_second=0.001, trusted_hops=1
     )
     factory = RequestFactory()
-    first = factory.get("/", REMOTE_ADDR="10.0.0.1", HTTP_X_FORWARDED_FOR="1.2.3.4")
-    second = factory.get("/", REMOTE_ADDR="10.0.0.1", HTTP_X_FORWARDED_FOR="5.6.7.8")
+    # Same proxy REMOTE_ADDR, different RIGHTMOST (trusted) XFF entries ->
+    # isolated buckets keyed on the rightmost entry, not REMOTE_ADDR.
+    first = factory.get("/", REMOTE_ADDR="10.0.0.1", HTTP_X_FORWARDED_FOR="9.9.9.9, 1.2.3.4")
+    second = factory.get("/", REMOTE_ADDR="10.0.0.1", HTTP_X_FORWARDED_FOR="9.9.9.9, 5.6.7.8")
 
-    # Same proxy REMOTE_ADDR, different trusted client IPs -> isolated buckets.
     assert middleware(first).status_code == 200
     assert middleware(second).status_code == 200
+
+
+def test_middleware_spoofed_leftmost_xff_does_not_bypass_the_limit(django_mod, core_mod):
+    """HIGH-3 regression at the middleware level: an attacker varying only
+    the client-controlled leftmost XFF entry must still hit the SAME
+    bucket (and get rate-limited) when trusted_hops=1, since the rightmost
+    (trusted) entry is unchanged."""
+    store = core_mod.InMemoryBucketStore()
+    middleware = django_mod.RateLimitMiddleware(
+        _get_response, store=store, capacity=1, refill_per_second=0.001, trusted_hops=1
+    )
+    factory = RequestFactory()
+    first = factory.get("/", REMOTE_ADDR="10.0.0.1", HTTP_X_FORWARDED_FOR="1.1.1.1, 5.6.7.8")
+    second = factory.get("/", REMOTE_ADDR="10.0.0.1", HTTP_X_FORWARDED_FOR="9.9.9.9, 5.6.7.8")
+
+    assert middleware(first).status_code == 200
+    assert middleware(second).status_code == 429  # same rightmost entry -- same bucket, denied
+
+
+# --- MEDIUM-7: refill_per_second<=0 rejected at construction ---------------
+
+
+def test_construction_rejects_zero_refill_rate(django_mod, core_mod):
+    import pytest
+
+    store = core_mod.InMemoryBucketStore()
+    with pytest.raises(ValueError):
+        django_mod.RateLimitMiddleware(_get_response, store=store, capacity=1, refill_per_second=0)

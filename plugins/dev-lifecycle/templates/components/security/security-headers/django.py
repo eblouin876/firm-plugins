@@ -46,6 +46,27 @@ posture as this component's default, and this middleware overwrites it too
 for consistency regardless. `Content-Security-Policy` and
 `Permissions-Policy` have no Django-native equivalent in 5.2, so there is no
 interplay to manage for those two.
+
+--- Deployment note: HSTS behind a TLS-terminating proxy (MEDIUM-6) ---
+`is_https` (below) comes from `request.is_secure()`, which Django computes
+from `request.META["wsgi.url_scheme"]` UNLESS `SECURE_PROXY_SSL_HEADER` is
+set in `settings.py`. Behind a TLS-terminating proxy/load balancer (ALB,
+nginx, Caddy terminating TLS and forwarding plain HTTP to the app -- the
+common production shape), Django's own WSGI server sees a plain-HTTP
+connection even though the original client used HTTPS:
+`request.is_secure()` returns `False`, and `Strict-Transport-Security` is
+SILENTLY never sent, no error anywhere. This is a missing prerequisite, not
+a bug in this middleware: set
+`SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` in
+`settings.py` so Django trusts the proxy's `X-Forwarded-Proto` header --
+and ONLY do this once the proxy is confirmed to strip/overwrite any
+client-supplied `X-Forwarded-Proto` before forwarding (the same
+proxy-trust caveat rate-limiting's `client_ip_key` documents for
+`X-Forwarded-For`; an untrusted, client-controlled `X-Forwarded-Proto`
+would let a client spoof "I'm on HTTPS" over a genuinely plaintext
+connection). Verify by confirming `Strict-Transport-Security` is present
+on a real deployed response behind the actual proxy, not just in local dev
+where the app IS the TLS terminator.
 """
 
 from __future__ import annotations

@@ -42,6 +42,7 @@ not an app-layer template block.
 - The Stripe-style reference format
 - The replay window
 - Constant-time comparison
+- Fail-closed on an empty or blank secret
 - Never logs a signature or secret value
 - Testing
 - Judgment calls
@@ -126,6 +127,21 @@ enough requests can use to forge a valid signature without knowing the
 secret. `hmac.compare_digest` runs in time that depends only on the length
 of the inputs, not their content.
 
+Before comparing, each candidate is checked against a strict hex charset
+(`[0-9a-fA-F]+`) and skipped (not compared) if it fails — `compare_digest`
+raises `TypeError` for a non-ASCII `str` argument, which would otherwise
+turn a malformed or adversarial `v1=` value into an unhandled 500 instead
+of a clean verification failure.
+
+## Fail-closed on an empty or blank secret
+
+`verify()` raises `WebhookVerificationError` immediately if `secret` is
+empty or all-whitespace, before any HMAC is computed. A missing/blank
+signing secret (e.g. an unset environment variable resolved to `""`) must
+never be treated as "nothing configured, so accept everything" — that
+would fail OPEN on exactly the class of misconfiguration most likely to
+happen silently in a real deployment (an env var that didn't get set).
+
 ## Never logs a signature or secret value
 
 `_core.py` itself never logs anything (verified in
@@ -146,8 +162,14 @@ rejection, expired AND future-timestamp rejection, every
 `parse_stripe_style_header`'s shape (including ignoring an unrelated `v0=`
 scheme), that `hmac.compare_digest` is the actual comparison reached on
 both the pass and fail path (via a monkeypatched spy wrapping the real
-function), and that neither `_core.py`'s logging (there is none) nor any
-exception message ever contains the signature or secret value.
+function), that neither `_core.py`'s logging (there is none) nor any
+exception message ever contains the signature or secret value, an empty or
+blank secret raising `WebhookVerificationError` (including when the header
+carries a signature actually computed with that same empty secret — the
+fail-open regression case), and a non-hex or non-ASCII `v1=` candidate
+being rejected as a clean `SignatureMismatchError` rather than crashing
+`hmac.compare_digest` with `TypeError` (including alongside a valid
+candidate that still matches).
 `tests/test_fastapi.py` and `tests/test_django.py` exercise the same
 valid/tampered/expired/missing-header cases end-to-end through a real
 FastAPI `TestClient` / Django `RequestFactory`, plus that a failure never
@@ -179,6 +201,22 @@ uv run --python 3.13 --with fastapi --with httpx --with pytest --with 'django==5
   `get_secret()` — env var change, or an AWS Secrets Manager value update —
   takes effect on the next request with no redeploy needed to rebuild a
   captured closure.
+- **An empty/blank secret fails closed, checked before anything else in
+  `verify()`.** The alternative (let a blank secret flow into
+  `compute_signature` and simply never match) relies on every
+  legitimate-looking header failing to match by chance — true today, but
+  fragile, and it doesn't fail loudly the moment a deployer's secret
+  actually is missing. An explicit, immediate `WebhookVerificationError`
+  makes a misconfigured secret impossible to mistake for "no valid
+  requests happened to arrive yet."
+- **Non-hex candidates are skipped, not treated as a parse error.** Since
+  Stripe already sends multiple `v1=` candidates during key rotation, and
+  `parse_stripe_style_header` doesn't itself validate candidate shape
+  (kept lenient — see its own docstring, and the existing `v0=` handling
+  it shares this permissiveness with), the safest fix point is right
+  before the one call that can crash: skip a non-hex candidate in the
+  comparison loop rather than reject the whole header, so one malformed
+  candidate never masks a still-valid one elsewhere in the same header.
 - **`compute_signature`/`parse_stripe_style_header` are exposed standalone,
   not just used internally by `verify()`.** `compute_signature` doubles as
   the tool for building a valid signature in a test fixture (used

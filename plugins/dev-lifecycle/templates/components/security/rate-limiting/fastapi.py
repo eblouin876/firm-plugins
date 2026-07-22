@@ -23,10 +23,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 
-def _default_key_func(request: Request, *, trust_proxy: bool) -> str:
+def _default_key_func(request: Request, *, trusted_hops: int) -> str:
     remote_addr = request.client.host if request.client else "unknown"
     forwarded_for = request.headers.get("x-forwarded-for")
-    return _core.client_ip_key(remote_addr, forwarded_for, trust_proxy=trust_proxy)
+    return _core.client_ip_key(remote_addr, forwarded_for, trusted_hops=trusted_hops)
 
 
 def make_rate_limit_dependency(
@@ -35,15 +35,21 @@ def make_rate_limit_dependency(
     capacity: int,
     refill_per_second: float,
     key_func: Callable[[Request], str] | None = None,
-    trust_proxy: bool = False,
+    trusted_hops: int = 0,
 ) -> Callable:
     """Returns a FastAPI dependency for per-route rate limiting, e.g.:
     `@app.post("/login", dependencies=[Depends(make_rate_limit_dependency(
     store, capacity=5, refill_per_second=5/60))])` for a 5-per-minute login
     limit. `key_func`, if passed, receives the raw `Request` (not
-    `trust_proxy` -- bind that with a lambda/partial if a custom key func
-    also needs it) and must return the string key to bucket on."""
-    resolved_key_func = key_func or (lambda request: _default_key_func(request, trust_proxy=trust_proxy))
+    `trusted_hops` -- bind that with a lambda/partial if a custom key func
+    also needs it) and must return the string key to bucket on.
+    `trusted_hops` is threaded straight through to `_core.client_ip_key` --
+    see its docstring; an ALB directly in front of the app is
+    `trusted_hops=1`. Validates `refill_per_second` at construction time
+    (see `_core.validate_refill_rate`) -- a misconfigured limiter fails
+    loudly here, not on whichever request first gets denied."""
+    _core.validate_refill_rate(refill_per_second)
+    resolved_key_func = key_func or (lambda request: _default_key_func(request, trusted_hops=trusted_hops))
 
     async def rate_limit_dependency(request: Request) -> None:
         key = resolved_key_func(request)
@@ -74,13 +80,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         capacity: int,
         refill_per_second: float,
         key_func: Callable[[Request], str] | None = None,
-        trust_proxy: bool = False,
+        trusted_hops: int = 0,
     ) -> None:
+        _core.validate_refill_rate(refill_per_second)
         super().__init__(app)
         self.store = store
         self.capacity = capacity
         self.refill_per_second = refill_per_second
-        self.key_func = key_func or (lambda request: _default_key_func(request, trust_proxy=trust_proxy))
+        self.key_func = key_func or (lambda request: _default_key_func(request, trusted_hops=trusted_hops))
 
     async def dispatch(self, request: Request, call_next):
         key = self.key_func(request)

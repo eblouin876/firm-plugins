@@ -26,6 +26,18 @@ def test_blank_origin_entry_with_credentials_is_rejected(core_mod):
         core_mod.CORSPolicy(allow_origins=("https://app.example.com", ""), allow_credentials=True)
 
 
+def test_blank_origin_entry_without_credentials_is_also_rejected(core_mod):
+    """NIT-10: blank origins are rejected unconditionally, not only under
+    allow_credentials=True."""
+    with pytest.raises(core_mod.InsecureCORSPolicyError):
+        core_mod.CORSPolicy(allow_origins=("https://app.example.com", ""), allow_credentials=False)
+
+
+def test_whitespace_only_origin_entry_is_rejected(core_mod):
+    with pytest.raises(core_mod.InsecureCORSPolicyError):
+        core_mod.CORSPolicy(allow_origins=("https://app.example.com", "   "), allow_credentials=False)
+
+
 def test_valid_explicit_allowlist_constructs(core_mod):
     policy = core_mod.CORSPolicy(
         allow_origins=("https://app.example.com",), allow_credentials=True

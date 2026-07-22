@@ -18,11 +18,49 @@ specifically to skip buffering a response body just to add a header or a
 a COMPLETE response body for later verbatim replay -- the buffering
 `BaseHTTPMiddleware` performs is exactly the work needed here, not
 overhead to avoid. See the component README's "Judgment calls".
+
+--- `principal_getter` is REQUIRED, and this middleware MUST run AFTER auth
+(judgment call -- see the component README's "Principal scoping" section
+for the full rationale) ---
+`IdempotencyMiddleware`/`add_idempotency()` take a REQUIRED
+`principal_getter: Callable[[Request], str | None]` -- there is no default,
+because defaulting to "no principal" would silently reintroduce the exact
+cross-principal replay this middleware exists to prevent (see `_core.py`'s
+module docstring). `principal_getter` receives the raw `Request` and
+returns the caller-identifying string to scope the storage key to (e.g.
+`lambda request: request.state.user_id` after an auth middleware has
+populated `request.state.user_id`), or `None`/empty for a request this
+project does not consider to have an identifiable principal.
+
+Because `principal_getter` reads request state an EARLIER middleware must
+have populated, `IdempotencyMiddleware` MUST be added to the app AFTER
+(meaning: `app.add_middleware()` called BEFORE, since Starlette runs
+middleware in reverse-of-registration order for the request path -- see
+Starlette's own docs) any authentication middleware. Add it last (i.e.
+call `add_idempotency()`/`add_middleware(IdempotencyMiddleware, ...)`
+before any auth middleware registration) so auth actually runs first on
+each request.
+
+**Anonymous-request policy (fail closed, documented, not a silent
+default):** if `principal_getter(request)` returns `None` or an empty
+string, this middleware treats the request EXACTLY as if it had no
+`Idempotency-Key` header at all -- full passthrough, no dedup, no replay,
+no storage write. This is a deliberate default-deny: an anonymous request
+has no stable identity to scope a storage key to, and falling back to a
+single shared "anonymous" namespace would reintroduce cross-client replay
+for every unauthenticated caller, which is the same class of bug this
+whole fix exists to close. A deployer who genuinely needs idempotency
+protection on unauthenticated traffic (e.g. an unauthenticated checkout
+flow) opts in EXPLICITLY, in their own `principal_getter`, by falling back
+to a per-client namespace instead of `None` -- e.g. `lambda request:
+request.state.user_id or f"anon-ip:{request.client.host}"` -- never a
+single fixed string shared by every anonymous caller.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 import _core
 from starlette.applications import Starlette
@@ -54,15 +92,24 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         app,
         *,
         store: _core.IdempotencyStore,
+        principal_getter: Callable[[Request], str | None],
         header_name: str = "Idempotency-Key",
     ) -> None:
         super().__init__(app)
         self.store = store
+        self.principal_getter = principal_getter
         self.header_name = header_name
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         raw_key = request.headers.get(self.header_name)
         if not raw_key:
+            return await call_next(request)
+
+        principal = self.principal_getter(request)
+        if not principal:
+            # Anonymous request under the default fail-closed policy: treat
+            # exactly like "no Idempotency-Key header" -- see this module's
+            # docstring's "Anonymous-request policy" section.
             return await call_next(request)
 
         try:
@@ -77,9 +124,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         # stream -- same guarantee webhook-signature's fastapi.py relies on.
         raw_body = await request.body()
         fingerprint = _core.compute_fingerprint(request.method, request.url.path, raw_body)
+        storage_key = _core.compute_storage_key(principal, key)
 
         try:
-            outcome = _core.check(self.store, key, fingerprint)
+            outcome = _core.check(self.store, storage_key, fingerprint)
         except _core.IdempotencyConflictError as exc:
             logger.warning("idempotency conflict: %s", type(exc).__name__)
             return JSONResponse(
@@ -102,7 +150,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if response.status_code <= _MAX_CACHEABLE_STATUS:
             _core.record_response(
                 self.store,
-                key,
+                storage_key,
                 fingerprint,
                 _core.StoredResponse(
                     status_code=response.status_code,
@@ -115,9 +163,19 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
 
 
 def add_idempotency(
-    app: Starlette, *, store: _core.IdempotencyStore, header_name: str = "Idempotency-Key"
+    app: Starlette,
+    *,
+    store: _core.IdempotencyStore,
+    principal_getter: Callable[[Request], str | None],
+    header_name: str = "Idempotency-Key",
 ) -> None:
-    """Convenience wiring: `add_idempotency(app, store=InMemoryIdempotencyStore())`
-    in place of the two-line `app.add_middleware(IdempotencyMiddleware,
-    store=..., header_name=...)` a caller would otherwise write by hand."""
-    app.add_middleware(IdempotencyMiddleware, store=store, header_name=header_name)
+    """Convenience wiring: `add_idempotency(app,
+    store=InMemoryIdempotencyStore(), principal_getter=...)` in place of the
+    two-line `app.add_middleware(IdempotencyMiddleware, store=...,
+    principal_getter=..., header_name=...)` a caller would otherwise write
+    by hand. `principal_getter` is required -- see `IdempotencyMiddleware`'s
+    module docstring for why there is no default and for the anonymous-
+    request policy."""
+    app.add_middleware(
+        IdempotencyMiddleware, store=store, principal_getter=principal_getter, header_name=header_name
+    )

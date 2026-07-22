@@ -13,8 +13,10 @@ explicit-kwarg override path for direct instantiation (used by this
 component's own tests, and available to a project that wants to construct
 this middleware itself rather than configure it via settings):
 `RATE_LIMIT_CAPACITY` (default 60), `RATE_LIMIT_REFILL_PER_SECOND` (default
-1.0), `RATE_LIMIT_TRUST_PROXY` (default False) -- see `_core.py`'s
-`client_ip_key` docstring for what that last one actually gates.
+1.0), `RATE_LIMIT_TRUSTED_HOPS` (default 0) -- see `_core.py`'s
+`client_ip_key` docstring for what that last one actually gates (0 = ignore
+`X-Forwarded-For`, use the real peer address; an ALB directly in front of
+the app is `RATE_LIMIT_TRUSTED_HOPS = 1`).
 """
 
 from __future__ import annotations
@@ -40,10 +42,10 @@ def _get_default_store() -> _core.BucketStore:
     return _default_store
 
 
-def _default_key_func(request: HttpRequest, *, trust_proxy: bool) -> str:
+def _default_key_func(request: HttpRequest, *, trusted_hops: int) -> str:
     remote_addr = request.META.get("REMOTE_ADDR", "unknown")
     forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-    return _core.client_ip_key(remote_addr, forwarded_for, trust_proxy=trust_proxy)
+    return _core.client_ip_key(remote_addr, forwarded_for, trusted_hops=trusted_hops)
 
 
 class RateLimitMiddleware:
@@ -63,7 +65,7 @@ class RateLimitMiddleware:
         capacity: int | None = None,
         refill_per_second: float | None = None,
         key_func: Callable[[HttpRequest], str] | None = None,
-        trust_proxy: bool | None = None,
+        trusted_hops: int | None = None,
     ) -> None:
         self.get_response = get_response
         self.store = store if store is not None else _get_default_store()
@@ -73,11 +75,12 @@ class RateLimitMiddleware:
             if refill_per_second is not None
             else getattr(settings, "RATE_LIMIT_REFILL_PER_SECOND", 1.0)
         )
-        resolved_trust_proxy = (
-            trust_proxy if trust_proxy is not None else getattr(settings, "RATE_LIMIT_TRUST_PROXY", False)
+        _core.validate_refill_rate(self.refill_per_second)
+        resolved_trusted_hops = (
+            trusted_hops if trusted_hops is not None else getattr(settings, "RATE_LIMIT_TRUSTED_HOPS", 0)
         )
         self.key_func = key_func or (
-            lambda request: _default_key_func(request, trust_proxy=resolved_trust_proxy)
+            lambda request: _default_key_func(request, trusted_hops=resolved_trusted_hops)
         )
 
     def __call__(self, request: HttpRequest) -> HttpResponse:

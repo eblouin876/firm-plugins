@@ -11,6 +11,14 @@ and set `SECURE_CONTENT_TYPE_NOSNIFF = False`, `SECURE_HSTS_SECONDS = 0`,
 `SECURE_REFERRER_POLICY = None` so Django's own middleware stops computing a
 value this component overwrites anyway.
 
+**Deployment note (read before relying on HSTS in production):** if this
+app sits behind a TLS-terminating proxy/load balancer (the common
+production shape), HSTS ships silently NEVER unless the proxy-headers
+prerequisite is wired up — Uvicorn: `--proxy-headers`
+(`--forwarded-allow-ips=...` if the proxy isn't on localhost); Django:
+`SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")`. See the
+component README's "Deployment note" section.
+
 ## Maintenance
 `CSPPolicy().allow(directive, *sources)` is the only sanctioned way to widen
 the default CSP — never edit `_core.py`'s `_DEFAULT_CSP_DIRECTIVES` in place.

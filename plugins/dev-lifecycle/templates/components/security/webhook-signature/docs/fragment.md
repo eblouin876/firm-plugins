@@ -17,4 +17,8 @@ Rotating a provider's signing secret: update the secret via
 per request). During a Stripe secret rotation specifically, Stripe sends
 multiple `v1=` entries in the header for the overlap window — no config
 change needed here either, `parse_stripe_style_header` already checks every
-candidate.
+candidate. An empty/blank secret (e.g. an unset env var) now fails CLOSED
+with `WebhookVerificationError` rather than silently accepting every
+webhook — if verification starts failing for every request after a secret
+rotation, check that `secret_getter()` is actually resolving a non-blank
+value first.
