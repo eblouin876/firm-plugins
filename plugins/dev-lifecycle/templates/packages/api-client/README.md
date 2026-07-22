@@ -5,7 +5,7 @@ needs:
   - shared workspace package consumers: any app importing @repo/api-client (web, mobile) must supply react + @tanstack/react-query themselves (peer dependencies, see "Dep vs peerDep" below)
 exposes:
   - workspace package: @repo/api-client — typed React Query hooks + models generated from an OpenAPI schema
-  - its co-located doc fragment (this file)
+  - its co-located doc fragment: docs/fragment.md (this README is the component's canon doc; the fragment is the narrow slice `just docs-generate` aggregates)
 versions-pinned-to: references/compatibility-matrix.md
 last-verified: 2026-07-22
 provenance: manual
@@ -16,7 +16,7 @@ provenance: manual
 The shared typed API client every frontend/mobile block imports instead of hand-writing `fetch` calls. It is a generated package: React Query hooks and models produced by [orval](https://orval.dev) from an OpenAPI 3.1 schema, layered on a small hand-written `fetch` mutator (`src/mutator.ts`) — no axios. Lives at `templates/packages/api-client/` in this repo; scaffolding materializes it into `<project>/packages/api-client/`, a sibling of `apps/*` under the same pnpm workspace (see the "Materialized-location paths" note below — it affects `tsconfig.json` and `eslint.config.mjs`).
 
 ## Contents
-- Composition contract (v0)
+- Composition contract
 - What it is / isn't
 - How `client-generate` works
 - Configuration
@@ -27,7 +27,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 - Stage 3: swapping in the live schema
 - Testing
 
-## Composition contract (v0)
+## Composition contract
 
 **NEEDS**
 - **Runtime configuration** — `configureApiClient({ baseUrl })`, called once at app startup by the consuming app. Not an env var this package reads itself (see "Configuration" below for why) — unconfigured (or `baseUrl: ""`) resolves to `""`, i.e. same-origin relative URLs against a reverse proxy that forwards API paths to the backend.

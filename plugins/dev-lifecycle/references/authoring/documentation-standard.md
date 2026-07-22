@@ -89,7 +89,7 @@ This is the canonical spec for the anchor-marker pairs `just docs-generate` uses
 
 **Sentinel lifecycle.** The literal id `<layer>/<name>` (used verbatim, not as a placeholder for some real block's name) is reserved as the empty-state sentinel. On a fresh scaffold with no blocks composed in, each aggregating section holds exactly one `<!-- BEGIN block:<layer>/<name> -->` / `<!-- END block:<layer>/<name> -->` pair, showing future block authors and the generator the exact syntax to use. On the first real fill of a section, `just docs-generate` removes the sentinel pair; it is re-created only if every real block is later removed and the section returns to empty. A real block's region must never be named `<layer>/<name>` — that id is permanently reserved for the sentinel.
 
-**Parser guidance.** Match against the full comment line, never a substring search for `block:` — that token also appears in explanatory prose (including in this document and in the payload's own header comment), and a substring match would false-positive on it.
+**Parser guidance.** Match against the full comment line, never a substring search for `block:` — that token also appears in explanatory prose (including in this document and in the payload's own header comment), and a substring match would false-positive on it. Parsers must also be fence-blind: track fenced-code-block state (` ``` `/`~~~`, closing only on a same-or-longer marker of the same character, per CommonMark) and skip every line inside a fence, so a marker-shaped or heading-shaped line quoted inside a code sample is never mistaken for a real one.
 
 **Secrets section specifics.** The `| Secret | Used by | Where to get it |` header row and its `| --- | --- | --- |` separator live outside and above the marker regions, written once by the template itself. A block's Secrets fragment contributes table rows only, inside its own BEGIN/END pair; the generator must not re-emit the header or separator per block.
 
@@ -107,7 +107,7 @@ This is the canonical spec for `docs/fragment.md` — the file a composed block 
 <!-- fragment: block:<layer>/<name> -->
 ```
 
-`<layer>/<name>` matches the same id used in the aggregation markers (e.g. `backend/fastapi`, `packages/api-client`) — the generator uses it to know which id to wrap the fragment's contributed regions in. It must appear exactly once, on the first non-blank line; a missing or malformed header is a malformed-input error.
+`<layer>/<name>` matches the same id used in the aggregation markers (e.g. `backend/fastapi`, `packages/api-client`) — the generator uses it to know which id to wrap the fragment's contributed regions in. It must appear exactly once, on the first non-blank line; a missing or malformed header is a malformed-input error. The literal id `<layer>/<name>` is reserved for the empty-state sentinel (see "Sentinel lifecycle" above); a real fragment declaring it is malformed input.
 
 **Sections.** After the header, the fragment holds zero or more of the following `##` sections, each at most once, in any order: `## Setup`, `## Deployment`, `## Maintenance`, `## Secrets`. A section absent from the fragment contributes nothing to that README section for this block — the generator does not emit an empty region for it.
 

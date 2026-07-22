@@ -38,6 +38,10 @@ const VALID_FRAGMENT_SECTIONS = new Set(SECTION_NAMES);
 // (and references/authoring/documentation-standard.md's copy of the same body).
 // These are re-emitted verbatim whenever a section has zero contributing
 // fragments, so the zero-fragment skeleton round-trips as a no-op.
+// NOT auto-verified: kept in sync by hand for now — a real id<->directory
+// cross-check (tracked deferral N2) and a three-way sentinel byte-sync test
+// against README.md.tmpl + canon (tracked deferral N3) are both deferred
+// until the stack stages settle layer naming; until then, edit all three by hand.
 const SENTINEL_INNER = {
   Setup: [
     "<!-- No blocks composed yet. `just docs-generate` fills this region with",
@@ -65,6 +69,47 @@ const BEGIN_RE = /^<!--\s+BEGIN\s+block:(\S+)\s+-->$/;
 const END_RE = /^<!--\s+END\s+block:(\S+)\s+-->$/;
 const FRAGMENT_HEADER_RE = /^<!--\s+fragment:\s+block:(\S+)\s+-->$/;
 const FRAGMENT_SECTION_RE = /^##\s+(.+?)\s*$/;
+const RESERVED_SENTINEL_ID = "<layer>/<name>";
+const SECRETS_SEPARATOR_RE = /^\s*\|(?:\s*:?-{1,}:?\s*\|)+\s*$/;
+const SECRETS_HEADER_ROW_RE = /^\s*\|\s*Secret\s*\|/i;
+
+// CommonMark-ish fenced-code-block marker: up to 3 leading spaces, then a run
+// of 3+ backticks or 3+ tildes, then the rest of the line (an info string on
+// open, must be blank on close).
+const FENCE_MARKER_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Returns a per-line classifier that tracks fenced-code-block state across
+ * calls (one tracker instance per document/scan). Call it once per line, in
+ * order; it returns true for the fence's opening marker line, every line of
+ * fence content, and the fence's closing marker line — i.e. every line that
+ * must be excluded from heading/marker matching because it is "inside a
+ * fence" in the CommonMark sense. A fence only closes with the same
+ * character and a marker at least as long as the one that opened it.
+ */
+function createFenceTracker() {
+  let fenceChar = null;
+  let fenceLen = 0;
+  return function isFenceLine(line) {
+    const m = FENCE_MARKER_RE.exec(line);
+    if (fenceChar === null) {
+      if (!m) return false;
+      const char = m[1][0];
+      const info = m[2];
+      // A backtick fence's info string may not itself contain a backtick.
+      if (char === "`" && info.includes("`")) return false;
+      fenceChar = char;
+      fenceLen = m[1].length;
+      return true;
+    }
+    if (m && m[1][0] === fenceChar && m[1].length >= fenceLen && m[2].trim() === "") {
+      fenceChar = null;
+      fenceLen = 0;
+      return true;
+    }
+    return true;
+  };
+}
 
 class DocsAggregateError extends Error {}
 
@@ -103,6 +148,13 @@ function parseFragment(filePath, raw) {
     );
   }
   const id = headerMatch[1];
+  if (id === RESERVED_SENTINEL_ID) {
+    throw malformed(
+      `fragment header in ${filePath} declares "block:${RESERVED_SENTINEL_ID}" — that id is ` +
+        `permanently reserved for the empty-state sentinel (see documentation-standard.md, ` +
+        `"Sentinel lifecycle") and must never be used by a real fragment`,
+    );
+  }
 
   const sections = {};
   let current = null;
@@ -112,11 +164,31 @@ function parseFragment(filePath, raw) {
     if (Object.prototype.hasOwnProperty.call(sections, current)) {
       throw malformed(`duplicate "## ${current}" section in fragment ${filePath}`);
     }
+    if (current === "Secrets") {
+      for (const line of buf) {
+        if (SECRETS_SEPARATOR_RE.test(line)) {
+          throw malformed(
+            `"## Secrets" in ${filePath} contains a table separator row ("${line.trim()}") — ` +
+              `fragments contribute rows only; the header and separator are written once by ` +
+              `the root README template (see documentation-standard.md, "Secrets section specifics")`,
+          );
+        }
+        if (SECRETS_HEADER_ROW_RE.test(line)) {
+          throw malformed(
+            `"## Secrets" in ${filePath} contains a header row ("${line.trim()}") — ` +
+              `fragments contribute rows only; the header and separator are written once by ` +
+              `the root README template (see documentation-standard.md, "Secrets section specifics")`,
+          );
+        }
+      }
+    }
     sections[current] = buf.join("\n");
   };
 
+  const fenceTracker = createFenceTracker();
   for (const line of lines.slice(idx + 1)) {
-    const headingMatch = FRAGMENT_SECTION_RE.exec(line);
+    const inFence = fenceTracker(line);
+    const headingMatch = inFence ? null : FRAGMENT_SECTION_RE.exec(line);
     if (headingMatch) {
       finishCurrent();
       const name = headingMatch[1];
@@ -191,9 +263,11 @@ function locateRegionSpan(bodyLines, sectionName) {
   const seenIds = new Map();
   let firstBegin = -1;
   let lastEnd = -1;
+  const fenceTracker = createFenceTracker();
 
   for (let i = 0; i < bodyLines.length; i++) {
     const line = bodyLines[i];
+    if (fenceTracker(line)) continue; // inside (or delimiting) a fenced code block — never a marker
     const beginMatch = BEGIN_RE.exec(line);
     const endMatch = END_RE.exec(line);
 
@@ -267,12 +341,16 @@ function buildRegionLines(sectionName, fragments) {
 
 /** Replace one "## <name>" section's region span in-place within the full README lines. */
 function regenerateSection(lines, sectionName, fragments) {
-  const startIdx = lines.findIndex((l) => l === `## ${sectionName}`);
+  // Trailing-whitespace tolerant, symmetric with FRAGMENT_SECTION_RE's
+  // `\s*$` — still an exact match on the heading text itself.
+  const startIdx = lines.findIndex((l) => l.replace(/\s+$/, "") === `## ${sectionName}`);
   if (startIdx === -1) {
     throw malformed(`README is missing the required "## ${sectionName}" heading`);
   }
   let endIdx = lines.length;
+  const boundaryFenceTracker = createFenceTracker();
   for (let i = startIdx + 1; i < lines.length; i++) {
+    if (boundaryFenceTracker(lines[i])) continue; // a "##"-shaped line inside a fence never ends the section
     if (/^##\s/.test(lines[i])) {
       endIdx = i;
       break;
@@ -290,17 +368,30 @@ function regenerateSection(lines, sectionName, fragments) {
   return [...lines.slice(0, startIdx + 1), ...newBody, ...lines.slice(endIdx)];
 }
 
+/**
+ * The file's dominant line ending, used only to choose what we write back —
+ * all reading/matching is EOL-agnostic (/\r?\n/) so a CRLF checkout never
+ * misparses. CRLF wins only if strictly more line endings are CRLF than
+ * lone-LF; otherwise (including no newlines at all) LF is used.
+ */
+function detectDominantEol(text) {
+  const crlfCount = (text.match(/\r\n/g) || []).length;
+  const lfCount = (text.match(/(?<!\r)\n/g) || []).length;
+  return crlfCount > lfCount ? "\r\n" : "\n";
+}
+
 function regenerateReadme(originalText, fragments) {
-  let lines = originalText.split("\n");
+  const eol = detectDominantEol(originalText);
+  let lines = originalText.split(/\r?\n/);
   for (const sectionName of SECTION_NAMES) {
     lines = regenerateSection(lines, sectionName, fragments);
   }
-  return lines.join("\n");
+  return lines.join(eol);
 }
 
 function summarizeDiff(oldText, newText) {
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
+  const oldLines = oldText.split(/\r?\n/);
+  const newLines = newText.split(/\r?\n/);
 
   let start = 0;
   const maxStart = Math.min(oldLines.length, newLines.length);
