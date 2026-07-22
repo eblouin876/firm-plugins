@@ -7,6 +7,8 @@ sources:
   - https://pypi.org/project/fastapi/
   - https://pypi.org/project/pydantic/
   - https://pypi.org/project/pydantic-settings/
+  - https://pypi.org/project/asyncpg/
+  - https://pypi.org/project/uvicorn/
   - https://www.sqlalchemy.org/blog/2026/04/16/sqlalchemy-2.1.0b2-released/
   - https://alembic.sqlalchemy.org/en/latest/changelog.html
   - https://www.djangoproject.com/download/
@@ -71,6 +73,8 @@ Re-verify against official release notes/registries before bumping any line — 
 | pydantic-settings | **2.14.x** (2.14.2) | Current stable (PyPI, Jun 19 2026); `BaseSettings` was split out of Pydantic core at v2 (see `references/backend/pydantic.md`'s "Settings & secrets"). Requires `pydantic>=2.7.0` — compatible with this matrix's Pydantic 2.13.x pin above; the two version lines float independently. Used by `templates/components/backend/settings/`. |
 | SQLAlchemy | **2.0.x** (2.0.51) | The 2.0 style (`Mapped[]`, `select()`) is the baseline every block writes to. 2.1 is beta-only (`0b2`) as of this pin — do not adopt pre-GA. |
 | Alembic | **1.18.x** | Tracks SQLAlchemy 2.0; current stable. |
+| asyncpg | **0.31.x** (0.31.0) | Current stable (PyPI, Nov 24 2025). The async PostgreSQL driver `db-session/`'s `configure_engine()` expects behind a `postgresql+asyncpg://` DATABASE_URL — see that component's fail-fast scheme guard. Added by Stage 3 Step 2 (#26), which is the first block to actually need a real async DB driver rather than just the ORM layer. |
+| uvicorn | **0.51.x**, `uvicorn[standard]` extra | Current stable (PyPI, Jul 8 2026). ASGI server this block's `app.main:app` runs under; the `standard` extra pulls in `uvloop`/`httptools` for production-grade performance. Added by Stage 3 Step 2 (#26) alongside asyncpg, for the same reason. |
 
 ## Backend — Django track
 | Dep | Pinned line | Why this line |
