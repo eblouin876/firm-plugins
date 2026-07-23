@@ -9,6 +9,7 @@ from django.urls import path
 from rest_framework.routers import SimpleRouter
 
 from core.views import (
+    AdminPingView,
     HealthCheckView,
     ItemViewSet,
     LoginView,
@@ -44,6 +45,10 @@ urlpatterns = [
         name="auth-request-password-reset",
     ),
     path("auth/reset-password", ResetPasswordView.as_view(), name="auth-reset-password"),
+    # Stage 5d (#46): the RBAC admin example -- see core/views.py's
+    # AdminPingView for what it demonstrates and why it needs no new auth
+    # logic of its own.
+    path("admin/ping", AdminPingView.as_view(), name="admin-ping"),
     *router.urls,
 ]
 

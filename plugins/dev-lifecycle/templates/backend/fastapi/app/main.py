@@ -83,7 +83,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from app.api.routers import auth, health, items
+from app.api.routers import admin, auth, health, items
 from app.core.config import Settings, get_settings
 from app.core.db import configure_engine
 from app.core.errors import AppError, ErrorBody, ErrorCode, ErrorDetail, ErrorEnvelope
@@ -388,6 +388,10 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
     app.include_router(health.router)
     app.include_router(items.router)
     app.include_router(auth.router)
+    # Stage 5d (#46): the RBAC admin example -- see app/api/routers/admin.py's
+    # own module docstring for what it demonstrates and why it needs no new
+    # auth logic of its own.
+    app.include_router(admin.router)
 
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
     app.add_exception_handler(AppError, _app_error_handler)
@@ -427,8 +431,40 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
     # Access-Control-Allow-Origin header is ever sent, so a browser blocks
     # every cross-origin JS request against this app regardless — the same
     # practical outcome as an explicit empty-allowlist policy would give.
+    #
+    # Stage 5d (#46): web cookie mode needs the BROWSER to actually attach
+    # credentials (the refresh + CSRF cookies) and the two extra headers it
+    # sends (`X-CSRF-Token`, `X-Auth-Mode`) on a CROSS-ORIGIN request — none
+    # of that works without `allow_credentials=True` and those headers in
+    # `allow_headers`. Gated behind `resolved_settings.
+    # auth_cookie_mode_enabled` (secure default `False` — see that field's
+    # own docstring) AND `resolved_settings.cors_allowed_origins` being a
+    # non-empty EXPLICIT allowlist: this is the SAME `if` this call already
+    # guards on, so `allow_credentials=True` can never be constructed
+    # without a real, explicit origin list behind it — never `*`, which
+    # `CORSPolicy.__post_init__`'s `InsecureCORSPolicyError` guard already
+    # forbids outright, credentials or not (see that guard's own docstring).
+    # **Invariant, stated plainly: credentials require explicit origins.**
+    # This flag only ever WIDENS what's already a validated, non-wildcard
+    # allowlist — it can't be used to smuggle a wildcard-plus-credentials
+    # configuration past that guard, because there is no path here that
+    # skips constructing `CORSPolicy` in the first place.
     if resolved_settings.cors_allowed_origins:
-        add_cors(app, CORSPolicy(allow_origins=tuple(resolved_settings.cors_allowed_origins)))
+        policy = CORSPolicy(allow_origins=tuple(resolved_settings.cors_allowed_origins))
+        if resolved_settings.auth_cookie_mode_enabled:
+            # Rebuilt (not mutated -- CORSPolicy is frozen) from the SAME
+            # validated `allow_origins`, extending `policy.allow_headers`
+            # (its own already-resolved default, `("Content-Type",
+            # "Authorization")`, read off the instance above rather than
+            # duplicated here as a literal that could silently drift from
+            # `cors_lockdown/_core.py`'s own default) with the two headers
+            # cookie mode's SPA sends cross-origin.
+            policy = CORSPolicy(
+                allow_origins=policy.allow_origins,
+                allow_credentials=True,
+                allow_headers=(*policy.allow_headers, "X-CSRF-Token", "X-Auth-Mode"),
+            )
+        add_cors(app, policy)
 
     # Call 2 of 4: rate limiting. One InMemoryBucketStore per app instance
     # (per-process, per rate_limiting/_core.py's own documented limitation —

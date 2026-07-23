@@ -7,7 +7,7 @@ exposes:
   - workspace package: @repo/api-client — typed React Query hooks + models generated from an OpenAPI schema
   - its co-located doc fragment: docs/fragment.md (this README is the component's canon doc; the fragment is the narrow slice `just docs-generate` aggregates)
 versions-pinned-to: references/compatibility-matrix.md
-last-verified: 2026-07-22
+last-verified: 2026-07-23
 provenance: manual
 -->
 
@@ -20,6 +20,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 - What it is / isn't
 - How `client-generate` works
 - Configuration
+- Cookie mode (web)
 - Bundler-only package
 - The mutator's response shape
 - Dep vs peerDep
@@ -71,6 +72,28 @@ configureApiClient({ baseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "" });
 ```
 
 A trailing slash on `baseUrl` is trimmed automatically. Leaving it unconfigured (or passing `baseUrl: ""`) resolves every request to a same-origin relative URL — a sane default behind a reverse proxy that forwards API paths to the backend, and handy for local dev.
+
+## Cookie mode (web)
+By **default** the client is in **bearer mode**: it sends whatever `Authorization` header the caller sets and touches no cookies — the right shape for Expo/React Native, which keeps its tokens in SecureStore. Mobile and every existing `configureApiClient({ baseUrl })` call site are unchanged.
+
+A **browser** consumer can opt into **cookie mode** to match the backend's web auth posture (see `references/wiring/auth-end-to-end.md` for the full end-to-end flow), where the refresh token lives in an `HttpOnly` cookie the JS can't read and only the short-lived access token sits in memory:
+
+```ts
+// Vite (web) — apps/web/src/main.tsx, before rendering
+import { configureApiClient } from "@repo/api-client";
+configureApiClient({
+  baseUrl: import.meta.env.VITE_API_BASE_URL ?? "",
+  cookieMode: true, // opt in — defaults to false (bearer)
+});
+```
+
+`cookieMode: true` turns on three things in `src/mutator.ts`, and nothing else changes about the mutator's response shape:
+
+1. **`credentials: "include"` on every request** — so the browser attaches the backend's cookies: the `HttpOnly; Secure; SameSite=Lax; Path=/auth` `refresh_token` cookie and the non-HttpOnly `csrf_token` cookie. (Both are path-scoped by the backend, so including credentials globally is harmless on non-auth paths.)
+2. **`X-Auth-Mode: cookie` on `POST /auth/login`** — this header is how the backend selects cookie mode at login; absent or any other value means bearer. In cookie mode login returns `refresh_token: ""` in the body (the real refresh JWT is set as the `HttpOnly` cookie instead).
+3. **Double-submit CSRF echo on `POST /auth/refresh` and `POST /auth/logout`** — the mutator reads the non-HttpOnly `csrf_token` cookie from `document.cookie` and sends its value back as the `X-CSRF-Token` header, which the backend checks equals the cookie. It won't clobber a caller-supplied `X-CSRF-Token`.
+
+**Security note.** The split is deliberate: the **access token stays in memory** and travels in the `Authorization` header (same as bearer mode); the **refresh token is never readable by JS** (it's in the `HttpOnly` cookie), which is what neutralizes token theft via XSS. CSRF is the tradeoff a cookie brings — the browser attaches the refresh cookie automatically on any same-site request — so the state-changing cookie-auth endpoints are protected by the **double-submit** check: an attacker's forged cross-site request can't read the `csrf_token` cookie to echo it in the header, and `SameSite=Lax` blocks it besides. Reading `csrf_token` needs `document`, so the echo is a **safe no-op under SSR / React Native** (no `document`) — correct, because those are bearer-mode targets that never receive a CSRF cookie. Cookie mode also requires the backend's CORS to name **explicit origins with credentials enabled — never a `*` wildcard** (a wildcard origin is incompatible with `credentials: "include"`); see `references/security/secure-baseline.md` and the auth component's README.
 
 ## Bundler-only package
 `dist/` (this package's build output) uses extensionless relative imports, matching what orval generates — not the explicit `.js`-suffixed imports Node's own ESM loader (`NodeNext` resolution) requires. That's intentional (see "Materialized-location paths" below) and it means this package only resolves correctly under a bundler with Node-style extensionless resolution — Vite, Metro, webpack — not `node dist/index.js` directly. Don't add a build step to emit extensions; consume it from a bundler-based app as designed.

@@ -287,6 +287,27 @@ class Settings(AppSettings):
         "thing to have floating around than an unconsumed verify link.",
     )
 
+    # --- Web cookie mode (Stage 5d, #46): app/main.py's create_app() reads
+    # this to decide whether the CORS policy it constructs allows
+    # credentials (cookies) and the two extra request headers cookie mode
+    # needs cross-origin -- see that call site's own comment for the
+    # "credentials require explicit origins" invariant this flag composes
+    # with, never replaces. ------------------------------------------------
+    auth_cookie_mode_enabled: bool = Field(
+        default=False,
+        description="SECURE DEFAULT: False -- a bearer-only deployment "
+        "stays credential-free at the CORS layer (allow_credentials=False, "
+        "the CORSPolicy default) even if this app's /auth/login-refresh-"
+        "logout handlers themselves already support an X-Auth-Mode: cookie "
+        "caller (they do, unconditionally -- see app/api/routers/auth.py). "
+        "Set True only for a deployment that actually serves a browser SPA "
+        "using cookie mode cross-origin -- it widens the CORS policy "
+        "(allow_credentials=True, plus X-CSRF-Token/X-Auth-Mode in "
+        "allow_headers), which is meaningless -- and safe to leave off -- "
+        "for a mobile-only or same-origin deployment. See app/main.py's "
+        "create_app() CORS construction for exactly what this flips.",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

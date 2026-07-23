@@ -1,22 +1,26 @@
 """FastAPI wiring for the auth component: the `HTTPBearer` scheme, a
 `build_get_current_principal(get_auth_service)` dependency FACTORY that
 resolves the bearer token into `_core.AccessClaims`, a `require_roles(...)`
-dependency factory for role-gated routes, and the `AUTH_ERROR_HTTP`
+dependency factory for role-gated routes, the `AUTH_ERROR_HTTP`
 exception -> (status, code-string) table an app's own exception handler
 uses to render `_core.AuthError` (and this file's `InsufficientRole`) as
-its `ErrorEnvelope`. Canon: references/security/secure-baseline.md
-("Tokens (JWT/session) validated fully").
+its `ErrorEnvelope`, and (Stage 5d, #46) thin Starlette glue over
+`_cookies.py`'s framework-neutral cookie/CSRF transport — `set_auth_cookies`,
+`clear_auth_cookies`, `read_refresh_cookie`, `enforce_csrf` — for a project
+that authenticates the cookie-based (rather than bearer-token) way. Canon:
+references/security/secure-baseline.md ("Tokens (JWT/session) validated
+fully").
 
-Drop-in: copy this whole directory (this file, `_core.py`) into
-app/core/security/auth/ (add an `__init__.py` re-exporting the public
+Drop-in: copy this whole directory (this file, `_core.py`, `_cookies.py`)
+into app/core/security/auth/ (add an `__init__.py` re-exporting the public
 surface — see rate-limiting/fastapi.py's own header note for the identical
 pattern, and this app's `app/core/security/rate_limiting/__init__.py` for
-how that re-export is shaped). This file imports its core logic with a
-bare `import _core` — a flat, directory-local sibling import, same as
-every other framework adapter in this catalog (see security-headers/
-fastapi.py's fuller rationale) — so this file, `_core.py`, and the
-`__init__.py` a project adds must be vendored together, never this file
-alone.
+how that re-export is shaped). This file imports its core logic with bare
+`import _core`/`import _cookies` — flat, directory-local sibling imports,
+same as every other framework adapter in this catalog (see security-headers/
+fastapi.py's fuller rationale) — so this file, `_core.py`, `_cookies.py`,
+and the `__init__.py` a project adds must be vendored together, never this
+file alone.
 
 Starlette/FastAPI only (`starlette`, `fastapi`) — deliberately **no
 `app.*` import anywhere in this file**, matching `_core.py`'s own "no
@@ -47,6 +51,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import _core
+import _cookies
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -88,6 +93,7 @@ AUTH_ERROR_HTTP: dict[type[Exception], tuple[int, str]] = {
     _core.EmailAlreadyExists: (409, "conflict"),
     _core.InvalidSingleUseToken: (401, "unauthenticated"),
     InsufficientRole: (403, "permission_denied"),
+    _cookies.CsrfValidationError: (403, "permission_denied"),
 }
 
 
@@ -162,3 +168,70 @@ def require_roles(
         return claims
 
     return dependency
+
+
+# ---------------------------------------------------------------------------
+# Cookie/CSRF transport glue (thin Starlette wrapper over `_cookies.py`)
+# ---------------------------------------------------------------------------
+#
+# Everything below is THIN glue: all cookie-flag/CSRF-check logic itself
+# lives in the framework-neutral `_cookies.py`, imported above. These
+# functions exist only to map `_cookies.py`'s framework-neutral dicts and
+# plain-string reads onto Starlette's own `Response`/`Request` surface —
+# they are called by a project's own `/auth/login`, `/auth/refresh`, and
+# `/auth/logout` route handlers (a later agent's job — see this
+# component's README's "Cookie/CSRF transport" section), never by
+# anything in this file itself.
+
+
+def set_auth_cookies(response: Any, *, refresh_value: str, csrf_value: str, max_age: int) -> None:
+    """Sets BOTH the refresh-token and CSRF-token cookies on `response`
+    (a Starlette/FastAPI `Response`, or anything exposing the same
+    `set_cookie(**kwargs)` method) — called after a successful login or
+    refresh, once the caller has a new `refresh_value` (the raw refresh
+    JWT `_core.TokenService.mint_refresh`/`AuthService.refresh` just
+    minted) and a new `csrf_value` (from `_cookies.generate_csrf_token()`).
+    `max_age` is shared by both cookies and passed straight through to
+    `_cookies.build_refresh_cookie_kwargs`/`build_csrf_cookie_kwargs` —
+    typically the refresh token's own TTL in seconds, so neither cookie
+    outlives the token it's paired with."""
+    response.set_cookie(**_cookies.build_refresh_cookie_kwargs(refresh_value, max_age))
+    response.set_cookie(**_cookies.build_csrf_cookie_kwargs(csrf_value, max_age))
+
+
+def clear_auth_cookies(response: Any) -> None:
+    """Clears BOTH the refresh-token and CSRF-token cookies on `response`
+    — called on logout, via `_cookies.clear_refresh_cookie_kwargs`/
+    `clear_csrf_cookie_kwargs` (each `max_age=0`, deleting the cookie
+    immediately)."""
+    response.set_cookie(**_cookies.clear_refresh_cookie_kwargs())
+    response.set_cookie(**_cookies.clear_csrf_cookie_kwargs())
+
+
+def read_refresh_cookie(request: Any) -> str | None:
+    """Reads the raw refresh-token cookie off `request.cookies` (a
+    Starlette/FastAPI `Request`'s own mapping) — `None` if it was never
+    set or has already been cleared. The caller (a `/auth/refresh` or
+    `/auth/logout` route handler) is responsible for deciding what a
+    missing cookie means (typically raising `_core.InvalidToken` itself,
+    the same exception `AuthService.refresh`/`resolve_access` raise for
+    any other invalid-token case — this function does not raise on a
+    missing cookie itself, it only reads)."""
+    return request.cookies.get(_cookies.REFRESH_COOKIE_NAME)
+
+
+def enforce_csrf(request: Any) -> None:
+    """Reads the `csrf_token` cookie and the `X-CSRF-Token` header off
+    `request` (a Starlette/FastAPI `Request`) and runs
+    `_cookies.verify_double_submit` against them — raises
+    `_cookies.CsrfValidationError` (-> 403 `permission_denied`, see
+    `AUTH_ERROR_HTTP` above) on any double-submit failure. Called by a
+    cookie-authenticated route handler BEFORE acting on the request body —
+    never on the bearer-token path (`build_get_current_principal`/
+    `require_roles` above), which has no CSRF exposure to begin with; see
+    `_cookies.py`'s own module docstring for why the two paths are
+    treated differently."""
+    _cookies.verify_double_submit(
+        csrf_cookie=request.cookies.get(_cookies.CSRF_COOKIE_NAME),
+        csrf_header=request.headers.get("X-CSRF-Token"),
+    )

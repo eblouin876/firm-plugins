@@ -556,6 +556,46 @@ def build_auth_service() -> AuthService:
     )
 
 
+async def seed_admin(email: str, password: str) -> UserRecord:
+    """Creates a user with `roles=["admin"]` (Stage 5d, #46) -- the real
+    admin-provisioning path (run by hand via `manage.py seed_admin`, see
+    `core/management/commands/seed_admin.py`, or by a test fixture), and
+    deliberately the ONLY place in this app that ever constructs a user
+    with an elevated role. Mirrors `app/core/security/auth/stores.py`'s
+    identically-named FastAPI counterpart function-for-function.
+
+    **Why this exists, and why `POST /auth/register` never accepts a
+    caller-supplied `roles` field.** `RegisterRequestSerializer`
+    (`core/serializers.py`) has no `roles` field, and `RegisterView`
+    (`core/views.py`) always calls `AuthService.register` with its default
+    `roles=()` -- a client that could pass its own `roles` on the wire
+    could self-grant `"admin"` on registration, a straightforward
+    privilege-escalation bug. This function is the ONE place `DjangoUserStore.
+    create(..., roles=["admin"])` is ever called with a non-empty role list
+    from this app's own code -- an operator (or a test's own setup fixture)
+    invokes it directly, server-side; it is never reachable from any HTTP
+    request body.
+
+    Bypasses `AuthService.register` itself (rather than calling it with
+    `roles=["admin"]`, even though that parameter exists) for the SAME
+    reason `app/core/security/auth/stores.py`'s own `seed_admin` bypasses
+    it: mirroring `AuthService.register`'s own shape (hash the password via
+    the process-wide `PasswordService`, `UserStore.create`) by hand keeps
+    this the one obvious place a non-empty role list is ever constructed,
+    rather than threading an elevated-role argument through the same
+    general-purpose method `RegisterView` calls with a caller-supplied
+    email/password. No explicit commit needed here, unlike the FastAPI
+    counterpart's own `await session.commit()` -- `DjangoUserStore.create`
+    (`.acreate()`) is already durable the instant it returns, per this
+    module's own "async ORM ... already durable" posture documented on
+    `mark_email_verified` above; there is no session/flush boundary on this
+    track for a script-context caller (no enclosing HTTP request) to need
+    to close out."""
+    normalized = email.strip().lower()
+    password_hash = get_password_service().hash(password)
+    return await DjangoUserStore().create(normalized, password_hash, roles=["admin"])
+
+
 # ---------------------------------------------------------------------------
 # Email seam (Stage 5c, #45): DjangoEmailSender -- ONE class, unlike
 # backend/fastapi's ConsoleEmailSender/SmtpEmailSender split

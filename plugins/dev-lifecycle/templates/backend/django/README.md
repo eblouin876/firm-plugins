@@ -706,6 +706,208 @@ down when this verification pass started, unlike Stage 5b's pass, which
 found it already online and left it running) — no DB artifacts, `.venv`,
 or `uv.lock` committed.
 
+### Conformance / Web cookie mode + RBAC admin example (Stage 5d, #46)
+
+**`GET /admin/ping` is now real and in the STRICT wire-surface
+comparison.** `tests/test_schema_conformance.py`'s `_PENDING_PARITY_OPS`
+(added when `backend/fastapi`'s own Stage 5d extended the frozen contract
+with this one new operation — see that constant's own module-level
+comment history) is emptied back to the empty set again, kept declared
+(not deleted), the same posture every prior stage's own transition
+documents. `test_wire_surface_is_identical_to_the_frozen_contract` passes
+with `admin_ping` fully compared against `openapi.json` — **zero new
+`_KNOWN_DIVERGENCES` entries were needed**: the 200 (`HealthStatus`), 401,
+and 403 (`ErrorEnvelope`) responses and the `security: [{"HTTPBearer":
+[]}]` declaration match byte-for-byte. `test_operation_id_and_component_
+name_parity_report` confirms `operationId` parity stays FULL across all 16
+documented operations now (15 from Stage 5c plus this one).
+
+**`AdminPingView` (`core/views.py`) adds no new auth logic of its own** —
+`permission_classes = [has_role("admin")]` is the entire gate.
+`has_role(*roles)` (new `core/security/auth/permissions.py`) is a factory
+returning a `BasePermission` subclass whose `has_permission` builds an
+`AuthService` via the existing `build_auth_service()` and bridges into the
+vendored, DRF-free `require_roles(request, auth_service, *roles)`
+(`core/security/auth/django.py`) with `asgiref.sync.async_to_sync(...)` —
+the SAME sync-view/async-service bridge every other view in this file
+already uses. `InvalidToken` (→ 401) and `InsufficientRole` (→ 403)
+propagate uncaught to `core/exceptions.py`'s existing `AuthError` branch;
+`has_permission` itself never returns `False`, so DRF's own un-enveloped
+403 path is never reached — see that file's own module docstring for the
+full rationale, including WHY this DRF-specific permission class lives in
+its own app-code file rather than the vendored, `rest_framework`-free
+`django.py` (that file's own docstring already says a DRF permission class
+belongs in app code, not there).
+
+**Admin provisioning**: `core.security.auth.stores.seed_admin(email,
+password)` — mirroring `app/core/security/auth/stores.py`'s identically-
+named FastAPI function — is the ONE place this app ever constructs a user
+with `roles=["admin"]` (via `DjangoUserStore.create`); `POST /auth/
+register` has no `roles` field on the wire and cannot self-grant it. New
+`manage.py seed_admin <email> [--password ...]` management command wraps
+it for operator use (interactive `getpass` prompt if `--password` is
+omitted; a friendly `CommandError` — not a raw traceback — on a duplicate
+email, caught via the DB-level unique constraint the same way
+`AuthService.register`'s own race-condition fallback already relies on).
+
+**Web cookie mode**: `LoginView`/`RefreshView`/`LogoutView` (`core/
+views.py`) gain cookie-mode behavior mirroring `app/api/routers/auth.py`
+handler-for-handler, entirely over the already-vendored `core/security/
+auth/django.py` glue (`set_auth_cookies`/`clear_auth_cookies`/
+`read_refresh_cookie`/`enforce_csrf`) — login reads `request.headers.get(
+"X-Auth-Mode") == "cookie"` (default/anything-else stays bearer, byte-
+unchanged) and sets both cookies with `refresh_token=""` in the body;
+refresh/logout are dual-source on `read_refresh_cookie(request)`
+presence, never a client-declared header, with `enforce_csrf(request)`
+running BEFORE the cookie's token is ever used on the cookie path.
+**No wire-schema change**: `X-Auth-Mode`/`X-CSRF-Token` are read directly
+off `request.headers`, never a declared serializer field, and an empty
+string still satisfies `TokenResponseSerializer.refresh_token`'s required
+`str` — the strict conformance gate stays green unmodified by this half of
+the stage.
+
+**CORS**: new `AUTH_COOKIE_MODE_ENABLED` setting (`config/settings.py`,
+default `False`) gates `CORS_ALLOW_CREDENTIALS=True` plus `x-csrf-token`/
+`x-auth-mode` in `CORS_ALLOW_HEADERS` — only when `CORS_ALLOWED_ORIGINS`
+also resolves to a non-empty, explicit (never wildcard) allowlist, the
+identical invariant `app/main.py`'s own `auth_cookie_mode_enabled`-gated
+CORS construction enforces on the FastAPI track. `CORSPolicy`'s own
+`InsecureCORSPolicyError` guard makes a wildcard-plus-credentials
+configuration impossible to construct regardless of this flag's value —
+verified directly (`CORS_ALLOWED_ORIGINS="*" AUTH_COOKIE_MODE_ENABLED=true`
+still raises at settings-import time).
+
+**`tests/test_cookie_auth.py`** (15 tests, `@pytest.mark.django_db
+(transaction=True)`) ports every scenario `backend/fastapi`'s own
+`tests/test_cookie_auth.py` exercises: cookie login sets an HttpOnly+
+Secure+SameSite=lax+Path=/auth refresh cookie and a non-HttpOnly csrf
+cookie (asserted off the real, rendered `Set-Cookie` text via `http.
+cookies.Morsel.output()` — see the test module's own docstring for why
+that representation, not a raw boolean read off the Morsel's reserved
+keys, is what reliably distinguishes "deliberately absent" from
+"explicitly false" for a flag Django's `set_cookie` only ever writes when
+truthy), body `refresh_token == ""`; bearer login unchanged (real token,
+no `Set-Cookie` at all); a non-`"cookie"` `X-Auth-Mode` value stays bearer
+too; cookie refresh missing/blank/mismatched `X-CSRF-Token` → 403
+`permission_denied`, valid → 200 + both cookies rotated (values change);
+replaying the rotated-out refresh cookie → 401 (reuse detection fires on
+the cookie path exactly as the bearer path already proves); bearer
+refresh with no CSRF header → 200, unchanged; cookie logout missing CSRF
+→ 403 before the cookie is ever cleared, valid CSRF → 204 + both cookies
+cleared (`Max-Age=0`) + idempotent; admin ping for a `seed_admin()`-
+provisioned, verified admin → 200, an authenticated non-admin → 403, an
+unauthenticated caller → 401; `seed_admin`'s own return value round-trips
+through `uuid.UUID` with `roles == ("admin",)`.
+
+**A genuine Django-`test.Client`-vs-httpx fidelity gap, documented rather
+than silently worked around**: unlike httpx's cookie jar (which, like a
+real browser, DELETES a cookie once it receives a `Max-Age=0` clear),
+Django's `test.Client.request()` unconditionally does `self.cookies.
+update(response.cookies)` — merging the CLEARED (empty-value, `Max-Age=0`)
+Morsel into the jar rather than removing the key. A follow-up request
+therefore still finds a (now-empty, but present) `refresh_token` cookie,
+so `read_refresh_cookie`'s plain `.get()` still takes the cookie path and
+(correctly) demands a `X-CSRF-Token` the idempotency test doesn't send.
+This is a TEST-CLIENT fidelity gap, not a real behavioral one — a genuine
+browser honors `Max-Age=0` exactly like httpx's jar already does — so
+`test_cookie_logout_clears_both_cookies_and_204s_and_is_idempotent`
+explicitly `del`s both cookie keys from the jar before its second,
+idempotency-proving logout call, modeling what a real browser's cookie
+jar would already have done on its own; see that test's own inline
+comment for the full derivation.
+
+**Real PostgreSQL 16 verification, over real HTTP against a live
+database.** A fresh scratch role + same-named database (the sandbox's
+already-running PostgreSQL 16 cluster, left online afterward — it was
+found already online, matching Stage 5b's own "found online, left
+running" posture, not Stage 5c's "found down, stopped after"), `manage.py
+migrate --no-input` under `DJANGO_SETTINGS_MODULE=config.settings` (the
+`0003 (head)` schema, no new migration this stage), `AUTH_REQUIRE_EMAIL_
+VERIFICATION=false` for this run (email verification was already proven
+against real PG16 in the Stage 5c transcript above; this run isolates
+cookie mode and RBAC instead of re-proving that gate — mirroring `backend/
+fastapi`'s own identical choice for its Stage 5d PG16 pass), then a full
+`rest_framework.test.APIClient` round-trip against the REAL connection:
+
+```
+== register (regular user) ==
+201 {'id': '9b42e2c6-b9b0-4dd9-afbe-58d0cd03d053', 'email': 'pg16cookieverify@example.com'}
+== cookie login ==
+200 {'access_token': 'eyJhbGciOi...<truncated>', 'refresh_token': '', 'token_type': 'bearer'}
+refresh Set-Cookie: refresh_token=eyJhbGciOi...<truncated>; expires=Thu, 06 Aug 2026 16:08:48 GMT; HttpOnly; Max-Age=1209600; Path=/auth; SameSite=lax; Secure
+csrf Set-Cookie: csrf_token=PX-8ufTsXNrtyvCWbWp4ObJOKkSvaliRUoI6wu2xYOA; expires=Thu, 06 Aug 2026 16:08:48 GMT; Max-Age=1209600; Path=/auth; SameSite=lax; Secure
+COOKIE FLAGS VERIFIED (HttpOnly+Secure+SameSite=lax+Path=/auth on refresh; non-HttpOnly on csrf)
+== cookie refresh WITHOUT X-CSRF-Token (expect 403) ==
+403 {'error': {'code': 'permission_denied', 'message': 'CSRF validation failed: the X-CSRF-Token header is missing, blank, or does not match the csrf_token cookie.', 'details': None}}
+== cookie refresh WITH valid X-CSRF-Token (expect 200, rotate) ==
+200 {'access_token': 'eyJhbGciOi...<truncated>', 'refresh_token': '', 'token_type': 'bearer'}
+BOTH COOKIES ROTATED (refresh + csrf values changed)
+== replay the ROTATED-OUT refresh cookie (expect 401, whole family revoked) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Authentication failed.', 'details': None}}
+== cookie logout WITHOUT X-CSRF-Token (expect 403, cookies untouched) ==
+403 {'error': {'code': 'permission_denied', 'message': 'CSRF validation failed: the X-CSRF-Token header is missing, blank, or does not match the csrf_token cookie.', 'details': None}}
+== cookie logout WITH valid X-CSRF-Token (expect 204, both cookies cleared) ==
+204
+BOTH COOKIES CLEARED
+== cookie logout again, jar cleared to model a real browser honoring Max-Age=0 (idempotent, falls to bearer path, expect 204) ==
+204
+== bearer login (unchanged -- no X-Auth-Mode header) ==
+200 {'access_token': 'eyJhbGciOi...<truncated>', 'refresh_token': '<redacted, non-empty>', 'token_type': 'bearer'}
+BEARER LOGIN UNCHANGED (real refresh_token in body, no Set-Cookie)
+== admin ping: seeded admin (expect 200) ==
+200 {'status': 'ok'}
+== admin ping: authenticated non-admin (expect 403) ==
+403 {'error': {'code': 'permission_denied', 'message': 'This action requires a role the current principal does not have.', 'details': None}}
+== admin ping: unauthenticated (expect 401) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Authentication failed.', 'details': None}}
+
+ALL PG16 STAGE 5D ASSERTIONS PASSED
+```
+
+Direct-DB proof (a fresh `psql` connection, independent of the HTTP
+client above):
+
+```
+== users ==
+ id                                   | email                          | roles
+ 103de31c-1661-4ba7-b8c2-8a4bf507e22f | pg16adminverify@example.com    | ["admin"]
+ 9b42e2c6-b9b0-4dd9-afbe-58d0cd03d053 | pg16cookieverify@example.com   | []
+
+== refresh_tokens for the regular user (5 rows, 4 families) ==
+ family_id                        | used | revoked
+ 213a249a8d5b4cd3947f120a7b16b1a5 | t    | t   <- cookie-login family, tip row (rotated out, then replayed)
+ 213a249a8d5b4cd3947f120a7b16b1a5 | f    | t   <- cookie-login family, rotated tip (never itself reused -- still revoked, whole-family kill)
+ 8f80aba5f21441df98ff36832590a9f2 | f    | t   <- SECOND cookie-login family (the one used for the logout half) -- revoked via cookie logout, no rotation involved
+ 0658378b2b7d4c429bcc1d193fa4156b | f    | f   <- bearer-login family -- untouched
+ d6e5920f71854c218b667dc154d420e8 | f    | f   <- bearer-login family (admin-ping non-admin check's own login) -- untouched
+```
+
+Two independent proofs in one transcript: (1) `AuthService.refresh`'s
+whole-family reuse-detection revocation fires identically on the cookie
+path as it already does on the bearer path (`213a249a...`: BOTH rows
+`revoked = true`, including the tip that was never itself replayed); (2)
+`AuthService.logout`'s revocation also reaches a family that was NEVER
+rotated at all (`8f80aba5...`: a single row, `used = false` but `revoked
+= true` — the cookie-mode logout call revoked it directly). The two
+plain bearer-login families (`0658378b...`, `d6e5920f...`) are untouched
+in both columns — proving neither kind of revocation reaches a caller's
+other, unrelated sessions. The admin row's `roles` column round-trips as
+Postgres `json` `["admin"]` — `seed_admin()` is the real, working
+admin-provisioning path against a live database, not just the hermetic
+sqlite suite.
+
+`manage.py spectacular --format openapi-json` was also re-run under
+`config.settings` (real-DB, a syntactically-valid but unreachable
+`DATABASE_URL` after the scratch database was already dropped) and diffed
+byte-identical against the hermetic-`config.settings_test` export,
+confirming — same as every prior stage's own pass — that schema
+generation genuinely never touches the database. Scratch role/database
+dropped afterward; the cluster itself was left running (found already
+online). Verification script written ad hoc for this run (not committed —
+`tests/test_cookie_auth.py`, hermetic against sqlite, is the durable,
+CI-running proof of this exact behavior; this transcript is the one-time
+real-PG16 confirmation).
+
 ## Security
 
 ### Security composition (Stage 4 Step 3, #27)
@@ -789,6 +991,12 @@ refuses to build an empty-or-wildcard allowlist — an unconfigured
 environment gets no cross-origin access at all, never an accidental
 allow-all. Never `*` combined with credentials — `CORSPolicy`'s constructor
 makes that configuration impossible to construct in the first place.
+**`AUTH_COOKIE_MODE_ENABLED`** (Stage 5d, #46; default `False`) is a
+SEPARATE, explicit opt-in gating whether that policy also allows
+credentials (cookies) and the `X-CSRF-Token`/`X-Auth-Mode` headers web
+cookie mode's SPA sends cross-origin — see "Conformance / Web cookie mode
++ RBAC admin example (Stage 5d, #46)" above for the full mechanics and
+verification.
 
 **Rate limiting** reads `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND`
 / `RATE_LIMIT_TRUSTED_HOPS` from env, with the component's own defaults

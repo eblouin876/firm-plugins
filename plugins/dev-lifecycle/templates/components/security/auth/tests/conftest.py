@@ -1,8 +1,18 @@
-"""Loads this component's `_core.py` under a private module name without
-ever putting this directory on `sys.path` -- see security-headers/
-tests/conftest.py's docstring for the full rationale (this component
-mirrors the same load-by-file-path pattern rate-limiting/db-session/etc.
-use throughout this catalog).
+"""Loads this component's `_core.py`, `_cookies.py`, `fastapi.py`, and
+`django.py` under private module names without ever putting this
+directory on `sys.path` -- see security-headers/tests/conftest.py's
+docstring for the full rationale (this component mirrors the same
+load-by-file-path pattern rate-limiting/db-session/etc. use throughout
+this catalog). Load order matters: `_core` first (no sibling deps),
+then `_cookies` (imports `_core` via a bare `import _core`, resolved
+against `sys.modules["_core"]` since that's the exact name it was
+registered under below), then `fastapi`/`django` (each imports both
+`_core` and `_cookies` the same bare-sibling-import way). `fastapi.py`
+needs the real `fastapi` package installed to import (`fastapi.Depends`,
+`fastapi.security.HTTPBearer`) -- see this component's README's
+"Testing" section for the `uv run --with fastapi ...` invocation this
+requires; `django.py` needs no `django` package import at all (see that
+file's own module docstring), so loading it costs nothing extra.
 
 Also provides the shared test fixtures every test module in this
 directory needs: in-memory fakes implementing `UserStore` and
@@ -33,11 +43,29 @@ def _load(module_name: str, filename: str) -> ModuleType:
 
 
 core = _load("_core", "_core.py")
+cookies = _load("_cookies", "_cookies.py")
+fastapi_adapter = _load("auth_fastapi_adapter", "fastapi.py")
+django_adapter = _load("auth_django_adapter", "django.py")
 
 
 @pytest.fixture(scope="session")
 def core_mod() -> ModuleType:
     return core
+
+
+@pytest.fixture(scope="session")
+def cookies_mod() -> ModuleType:
+    return cookies
+
+
+@pytest.fixture(scope="session")
+def fastapi_mod() -> ModuleType:
+    return fastapi_adapter
+
+
+@pytest.fixture(scope="session")
+def django_mod() -> ModuleType:
+    return django_adapter
 
 
 # ---------------------------------------------------------------------------

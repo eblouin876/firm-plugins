@@ -477,6 +477,54 @@ class SqlAlchemyLockoutStore:
         await self._session.commit()
 
 
+# ---------------------------------------------------------------------------
+# Admin seeding (Stage 5d, #46) -- the ONLY sanctioned way an "admin" role
+# ever gets attached to a user in this app.
+# ---------------------------------------------------------------------------
+
+
+async def seed_admin(session: AsyncSession, email: str, password: str) -> UserRecord:
+    """Creates a user with `roles=["admin"]` -- the real admin-provisioning
+    path (run by hand, by a one-off script, or by a test fixture), and
+    deliberately the ONLY place in this app that ever constructs a user
+    with an elevated role.
+
+    **Why this exists, and why `POST /auth/register` never accepts a
+    caller-supplied `roles` field.** `RegisterRequest`
+    (`app/schemas/auth.py`) has no `roles` field, and `AuthService.register`
+    always calls `UserStore.create(normalized, password_hash, roles=())`
+    with an empty tuple (`app/core/security/auth/_core.py`) -- a client
+    that could pass its own `roles` on the wire could self-grant `"admin"`
+    on registration, a straightforward privilege-escalation bug. This
+    function is the ONE place `SqlAlchemyUserStore.create(..., roles=
+    ["admin"])` is ever called with a non-empty role list from this app's
+    own code -- an operator (or a test's own setup fixture) invokes it
+    directly, server-side; it is never reachable from any HTTP request
+    body.
+
+    Mirrors `AuthService.register`'s own shape (normalize the email, hash
+    the password via the process-wide `PasswordService`, `UserStore.
+    create`) rather than delegating to `AuthService.register` itself and
+    then separately promoting the row to admin after the fact -- there is
+    no `UserStore` method to change roles post-creation (see `UserStore`'s
+    own `Protocol` in `_core.py`: `create` is the only place `roles` is
+    ever set), so building the row with the right roles from the start,
+    exactly once, is the simpler and more obviously-correct construction.
+
+    **Commits immediately** -- unlike `SqlAlchemyUserStore.create` itself
+    (which only flushes, deferring to `get_db()`'s end-of-request commit
+    boundary -- see that store's own class docstring), because this
+    function has no enclosing HTTP request to ride a commit boundary on:
+    it is called from a script or a test fixture's own setup, outside any
+    request lifecycle, so it must make the seeded admin durable itself
+    before returning."""
+    normalized = email.strip().lower()
+    password_hash = get_password_service().hash(password)
+    user = await SqlAlchemyUserStore(session).create(normalized, password_hash, roles=["admin"])
+    await session.commit()
+    return user
+
+
 def utc_now() -> datetime:
     """The single `now` callable this app passes to BOTH `TokenService`
     and `AuthService` (see `_core.AuthService.__init__`'s own docstring:

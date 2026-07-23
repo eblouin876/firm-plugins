@@ -4,21 +4,29 @@
 Copy the `auth/` directory into `app/core/security/auth/` (or, on the
 Django track, `core/security/auth/`). Ships `_core.py` — a
 framework-neutral `PasswordService` (Argon2id) + `TokenService` (PyJWT
-HS256 access/refresh) + `AuthService` orchestrator — `fastapi.py` — the
-`HTTPBearer` scheme, `build_get_current_principal` (a dependency factory
-resolving a bearer token to `AccessClaims`), `require_roles` (role-gated
-dependency factory), and `AUTH_ERROR_HTTP` (exception type -> `(status,
-ErrorCode string)` table) — and `django.py` — the Django/DRF equivalent:
-`resolve_principal(request, auth_service)` and `require_roles(request,
-auth_service, *roles)` (both plain awaited helpers, since Django/DRF has
-no `Depends()`-style auto-invoked injection point to compose against),
-`InsufficientRole`, and the identically-shaped `AUTH_ERROR_HTTP`. Copy
-only the adapter file(s) your track actually uses (a FastAPI project never
-vendors `django.py`, and vice versa) alongside `_core.py`. Add an
-`__init__.py` re-exporting the vendored files' public surface — see
-backend/fastapi's `app/core/security/auth/__init__.py` (FastAPI track) or
-backend/django's `core/security/auth/__init__.py` (Django track) for the
-exact shape.
+HS256 access/refresh) + `AuthService` orchestrator — `_cookies.py`
+(Stage 5d, #46) — a SECOND framework-neutral file, stdlib-only, holding
+the double-submit-cookie CSRF transport (`CsrfValidationError`,
+`generate_csrf_token`, `verify_double_submit`, and the pure cookie-kwarg
+builders) a project opts into ONLY if it authenticates via cookies rather
+than bearer tokens — `fastapi.py` — the `HTTPBearer` scheme,
+`build_get_current_principal` (a dependency factory resolving a bearer
+token to `AccessClaims`), `require_roles` (role-gated dependency factory),
+`AUTH_ERROR_HTTP` (exception type -> `(status, ErrorCode string)` table),
+and thin cookie/CSRF glue over `_cookies.py` (`set_auth_cookies`,
+`clear_auth_cookies`, `read_refresh_cookie`, `enforce_csrf`) — and
+`django.py` — the Django/DRF equivalent: `resolve_principal(request,
+auth_service)` and `require_roles(request, auth_service, *roles)` (both
+plain awaited helpers, since Django/DRF has no `Depends()`-style
+auto-invoked injection point to compose against), `InsufficientRole`, the
+identically-shaped `AUTH_ERROR_HTTP`, and the SAME DRF-free cookie/CSRF
+glue surface as `fastapi.py`'s own. Copy `_core.py` always, `_cookies.py`
+only if the project uses the cookie transport, and only the adapter
+file(s) your track actually uses (a FastAPI project never vendors
+`django.py`, and vice versa). Add an `__init__.py` re-exporting the
+vendored files' public surface — see backend/fastapi's `app/core/security/
+auth/__init__.py` (FastAPI track) or backend/django's `core/security/auth/
+__init__.py` (Django track) for the exact shape.
 
 Vendoring `_core.py`+the framework adapter is NOT the whole wiring job — a
 project still needs, as its OWN (non-vendored) app code: `UserStore`/

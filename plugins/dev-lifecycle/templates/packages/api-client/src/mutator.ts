@@ -23,6 +23,29 @@
  * Unconfigured (or configured with `baseUrl: ""`) resolves to same-origin
  * relative URLs, a sane default behind a reverse proxy that forwards API
  * paths to the backend.
+ *
+ * Web cookie mode (Stage 5d): OFF by default — the default is BEARER mode,
+ * so mobile/Expo (tokens in SecureStore, `Authorization: Bearer`) and every
+ * existing call site are byte-for-byte unchanged. When a browser consumer
+ * opts in with `configureApiClient({ baseUrl, cookieMode: true })`, three
+ * things switch on for the cookie/CSRF web seam the backend's cookie mode
+ * expects (see `references/wiring/auth-end-to-end.md`):
+ *   1. every request sends `credentials: "include"`, so the browser
+ *      attaches the backend's `HttpOnly` `refresh_token` cookie (scoped
+ *      `Path=/auth`) and the non-HttpOnly `csrf_token` cookie;
+ *   2. the login request (`POST /auth/login`) carries `X-Auth-Mode: cookie`,
+ *      which is how the backend selects cookie mode at login (absent/any
+ *      other value = bearer);
+ *   3. the two cookie-authenticated state-changing auth calls
+ *      (`POST /auth/refresh`, `POST /auth/logout`) echo the `csrf_token`
+ *      cookie's value back as the `X-CSRF-Token` header — the client half
+ *      of the backend's double-submit CSRF check.
+ * The access token still lives only in the consumer's memory and travels in
+ * the `Authorization` header exactly as in bearer mode; only the refresh
+ * token moves into the `HttpOnly` cookie. Reading `csrf_token` requires
+ * `document.cookie`, so the CSRF echo is a no-op under SSR / any runtime
+ * without a `document` (React Native, Node) — safe because those runtimes
+ * are bearer-mode targets that never set a CSRF cookie in the first place.
  */
 
 export type ApiClientResponse<T = unknown> = {
@@ -36,18 +59,45 @@ type ApiClientConfig = {
    * slash(es) are trimmed. Empty string (the default) resolves to
    * same-origin relative URLs. */
   baseUrl: string;
+  /** Opt into the browser cookie/CSRF web seam (default `false` = bearer
+   * mode). See this module's header and the README's "Cookie mode (web)"
+   * section. */
+  cookieMode?: boolean;
 };
 
-let config: ApiClientConfig = { baseUrl: "" };
+let config: Required<ApiClientConfig> = { baseUrl: "", cookieMode: false };
 
 /**
  * Configure the shared api-client. Call once at app startup, before any
  * generated hook fires a request — see the README's "Configuration"
  * section for per-consumer wiring. Replaces the config wholesale, so it
- * also doubles as a reset (e.g. between test cases).
+ * also doubles as a reset (e.g. between test cases). `cookieMode` is
+ * optional and defaults to `false`, so existing `configureApiClient({
+ * baseUrl })` call sites keep bearer-mode behavior unchanged.
  */
 export const configureApiClient = (next: ApiClientConfig): void => {
-  config = { baseUrl: next.baseUrl.replace(/\/+$/, "") };
+  config = {
+    baseUrl: next.baseUrl.replace(/\/+$/, ""),
+    cookieMode: next.cookieMode ?? false,
+  };
+};
+
+// Cookie-authenticated auth endpoints. Login is where the mode is selected
+// (`X-Auth-Mode: cookie`); refresh/logout are the state-changing calls the
+// backend guards with double-submit CSRF when the refresh cookie is present.
+const AUTH_LOGIN_PATH = "/auth/login";
+const AUTH_CSRF_PATHS = new Set(["/auth/refresh", "/auth/logout"]);
+
+/**
+ * Read the non-HttpOnly `csrf_token` cookie the backend set alongside the
+ * `HttpOnly` refresh cookie. Returns `null` (a safe no-op for the caller)
+ * when there is no `document` — SSR, React Native, or any non-browser
+ * runtime — or when the cookie is simply absent.
+ */
+const readCsrfCookie = (): string | null => {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]*)/);
+  return match?.[1] != null ? decodeURIComponent(match[1]) : null;
 };
 
 export const customFetch = async <T>(url: string, options: RequestInit = {}): Promise<T> => {
@@ -56,7 +106,35 @@ export const customFetch = async <T>(url: string, options: RequestInit = {}): Pr
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${config.baseUrl}${url}`, { ...options, headers });
+  const init: RequestInit = { ...options, headers };
+
+  if (config.cookieMode) {
+    // Attach the browser's cookies (refresh_token / csrf_token) to every
+    // request; both are path-scoped by the backend, so this is harmless on
+    // non-auth paths and required on the /auth/* ones.
+    init.credentials = "include";
+
+    // Match on the request PATH only (strip any query/hash) — `url` is the
+    // generated path, never carrying the configured baseUrl.
+    const path = url.split(/[?#]/)[0] ?? url;
+    const method = (options.method ?? "GET").toUpperCase();
+
+    if (path === AUTH_LOGIN_PATH) {
+      // Select cookie mode at login. Absent/any-other value = bearer.
+      headers.set("X-Auth-Mode", "cookie");
+    } else if (
+      AUTH_CSRF_PATHS.has(path) &&
+      method !== "GET" &&
+      method !== "HEAD" &&
+      !headers.has("X-CSRF-Token")
+    ) {
+      // Double-submit echo: send the csrf_token cookie back as a header.
+      const csrf = readCsrfCookie();
+      if (csrf != null) headers.set("X-CSRF-Token", csrf);
+    }
+  }
+
+  const response = await fetch(`${config.baseUrl}${url}`, init);
 
   const contentType = response.headers.get("content-type") ?? "";
   const data = contentType.includes("application/json")

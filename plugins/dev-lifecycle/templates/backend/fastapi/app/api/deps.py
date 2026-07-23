@@ -26,7 +26,13 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.security.auth import AccountService, AuthService, EmailSender, build_get_current_principal
+from app.core.security.auth import (
+    AccountService,
+    AuthService,
+    EmailSender,
+    build_get_current_principal,
+    require_roles,
+)
 from app.core.security.auth.stores import (
     AuditAuthEventSink,
     SqlAlchemyRefreshTokenStore,
@@ -134,3 +140,13 @@ async def get_account_service(
 
 
 get_current_principal = build_get_current_principal(get_auth_service)
+
+# Stage 5d (#46): the RBAC admin example's gate -- `require_roles(...)` is
+# the vendored component's generic role-AND-set dependency factory
+# (`app/core/security/auth/fastapi.py`), bound here once, the SAME way
+# `get_current_principal` immediately above is bound once against
+# `get_auth_service`. `app/api/routers/admin.py`'s `GET /admin/ping` is the
+# one route that depends on this today; any future admin-only route reuses
+# this SAME dependency rather than calling `require_roles(...)` again at
+# each call site.
+require_admin = require_roles(get_current_principal, "admin")

@@ -109,4 +109,123 @@ describe("customFetch", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.com/health", expect.anything());
   });
+
+  describe("cookie mode (web seam)", () => {
+    // Small helpers to read what the mutator actually put on the wire.
+    const initOf = (fetchMock: ReturnType<typeof vi.fn>) => {
+      const call = fetchMock.mock.calls[0];
+      expect(call).toBeDefined();
+      return (call as unknown[])[1] as RequestInit;
+    };
+    const headersOf = (fetchMock: ReturnType<typeof vi.fn>) =>
+      new Headers(initOf(fetchMock).headers);
+
+    it("sends credentials:'include' on every request when cookie mode is on", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/health");
+
+      expect(initOf(fetchMock).credentials).toBe("include");
+    });
+
+    it("sends X-Auth-Mode: cookie on the login request in cookie mode", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email: "a@b.com", password: "x" }),
+      });
+
+      expect(headersOf(fetchMock).get("X-Auth-Mode")).toBe("cookie");
+    });
+
+    it("echoes the csrf_token cookie as X-CSRF-Token on refresh and logout", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      // Non-HttpOnly CSRF cookie the browser would expose to document.cookie.
+      vi.stubGlobal("document", { cookie: "csrf_token=csrf-abc123; other=1" });
+
+      for (const path of ["/auth/refresh", "/auth/logout"]) {
+        const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        await customFetch(path, { method: "POST", body: JSON.stringify({ refresh_token: "" }) });
+
+        expect(headersOf(fetchMock).get("X-CSRF-Token")).toBe("csrf-abc123");
+        expect(initOf(fetchMock).credentials).toBe("include");
+      }
+    });
+
+    it("URL-decodes the csrf_token cookie value before echoing it", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      vi.stubGlobal("document", { cookie: "csrf_token=a%2Fb%2Bc" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/refresh", { method: "POST", body: "{}" });
+
+      expect(headersOf(fetchMock).get("X-CSRF-Token")).toBe("a/b+c");
+    });
+
+    it("does not echo X-CSRF-Token on non-auth paths, even in cookie mode", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      vi.stubGlobal("document", { cookie: "csrf_token=csrf-abc123" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/items", { method: "POST", body: "{}" });
+
+      expect(headersOf(fetchMock).has("X-CSRF-Token")).toBe(false);
+    });
+
+    it("is a safe no-op for the CSRF echo when there is no document (SSR / React Native)", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      // No document stub — typeof document === "undefined".
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/refresh", { method: "POST", body: "{}" });
+
+      // Still cookie mode (credentials included) but no header and no throw.
+      expect(headersOf(fetchMock).has("X-CSRF-Token")).toBe(false);
+      expect(initOf(fetchMock).credentials).toBe("include");
+    });
+
+    it("bearer mode (the default) sends none of the cookie-mode signals", async () => {
+      // Default config: cookieMode omitted.
+      configureApiClient({ baseUrl: "" });
+      vi.stubGlobal("document", { cookie: "csrf_token=csrf-abc123" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/login", { method: "POST", body: "{}" });
+      await customFetch("/auth/refresh", { method: "POST", body: "{}" });
+
+      const loginInit = (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+      const loginHeaders = new Headers(loginInit.headers);
+      const refreshInit = (fetchMock.mock.calls[1] as unknown[])[1] as RequestInit;
+      const refreshHeaders = new Headers(refreshInit.headers);
+      expect(loginHeaders.has("X-Auth-Mode")).toBe(false);
+      expect(refreshHeaders.has("X-CSRF-Token")).toBe(false);
+      expect(refreshInit.credentials).toBeUndefined();
+    });
+
+    it("does not clobber a caller-supplied X-CSRF-Token header", async () => {
+      configureApiClient({ baseUrl: "", cookieMode: true });
+      vi.stubGlobal("document", { cookie: "csrf_token=cookie-value" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/logout", {
+        method: "POST",
+        body: "{}",
+        headers: { "X-CSRF-Token": "caller-value" },
+      });
+
+      expect(headersOf(fetchMock).get("X-CSRF-Token")).toBe("caller-value");
+    });
+  });
 });

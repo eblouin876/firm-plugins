@@ -1,7 +1,7 @@
 <!--
 library: secure-baseline
 versions-covered: "OWASP Top 10:2025, OWASP ASVS 5.0"
-last-verified: 2026-07-22
+last-verified: 2026-07-23
 provenance: manual
 sources:
   - https://owasp.org/Top10/
@@ -59,6 +59,7 @@ Set on every HTTP response by default (middleware, not per-route opt-in):
 - Hash passwords with a strong adaptive algorithm (bcrypt/argon2); never store or log plaintext or reversible "encryption" of a password.
 - Tokens (JWT/session) validated fully — signature, expiry, audience/issuer — with sensible expiry and secure rotation/logout. Prefer short-lived access tokens with refresh over long-lived static tokens.
 - Check ownership/scope on every ID-addressed resource (`/orders/{id}` must confirm the order belongs to the caller) — this is the IDOR class, the #1 OWASP category two cycles running.
+- **Cookie sessions ⇒ CSRF defense; bearer tokens ⇒ none needed.** If auth rides an ambient credential the browser attaches automatically (a session/refresh cookie), a state-changing request needs CSRF protection: a **double-submit cookie** (a non-`HttpOnly` CSRF token echoed back in a request header the server checks equals the cookie) and/or `SameSite=Lax`/`Strict`, plus the refresh/session cookie itself `HttpOnly; Secure; SameSite=Lax` with a scoped `Path`. A token the app attaches *explicitly* in an `Authorization` header (bearer/SecureStore, the mobile default) is not ambient and needs no CSRF. Cookie-credentialed CORS must name explicit origins with `Allow-Credentials: true` — never a `*` wildcard (a wildcard is incompatible with `credentials: "include"`). Full end-to-end pattern: `references/wiring/auth-end-to-end.md`.
 
 ## Rate limiting & lockout
 - Rate-limit authentication endpoints (login, password reset, token refresh) and any expensive or abuse-prone action. Backoff/lockout on repeated auth failures for a given account or IP.

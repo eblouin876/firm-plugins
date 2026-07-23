@@ -48,7 +48,17 @@ from rest_framework.views import APIView
 
 from core.contract.errors import NotFoundError
 from core.models import Item
-from core.security.auth import AuthService, InvalidToken, resolve_principal
+from core.security.auth import (
+    AuthService,
+    InvalidToken,
+    clear_auth_cookies,
+    enforce_csrf,
+    generate_csrf_token,
+    read_refresh_cookie,
+    resolve_principal,
+    set_auth_cookies,
+)
+from core.security.auth.permissions import has_role
 from core.security.auth.stores import (
     AuditAuthEventSink,
     DjangoRefreshTokenStore,
@@ -516,21 +526,52 @@ class ResetPasswordView(APIView):
 
 class LoginView(APIView):
     """`POST /auth/login` (Stage 5b, #44; verification + lockout + audit
-    gate Stage 5c, #45) — real handler. Delegates to `AuthService.login`
-    — raises `InvalidCredentials` (-> 401 `unauthenticated`) identically
-    for an unknown email, a wrong password, an account locked out from
-    too many recent failures, AND (as of Stage 5c) an account whose email
-    isn't verified yet — all four are wire-BYTE-IDENTICAL, uncaught here
-    (see that exception's own docstring on the deliberate
-    user-enumeration defense, and `_core.AuthService.login`'s own
-    docstring for the full 6-step state machine this now runs through
-    `_build_login_auth_service()`'s wiring).
+    gate Stage 5c, #45; web cookie mode Stage 5d, #46) — real handler.
+    Delegates to `AuthService.login` — raises `InvalidCredentials` (-> 401
+    `unauthenticated`) identically for an unknown email, a wrong password,
+    an account locked out from too many recent failures, AND (as of Stage
+    5c) an account whose email isn't verified yet — all four are
+    wire-BYTE-IDENTICAL, uncaught here (see that exception's own docstring
+    on the deliberate user-enumeration defense, and `_core.AuthService.
+    login`'s own docstring for the full 6-step state machine this now runs
+    through `_build_login_auth_service()`'s wiring).
 
     Stage 5c: `auth_service` is now built via `_build_login_auth_service()`
     (this module, above) instead of the plain `build_auth_service()` every
     other `/auth/*` view still uses — the SAME `lockout`/
     `require_verification`/`events` wiring `backend/fastapi`'s
-    `app/api/deps.py:get_auth_service` applies to its own `AuthService`."""
+    `app/api/deps.py:get_auth_service` applies to its own `AuthService`.
+
+    Stage 5d web cookie mode: `request.headers.get("X-Auth-Mode") ==
+    "cookie"` switches this call into cookie mode — read directly off
+    `request.headers` (present on a DRF `Request` the identical way it is
+    on a plain `HttpRequest` — see `core/security/auth/django.py`'s own
+    module docstring), deliberately NOT a declared serializer field: this
+    keeps it out of `LoginRequestSerializer`'s documented shape, so this
+    stage's wire-contract diff is exactly the new `/admin/ping` operation,
+    not a field addition on an existing one — the byte-for-byte same
+    reasoning `app/api/routers/auth.py`'s own `login` handler documents
+    for reading it off `request.headers` rather than a declared FastAPI
+    `Header(...)` parameter. Anything else (absent header, any other
+    value) is BEARER mode — the exact, unchanged prior behavior; mode is
+    NEVER inferred from any other signal, matching the locked design. No
+    CSRF check on login either way: login is credential-authenticated
+    (email+password), and there is no cookie yet for a CSRF check to
+    protect.
+
+    Cookie mode still returns the SAME `TokenResponseSerializer` shape —
+    the wire contract is byte-unchanged — but with `refresh_token=""` in
+    the body (an empty string still satisfies the schema's required `str`
+    field); the real refresh JWT travels ONLY in the HttpOnly
+    `refresh_token` cookie `set_auth_cookies` sets below, alongside a
+    fresh, independent CSRF cookie (`generate_csrf_token()` — never
+    derived from either token) a SPA echoes back as `X-CSRF-Token` on
+    every cookie-authenticated `/auth/refresh`/`/auth/logout` call.
+    `max_age` is `settings.JWT_REFRESH_TTL_SECONDS` — the SAME TTL
+    `get_token_service()` mints the refresh JWT itself against (`core/
+    security/auth/stores.py`), so neither cookie outlives the refresh
+    token it's paired with. Byte-for-byte the same shape as `app/api/
+    routers/auth.py`'s own `login` handler's cookie-mode branch."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -548,21 +589,59 @@ class LoginView(APIView):
         pair = async_to_sync(auth_service.login)(
             serializer.validated_data["email"], serializer.validated_data["password"]
         )
+        if request.headers.get("X-Auth-Mode") == "cookie":
+            tokens = TokenResponseSerializer({"access_token": pair.access, "refresh_token": ""})
+            response = Response(tokens.data)
+            set_auth_cookies(
+                response,
+                refresh_value=pair.refresh,
+                csrf_value=generate_csrf_token(),
+                max_age=settings.JWT_REFRESH_TTL_SECONDS,
+            )
+            return response
         tokens = TokenResponseSerializer({"access_token": pair.access, "refresh_token": pair.refresh})
         return Response(tokens.data)
 
 
 class RefreshView(APIView):
-    """`POST /auth/refresh` (Stage 5b, #44) — real handler. Delegates to
-    `AuthService.refresh` — THE rotation-with-reuse-detection state
-    machine (see `_core.py`'s own module docstring and
-    `AuthService.refresh`'s docstring for the full state machine). Raises
-    `InvalidToken` or `TokenReused` (both -> 401 `unauthenticated`,
-    deliberately indistinguishable at the wire — see `TokenReused`'s own
-    docstring and `core/exceptions.py`'s FIX-B section), uncaught here. A
-    `TokenReused` raise has, as a side effect, ALREADY revoked the
-    token's entire family in the DB by the time this handler's caller
-    sees the 401."""
+    """`POST /auth/refresh` (Stage 5b, #44; web cookie mode Stage 5d, #46)
+    — real handler. Delegates to `AuthService.refresh` — THE
+    rotation-with-reuse-detection state machine (see `_core.py`'s own
+    module docstring and `AuthService.refresh`'s docstring for the full
+    state machine). Raises `InvalidToken` or `TokenReused` (both -> 401
+    `unauthenticated`, deliberately indistinguishable at the wire — see
+    `TokenReused`'s own docstring and `core/exceptions.py`'s FIX-B
+    section), uncaught here. A `TokenReused` raise has, as a side effect,
+    ALREADY revoked the token's entire family in the DB by the time this
+    handler's caller sees the 401.
+
+    Stage 5d web cookie mode: DUAL-SOURCE, decided per-request by
+    `read_refresh_cookie(request)` (whether the `refresh_token` cookie is
+    actually present on THIS request), never by a header the client
+    declares — a forged/absent cookie can't claim cookie mode, and a
+    genuine cookie-bearing browser request can't accidentally fall onto
+    the bearer path either. Byte-for-byte the same dual-source shape as
+    `app/api/routers/auth.py`'s own `refresh` handler.
+
+    - **Cookie path** (cookie present): `enforce_csrf(request)` runs
+      FIRST — raises `CsrfValidationError` (-> 403 `permission_denied`)
+      before the cookie's refresh token is ever presented to
+      `AuthService.refresh` at all, so a request that fails the
+      double-submit check never gets to attempt a rotation. The request
+      BODY's `refresh_token` is still validated (`RefreshRequestSerializer`'s
+      shape is unchanged, still required) but its VALUE is deliberately
+      ignored — the cookie's own value is what's rotated. On success,
+      BOTH cookies are set again (a fresh refresh JWT + a FRESH
+      `generate_csrf_token()`, never the old CSRF value) — exactly
+      `LoginView`'s own cookie-setting shape — so a stolen,
+      already-rotated refresh cookie replayed after this response is
+      rejected the same way `AuthService.refresh`'s reuse-detection
+      already rejects any other reused refresh token (401, whole family
+      revoked). The response body is `TokenResponseSerializer` with
+      `refresh_token=""`, matching `LoginView`'s cookie-mode shape.
+    - **Bearer path** (no cookie): the exact, unchanged prior behavior —
+      the body's `refresh_token` is the real token, no CSRF check, and
+      the real new refresh JWT is returned in the body."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -577,21 +656,53 @@ class RefreshView(APIView):
         serializer = RefreshRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         auth_service = build_auth_service()
+        cookie_refresh_token = read_refresh_cookie(request)
+        if cookie_refresh_token is not None:
+            enforce_csrf(request)
+            pair = async_to_sync(auth_service.refresh)(cookie_refresh_token)
+            tokens = TokenResponseSerializer({"access_token": pair.access, "refresh_token": ""})
+            response = Response(tokens.data)
+            set_auth_cookies(
+                response,
+                refresh_value=pair.refresh,
+                csrf_value=generate_csrf_token(),
+                max_age=settings.JWT_REFRESH_TTL_SECONDS,
+            )
+            return response
         pair = async_to_sync(auth_service.refresh)(serializer.validated_data["refresh_token"])
         tokens = TokenResponseSerializer({"access_token": pair.access, "refresh_token": pair.refresh})
         return Response(tokens.data)
 
 
 class LogoutView(APIView):
-    """`POST /auth/logout` (Stage 5b, #44) — real handler. Delegates to
-    `AuthService.logout` — best-effort and idempotent by design (see that
-    method's own docstring): an already-invalid, unknown, or
-    already-revoked refresh token still returns 204, never an error.
-    Revokes the entire token family, not just the presented token.
-    Deliberately given no error `responses=` entry beyond 422 (see
-    `app/api/routers/auth.py`'s identical, documented choice for its own
-    `logout` route) — it's 204 and idempotent by design, never raises an
-    error a client needs to handle."""
+    """`POST /auth/logout` (Stage 5b, #44; web cookie mode Stage 5d, #46)
+    — real handler. Delegates to `AuthService.logout` — best-effort and
+    idempotent by design (see that method's own docstring): an
+    already-invalid, unknown, or already-revoked refresh token still
+    returns 204, never an error. Revokes the entire token family, not just
+    the presented token. Deliberately given no error `responses=` entry
+    beyond 422 (see `app/api/routers/auth.py`'s identical, documented
+    choice for its own `logout` route) — it's 204 and idempotent by
+    design, never raises an error a client needs to handle.
+
+    Stage 5d web cookie mode: same dual-source shape as `RefreshView`
+    above, decided by `read_refresh_cookie(request)`.
+
+    - **Cookie path** (cookie present): JUDGMENT CALL — logout is
+      STATE-CHANGING (it revokes the presented token's entire family via
+      `AuthService.logout`), so this view enforces the double-submit CSRF
+      check on the cookie path too, `enforce_csrf(request)` called BEFORE
+      the best-effort logout runs — a cookie-present request with a
+      missing/blank/mismatched `X-CSRF-Token` is rejected 403 at that
+      gate and `AuthService.logout` is never even called; it does NOT
+      reach 204. This does not weaken `AuthService.logout`'s own
+      idempotency for the TOKEN itself — a bad/expired/already-revoked
+      cookie value, once past the CSRF gate, still 204s exactly as the
+      bearer path already does. On success, clears both cookies
+      (`clear_auth_cookies`). Byte-for-byte the same judgment call
+      `app/api/routers/auth.py`'s own `logout` handler documents.
+    - **Bearer path** (no cookie): the exact, unchanged prior behavior —
+      the body's `refresh_token`, no CSRF check, 204 either way."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -606,6 +717,13 @@ class LogoutView(APIView):
         serializer = RefreshRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         auth_service = build_auth_service()
+        cookie_refresh_token = read_refresh_cookie(request)
+        if cookie_refresh_token is not None:
+            enforce_csrf(request)
+            async_to_sync(auth_service.logout)(cookie_refresh_token)
+            response = Response(status=status.HTTP_204_NO_CONTENT)
+            clear_auth_cookies(response)
+            return response
         async_to_sync(auth_service.logout)(serializer.validated_data["refresh_token"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -670,3 +788,54 @@ class MeView(APIView):
             raise InvalidToken("This token no longer maps to an active user.")
         principal = PrincipalOutSerializer({"id": uuid.UUID(user.id), "email": user.email})
         return Response(principal.data)
+
+
+class AdminPingView(APIView):
+    """`GET /admin/ping` (Stage 5d, #46) — the RBAC admin example, the DRF
+    counterpart to `app/api/routers/admin.py`'s `admin_ping`. Demonstrates
+    `has_role` (`core/security/auth/permissions.py`) end to end, with no
+    new auth logic of its own:
+
+    - **200** for an authenticated principal whose `AccessClaims.roles`
+      includes `"admin"`.
+    - **403** `permission_denied` for an authenticated principal WITHOUT
+      the `"admin"` role — `has_role("admin")`'s permission class raises
+      `InsufficientRole` (`core/security/auth/django.py`), mapped by
+      `core/exceptions.py`'s `AuthError` branch via `AUTH_ERROR_HTTP`.
+    - **401** `unauthenticated` for a missing/malformed/expired bearer
+      token — `require_roles`'s own `resolve_principal` call (inside
+      `has_role`'s `has_permission`) raises `_core.InvalidToken` before
+      DRF's dispatch ever reaches this view's `get` body.
+
+    `permission_classes = [has_role("admin")]` does the entire job here —
+    unlike `MeView` above, this view does NOT re-implement auth by hand in
+    its body; `has_role`'s own docstring explains why that's still safe
+    for this block's `ErrorEnvelope` contract (both exceptions it can raise
+    are `AuthError` subclasses the existing handler already maps, so DRF's
+    own un-enveloped `False`-return 403 path is never reached).
+    `authentication_classes = []` mirrors every other view in this
+    module — this block enforces authentication itself via the vendored
+    auth component, never through DRF's separate `authentication_classes`
+    machinery.
+
+    Reuses `HealthStatusSerializer` (`{"status": str}`) as the response
+    shape rather than inventing a near-identical serializer — this
+    endpoint's own success body is exactly `{"status": "ok"}`, matching
+    `app/api/routers/admin.py`'s own identical reuse of `HealthStatus` and
+    this block's frozen-contract target, `packages/api-client/openapi.json`'s
+    `admin_ping` operation, which this view's `operation_id`/`tags`/`auth`/
+    `responses` below are set to match EXACTLY (see `tests/
+    test_schema_conformance.py`, whose `_PENDING_PARITY_OPS` no longer
+    lists `("/admin/ping", "get")` as of this stage)."""
+
+    permission_classes = [has_role("admin")]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="admin_ping_admin_ping_get",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={200: HealthStatusSerializer, 401: ErrorEnvelopeSerializer, 403: ErrorEnvelopeSerializer},
+    )
+    def get(self, request):
+        return Response(HealthStatusSerializer({"status": "ok"}).data)

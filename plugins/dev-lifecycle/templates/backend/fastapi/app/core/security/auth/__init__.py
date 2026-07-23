@@ -1,6 +1,6 @@
-"""Package seam for the vendored auth component (`_core.py`, `fastapi.py` —
-vendored from templates/components/security/auth/, see each file's own
-header note). Same relative-import composition pattern as
+"""Package seam for the vendored auth component (`_core.py`, `_cookies.py`,
+`fastapi.py` — vendored from templates/components/security/auth/, see each
+file's own header note). Same relative-import composition pattern as
 security_headers/__init__.py and rate_limiting/__init__.py — see either
 file's docstring.
 
@@ -47,12 +47,27 @@ from ._core import (
     UserStore,
     hash_token,
 )
+from ._cookies import (
+    CSRF_COOKIE_NAME,
+    REFRESH_COOKIE_NAME,
+    CsrfValidationError,
+    build_csrf_cookie_kwargs,
+    build_refresh_cookie_kwargs,
+    clear_csrf_cookie_kwargs,
+    clear_refresh_cookie_kwargs,
+    generate_csrf_token,
+    verify_double_submit,
+)
 from .fastapi import (
     AUTH_ERROR_HTTP,
     InsufficientRole,
     bearer_scheme,
     build_get_current_principal,
+    clear_auth_cookies,
+    enforce_csrf,
+    read_refresh_cookie,
     require_roles,
+    set_auth_cookies,
 )
 
 __all__ = [
@@ -84,9 +99,22 @@ __all__ = [
     "UserRecord",
     "UserStore",
     "hash_token",
+    "CSRF_COOKIE_NAME",
+    "REFRESH_COOKIE_NAME",
+    "CsrfValidationError",
+    "build_csrf_cookie_kwargs",
+    "build_refresh_cookie_kwargs",
+    "clear_csrf_cookie_kwargs",
+    "clear_refresh_cookie_kwargs",
+    "generate_csrf_token",
+    "verify_double_submit",
     "AUTH_ERROR_HTTP",
     "InsufficientRole",
     "bearer_scheme",
     "build_get_current_principal",
+    "clear_auth_cookies",
+    "enforce_csrf",
+    "read_refresh_cookie",
     "require_roles",
+    "set_auth_cookies",
 ]

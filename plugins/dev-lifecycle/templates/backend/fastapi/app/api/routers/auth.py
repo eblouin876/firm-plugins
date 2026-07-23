@@ -34,19 +34,48 @@ request_email_verification`) and emits an `auth.register` audit event.
 events) is entirely `AuthService`'s job as of `app/api/deps.py:
 get_auth_service`'s Stage 5c wiring — this file's `login` handler itself
 is byte-for-byte unchanged from Stage 5a.
-"""
+
+Stage 5d (#46) adds WEB COOKIE MODE to `login`/`refresh`/`logout` — an
+`X-Auth-Mode: cookie` request header on `POST /auth/login` (default/
+anything-else = bearer, the UNCHANGED current behavior) switches the
+refresh token from the response BODY to an HttpOnly cookie, paired with a
+non-HttpOnly CSRF cookie a SPA echoes back as `X-CSRF-Token` on every
+state-changing cookie-authenticated request (double-submit — see the
+vendored `_cookies.py`'s own module docstring for the full mechanism).
+`refresh`/`logout` are DUAL-SOURCE: `read_refresh_cookie(request)` decides
+which path a given request is on, per-request, not per-client-declared
+mode — a cookie-bearing browser request takes the cookie path (CSRF
+enforced FIRST, before the token is used) and a bearer-only request (no
+cookie ever set, e.g. mobile) takes the existing, byte-for-byte-unchanged
+bearer path. `X-Auth-Mode` is deliberately read directly off
+`request.headers` (not a declared FastAPI `Header(...)` parameter) — see
+`login`'s own docstring for why: this keeps it OUT of the exported
+OpenAPI schema as a documented parameter, so this stage's contract diff
+is exactly the new `/admin/ping` operation (`app/api/routers/admin.py`),
+not a parameter addition on an existing one. `enforce_csrf` reads
+`X-CSRF-Token` the identical way, for the identical reason."""
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_account_service, get_auth_service, get_current_principal
 from app.core.db import get_db
 from app.core.errors import ErrorEnvelope
-from app.core.security.auth import AccessClaims, AccountService, AuthService, InvalidToken
+from app.core.security.auth import (
+    AccessClaims,
+    AccountService,
+    AuthService,
+    InvalidToken,
+    clear_auth_cookies,
+    enforce_csrf,
+    generate_csrf_token,
+    read_refresh_cookie,
+    set_auth_cookies,
+)
 from app.core.security.auth.stores import AuditAuthEventSink, SqlAlchemyUserStore
 from app.schemas.auth import (
     LoginRequest,
@@ -161,19 +190,58 @@ async def register(
 @router.post("/login", response_model=TokenResponse, summary="Login", responses=_UNAUTHENTICATED_RESPONSE)
 async def login(
     payload: LoginRequest,
+    request: Request,
+    response: Response,
     auth_service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
     """Delegates to `AuthService.login` — raises `InvalidCredentials`
     (-> 401 `unauthenticated`) identically for an unknown email or a wrong
     password (see that exception's own docstring on the deliberate
-    user-enumeration defense), uncaught here."""
+    user-enumeration defense), uncaught here.
+
+    Stage 5d (#46) web cookie mode: `request.headers.get("X-Auth-Mode")
+    == "cookie"` switches this call into cookie mode — read directly off
+    `request.headers`, deliberately NOT a declared `Header(...)`
+    parameter (see this module's own docstring for why: keeps it out of
+    the exported OpenAPI schema as a documented parameter). Anything
+    else (absent header, any other value) is BEARER mode — the exact,
+    unchanged current behavior; mode is NEVER inferred from User-Agent or
+    any other signal, matching the locked design. No CSRF check on login
+    either way: login is credential-authenticated (email+password), and
+    there is no cookie yet for a CSRF check to protect.
+
+    Cookie mode still returns the SAME `TokenResponse` shape — the wire
+    contract (`packages/api-client/openapi.json`'s `TokenResponse`
+    schema) is byte-unchanged — but with `refresh_token=""` in the body
+    (an empty string still satisfies the schema's required `str` field);
+    the real refresh JWT travels ONLY in the HttpOnly `refresh_token`
+    cookie `set_auth_cookies` sets below, alongside a fresh, independent
+    CSRF cookie (`generate_csrf_token()` — never derived from either
+    token) the SPA echoes back as `X-CSRF-Token` on every cookie-
+    authenticated `/auth/refresh`/`/auth/logout` call. `max_age` is this
+    request's own `jwt_refresh_ttl_seconds`, read off `request.app.state.
+    settings` — the SAME `Settings` instance this app was actually
+    constructed with (see `app/api/deps.py:get_auth_service`'s own
+    docstring on why that's read this way rather than `Depends(
+    get_settings)`), so neither cookie outlives the refresh token it's
+    paired with."""
     pair = await auth_service.login(payload.email, payload.password)
+    if request.headers.get("X-Auth-Mode") == "cookie":
+        set_auth_cookies(
+            response,
+            refresh_value=pair.refresh,
+            csrf_value=generate_csrf_token(),
+            max_age=request.app.state.settings.jwt_refresh_ttl_seconds,
+        )
+        return TokenResponse(access_token=pair.access, refresh_token="", token_type="bearer")
     return TokenResponse(access_token=pair.access, refresh_token=pair.refresh)
 
 
 @router.post("/refresh", response_model=TokenResponse, summary="Refresh token", responses=_UNAUTHENTICATED_RESPONSE)
 async def refresh(
     payload: RefreshRequest,
+    request: Request,
+    response: Response,
     auth_service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
     """Delegates to `AuthService.refresh` — THE rotation-with-reuse-
@@ -183,7 +251,45 @@ async def refresh(
     deliberately indistinguishable at the wire — see `TokenReused`'s own
     docstring), uncaught here. A `TokenReused` raise has, as a side
     effect, ALREADY revoked the token's entire family in the DB by the
-    time this handler's caller sees the 401."""
+    time this handler's caller sees the 401.
+
+    Stage 5d (#46) web cookie mode: DUAL-SOURCE, decided per-request by
+    `read_refresh_cookie(request)` (whether the `refresh_token` cookie is
+    actually present on THIS request), never by a header the client
+    declares — a forged/absent cookie can't claim cookie mode, and a
+    genuine cookie-bearing browser request can't accidentally fall onto
+    the bearer path either.
+
+    - **Cookie path** (cookie present): `enforce_csrf(request)` runs
+      FIRST — raises `CsrfValidationError` (-> 403 `permission_denied`,
+      `AUTH_ERROR_HTTP`) before the cookie's refresh token is ever
+      presented to `AuthService.refresh` at all, so a request that fails
+      the double-submit check never gets to attempt a rotation. The
+      request BODY's `payload.refresh_token` is parsed (still required —
+      `RefreshRequest`'s schema is unchanged) but its VALUE is
+      deliberately ignored; the cookie's own value is what's rotated.
+      On success, BOTH cookies are set again — `set_auth_cookies` with
+      the NEWLY minted refresh JWT and a FRESH `generate_csrf_token()`
+      (never the old CSRF value) — exactly `login`'s own cookie-setting
+      shape, so a stolen, already-rotated refresh cookie (reused after
+      this response) is rejected the same way `AuthService.refresh`'s
+      reuse-detection already rejects any other reused refresh token
+      (401, whole family revoked). The response body is `TokenResponse`
+      with `refresh_token=""`, matching `login`'s cookie-mode shape.
+    - **Bearer path** (no cookie): the exact, unchanged prior behavior —
+      `payload.refresh_token` is the real token, no CSRF check, and the
+      real new refresh JWT is returned in the body."""
+    cookie_refresh_token = read_refresh_cookie(request)
+    if cookie_refresh_token is not None:
+        enforce_csrf(request)
+        pair = await auth_service.refresh(cookie_refresh_token)
+        set_auth_cookies(
+            response,
+            refresh_value=pair.refresh,
+            csrf_value=generate_csrf_token(),
+            max_age=request.app.state.settings.jwt_refresh_ttl_seconds,
+        )
+        return TokenResponse(access_token=pair.access, refresh_token="", token_type="bearer")
     pair = await auth_service.refresh(payload.refresh_token)
     return TokenResponse(access_token=pair.access, refresh_token=pair.refresh)
 
@@ -191,13 +297,40 @@ async def refresh(
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="Logout")
 async def logout(
     payload: RefreshRequest,
+    request: Request,
+    response: Response,
     auth_service: AuthService = Depends(get_auth_service),
 ) -> None:
     """Delegates to `AuthService.logout` — best-effort and idempotent by
     design (see that method's own docstring): an already-invalid, unknown,
     or already-revoked refresh token still returns 204, never an error.
-    Revokes the entire token family, not just the presented token."""
+    Revokes the entire token family, not just the presented token.
+
+    Stage 5d (#46) web cookie mode: same dual-source shape as `refresh`
+    above, decided by `read_refresh_cookie(request)`.
+
+    - **Cookie path** (cookie present): JUDGMENT CALL — logout is
+      STATE-CHANGING (it revokes the presented token's entire family via
+      `AuthService.logout`), so this endpoint enforces the double-submit
+      CSRF check on the cookie path too, `enforce_csrf(request)` called
+      BEFORE the best-effort logout runs — a cookie-present request with
+      a missing/blank/mismatched `X-CSRF-Token` is rejected 403 at that
+      gate and `AuthService.logout` is never even called; it does NOT
+      reach 204. This does not weaken `AuthService.logout`'s own
+      idempotency for the TOKEN itself — a bad/expired/already-revoked
+      cookie value, once past the CSRF gate, still 204s exactly as the
+      bearer path already does. On success, clears both cookies
+      (`clear_auth_cookies`).
+    - **Bearer path** (no cookie): the exact, unchanged prior behavior —
+      the body's `refresh_token`, no CSRF check, 204 either way."""
+    cookie_refresh_token = read_refresh_cookie(request)
+    if cookie_refresh_token is not None:
+        enforce_csrf(request)
+        await auth_service.logout(cookie_refresh_token)
+        clear_auth_cookies(response)
+        return None
     await auth_service.logout(payload.refresh_token)
+    return None
 
 
 @router.get("/me", response_model=PrincipalOut, summary="Current principal", responses=_UNAUTHENTICATED_RESPONSE)
