@@ -5,7 +5,7 @@
   "type": "module",
   "//scripts": "Wires this app into the project-root justfile's standard targets (dev/build/lint/typecheck/test) — `pnpm -r --if-present` fans out to these. `dev`/`build`/`start` are Next's own CLI (Turbopack by default in Next 16); `typecheck` is a pure tsc pass (Next's build does its own internal type-checking too, but this keeps the workspace-standard target). `test` runs vitest (jsdom + Testing Library + MSW, config in vitest.config.ts) — test-only, does not participate in `next build`/`next dev`. Same shape as templates/frontend/nextjs (the `web` app) — package name `admin` is the only difference in this file; deps/versions are IDENTICAL, pinned via references/compatibility-matrix.md. No TipTap dep here — that lands with the Stage 13d editor work; the matrix pins TipTap now (see the 'Editor (WYSIWYG)' section) so the version line is ratified once, ahead of that stage.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",

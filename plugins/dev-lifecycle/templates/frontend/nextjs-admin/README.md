@@ -199,9 +199,9 @@ firm-plugins-relative.
   by inheriting `app/(app)/layout.tsx`. A later stage replaces a stub page's
   body with real UI; it does not need to touch the gate, nav, or layout.
 - **App identity**: package name `admin`, materializes to `apps/admin`, dev
-  port matches Next's default (`next dev`, no explicit port override in
-  `package.json` — set one, or rely on `PORT` env, if running alongside
-  `apps/web`'s dev server locally), production port **3001**.
+  port **3001** (`next dev -p 3001` in `package.json`) and production port
+  **3001** — both pinned off `apps/web`'s 3000 so `just dev` can run the
+  public app and the admin app side by side with no collision.
 - **Client wiring**: `app/providers.tsx` configures `@repo/api-client` once
   at module scope in cookie mode; any new feature page just imports the
   already-configured generated hooks — no new `configureApiClient` call

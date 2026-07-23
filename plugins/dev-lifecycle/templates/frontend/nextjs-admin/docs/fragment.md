@@ -11,9 +11,9 @@ same as `apps/web`.
    `apps/admin` alongside every other workspace member; no separate install
    step.
 2. Dev: run the backend (its `docker compose up`) and `just dev` — Next
-   serves this app on its dev port (see the app's own `package.json`; set an
-   explicit port or the `PORT` env var if running `apps/web`'s dev server at
-   the same time locally, since both default to Next's own 3000). Leave
+   serves this app on **port 3001** (`next dev -p 3001` in `package.json`),
+   pinned off `apps/web`'s 3000 so both frontends run side by side under
+   `just dev` with no collision. Leave
    `NEXT_PUBLIC_API_BASE_URL` **empty** (copy `apps/admin/.env.example` to
    `apps/admin/.env.local`): `next.config.ts`'s `async rewrites()` forwards
    `/auth`, `/admin`, `/items`, `/health`, `/readyz` to the compose backend
