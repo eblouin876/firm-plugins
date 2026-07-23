@@ -561,6 +561,151 @@ own migration-authoring commit only verified it against hermetic sqlite;
 Step 4's real-Postgres pass above predates the `users`/`refresh_tokens`
 tables existing at all).
 
+### Conformance / Account lifecycle + lockout (Stage 5c, #45)
+
+**All three new `/auth/*` operations carry real behavior and are in the
+STRICT wire-surface comparison** — `tests/test_schema_conformance.py`'s
+`_PENDING_PARITY_OPS` (carried over from the Step 4 / Stage 5b sections
+above) is now the empty set again, kept declared (not deleted), same
+posture as Stage 5a → Stage 5b's own transition. `test_wire_surface_is_
+identical_to_the_frozen_contract` passes with `POST /auth/verify-email`,
+`POST /auth/request-password-reset`, and `POST /auth/reset-password` all
+fully compared against `openapi.json` — **zero new `_KNOWN_DIVERGENCES`
+entries were needed**. `test_operation_id_and_component_name_parity_
+report` confirms `operationId` parity stays FULL across all 15 documented
+operations now (12 from Stage 5b plus these 3); `VerifyEmailRequest`/
+`RequestPasswordResetRequest`/`ResetPasswordRequest` join the "component
+names in both, exact match" list too.
+
+One documented wire-generation subtlety, not a divergence: `POST /auth/
+request-password-reset`'s 202 response is declared `responses={202:
+OpenApiTypes.ANY, ...}` (`core/views.py`), not a raw `{}` dict or `None`
+— `packages/api-client/openapi.json`'s own 202 for this operation
+documents an `application/json` media type with an empty (`{}`,
+"unspecified shape") schema (FastAPI's own default for a route with no
+`response_model`), and drf-spectacular's `AutoSchema._get_response_for_
+code` falsy-checks a raw `{}` dict BEFORE reaching the branch that would
+pass it through as a schema unchanged, collapsing it to "No response
+body" (no `content` key at all, matching this block's OWN `204: None`
+convention elsewhere) instead — `OpenApiTypes.ANY` (`build_basic_type`
+→ `{}`) is what genuinely reproduces the frozen contract's shape here.
+
+**`LoginView` is now gated on email verification, per-account lockout, and
+audit events.** `core/views.py`'s new `_build_login_auth_service()`
+constructs the `AuthService` `LoginView.post` uses with `lockout=
+build_lockout_policy()`, `require_verification=settings.AUTH_REQUIRE_
+EMAIL_VERIFICATION` (default `True`), and `events=AuditAuthEventSink()` —
+mirroring `backend/fastapi`'s `app/api/deps.py:get_auth_service`'s own
+Stage 5c wiring exactly. `core/security/auth/stores.py:build_auth_service()`
+itself (Agent A's factory) stays UNCHANGED — every other `/auth/*` view
+(`RegisterView`/`RefreshView`/`LogoutView`/`MeView`) still uses the plain,
+unwired version, since `AuthService.register`/`refresh`/`logout` never
+consult `lockout`/`require_verification`/`events` at all (`_core.py`).
+`RegisterView.post` additionally calls `build_account_service().
+request_email_verification(user)` after a successful `AuthService.
+register`, wrapped in `try/except Exception` (ported M2 fix) so a mail
+failure never turns the already-committed 201 into a 500 — see `core/
+views.py`'s `RegisterView` docstring for the full rationale, identical to
+`app/api/routers/auth.py`'s own `register` handler.
+
+**`VerifyEmailView`/`RequestPasswordResetView`/`ResetPasswordView`** each
+validate via the matching `core/serializers.py` serializer
+(`VerifyEmailRequestSerializer`/`RequestPasswordResetRequestSerializer`/
+`ResetPasswordRequestSerializer`), build a fresh `AccountService` via
+`build_account_service()`, and bridge into its `async def` methods with
+`async_to_sync(...)` — same "sync view, async service, bridge at the call
+site" posture every other `/auth/*` view in this file already uses. Every
+raised `InvalidSingleUseToken` is left UNCAUGHT — `core/exceptions.py`'s
+existing `AuthError` branch already maps it (via `AUTH_ERROR_HTTP`) to the
+same generic 401 `unauthenticated` every other auth failure uses; no
+`core/exceptions.py` change was needed for this stage.
+
+**`tests/test_auth.py`** (34 tests, up from Stage 5b's 18, `@pytest.mark.
+django_db(transaction=True)` throughout) ports every scenario `backend/
+fastapi`'s own `tests/test_auth.py` Stage 5c section exercises: register→
+verify→login happy path (asserting the verification-email side effect
+itself); login-before-verify → 401 byte-identical to a wrong password;
+request-password-reset known vs. unknown email → byte-identical 202 (a
+token issued ONLY for the known account) + empty-email → 422; reset happy
+path (old password 401, new password 200 immediately, EVERY pre-reset
+refresh token revoked — not just the one family that requested it);
+verify/reset garbage/reused/expired tokens → 401 generic; lockout (5
+wrong passwords locks the account, even the CORRECT password then 401s,
+a completed reset lifts the lock and the new password logs in
+immediately — proving `AuthService`/`AccountService` observe the same
+underlying `DjangoLockoutStore` table); a raising `EmailSender` never
+turning `register`/`request-password-reset` into a 500 (M1/M2, ported);
+and the M2 recovery story end to end (register, never verify, blocked
+login, reset, login now succeeds because `AccountService.reset_password`
+also marks the email verified).
+
+**Token-capture seam**: an `email_sender` pytest fixture monkeypatches
+`core.security.auth.stores.get_email_sender` — the exact module-level
+name `build_account_service(email=None)` resolves at call time — with a
+tiny in-memory, SYNCHRONOUS-bodied `EmailSender` whose `send()` is
+directly `await`ed by `AccountService` (unlike the real `DjangoEmailSender`,
+which schedules delivery as a fire-and-forget background task — see that
+class's own docstring). This guarantees the captured message is present
+by the time the `async_to_sync(...)`-bridged view call returns, with no
+dependence on real delivery timing and no log-string parsing — the
+Django-track counterpart to `backend/fastapi`'s own `app.dependency_
+overrides[get_email_sender] = ...` FastAPI-dependency-override seam.
+
+**Real PostgreSQL 16 verification, end to end over HTTP.** The sandbox's
+PostgreSQL 16 cluster was started (`pg_ctlcluster 16 main start` — it was
+down when this verification began), a scratch role + same-named database
+created, `manage.py migrate --no-input` run under `DJANGO_SETTINGS_
+MODULE=config.settings` (the real-DB settings module) — `core.
+0003_stage5c_account_lifecycle` applying cleanly on top of `0001`/`0002`
+— then a full `rest_framework.test.APIClient` round-trip against the REAL
+connection, using the identical `get_email_sender` monkeypatch seam
+`tests/test_auth.py` uses (not a pytest fixture here, a plain module-level
+reassignment in a standalone script, same underlying seam):
+
+```
+register(pg16proof@example.com)                              -> 201, verification email captured (to/subject match)
+login BEFORE verify                                           -> 401 unauthenticated
+verify-email(real token)                                      -> 204, empty body
+verify-email(REUSED token)                                    -> 401 unauthenticated
+login AFTER verify                                             -> 200, access+refresh pair
+GET /auth/me  Bearer <access>                                  -> 200, email matches
+request-password-reset(known email)                            -> 202, empty body
+request-password-reset(unknown email)                          -> 202, empty body
+  -- byte-identical to the known-email response
+reset-password(real token, new password)                       -> 204, empty body
+login with OLD password                                        -> 401 unauthenticated
+login with NEW password                                        -> 200, IMMEDIATELY (no re-verify needed)
+refresh(pre-reset refresh_token)                                -> 401 unauthenticated
+  -- proves reset_password's revoke_all_for_user, not just one family
+5x login with wrong password                                   -> 401 unauthenticated each
+login with the (now-current) CORRECT password, while LOCKED     -> 401 unauthenticated
+  -- the real password is never checked against a locked account
+request-password-reset -> reset-password (lifts the lockout)    -> 202, then 204
+login IMMEDIATELY after the lockout-lifting reset               -> 200, no remaining cooldown
+-- direct Postgres read (bypassing the API): users.email_verified = true,
+   users.verified_at IS NOT NULL, 3 single_use_tokens rows for this user
+   (1 verify + 2 reset, one reset consumed twice-issued across the two
+   reset flows above), login_attempts row for this account_key gone
+   (cleared by the lockout-lifting reset)
+```
+
+Every line passed against the real Postgres 16 connection. Schema verified
+column-for-column against `alembic/versions/0003_stage5c_account_
+lifecycle.py`'s own Postgres-native result: `users.email_verified` NOT
+NULL boolean (`server_default=false`), `users.verified_at` nullable
+timestamptz; `single_use_tokens.token_hash` UNIQUE, `single_use_tokens.
+user_id` indexed + FK to `users(id)`; `login_attempts.account_key` UNIQUE,
+no FK to `users` (matching `_core.LockoutStore`'s own "account_key is
+free-form" docstring) — an exact match. `manage.py spectacular --format
+openapi-json` was also re-run under `config.settings` (real-DB) and
+diffed byte-identical against the hermetic-`config.settings_test` export,
+confirming — same as Step 4's and Stage 5b's own passes — that schema
+generation genuinely never touches the database. Scratch role/database
+dropped afterward; the cluster itself was stopped afterward too (it was
+down when this verification pass started, unlike Stage 5b's pass, which
+found it already online and left it running) — no DB artifacts, `.venv`,
+or `uv.lock` committed.
+
 ## Security
 
 ### Security composition (Stage 4 Step 3, #27)
