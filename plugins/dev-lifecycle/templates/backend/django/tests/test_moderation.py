@@ -417,6 +417,53 @@ def test_resolve_ban_author_returns_404_for_a_comment_with_no_author(api_client:
     assert response.status_code == 404, response.content
 
 
+def test_resolve_ban_author_rolls_back_the_ban_if_flag_save_fails(
+    api_client: APIClient, email_sender: _CapturingEmailSender, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proves `AdminFlagResolveView.post`'s `transaction.atomic()` wrap
+    (review fix, Stage 13c) genuinely covers `_ban_user`'s writes -- ban +
+    session revocation -- not just the trailing `flag.save()`: forcing
+    `flag.save()` to raise must roll the whole sequence back together, so a
+    mid-operation failure can never leave a banned user (with revoked
+    sessions) behind a flag that still reports `open`."""
+    headers = _admin_headers(api_client)
+    post = _create_post(api_client, headers)
+    author = _register_and_verify(api_client, email_sender, email="rollback@example.com", password=_PASSWORD)
+    login = api_client.post(
+        "/auth/login", {"email": "rollback@example.com", "password": _PASSWORD}, format="json"
+    )
+    assert login.status_code == 200, login.content
+    refresh_token = login.json()["refresh_token"]
+
+    comment_id = _seed_comment(post["id"], author_id=author["id"])
+    flag_id = _seed_flag("comment", comment_id)
+
+    def _boom(self, *args, **kwargs) -> None:
+        raise RuntimeError("simulated flag.save failure")
+
+    # Only the FLAG's own `.save()` is forced to fail -- `_ban_user`'s
+    # `user.save(...)` and the ORM writes underneath `revoke_all_for_user`
+    # are untouched, so this isolates "did the atomic block roll THOSE
+    # back too" from "did flag.save() itself get called".
+    monkeypatch.setattr(Flag, "save", _boom)
+
+    response = api_client.post(
+        f"/admin/flags/{flag_id}/resolve", {"action": "ban_author"}, format="json", **headers
+    )
+    assert response.status_code == 500, response.content
+
+    monkeypatch.undo()
+    assert _get_user_status(author["id"]) == "active"
+    assert Flag.objects.get(id=uuid.UUID(flag_id)).status == "open"
+
+    # The ban's session revocation must have rolled back too -- the
+    # commenter's refresh token (issued before the failed resolve) is still
+    # valid, proving `revoke_all_for_user`'s write didn't escape the atomic
+    # block onto a separate, un-rolled-back connection.
+    refresh = api_client.post("/auth/refresh", {"refresh_token": refresh_token}, format="json")
+    assert refresh.status_code == 200, refresh.content
+
+
 def test_resolve_ban_author_self_protection_is_a_conflict(api_client: APIClient) -> None:
     admin_id = _seed_verified_admin(_ADMIN_EMAIL, _ADMIN_PASSWORD)
     tokens = _login(api_client, _ADMIN_EMAIL, _ADMIN_PASSWORD)

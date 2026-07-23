@@ -6,6 +6,7 @@ export * from "./generated/endpoints/auth/auth.js";
 export * from "./generated/endpoints/admin/admin.js";
 export * from "./generated/endpoints/health/health.js";
 export * from "./generated/endpoints/items/items.js";
+export * from "./generated/endpoints/moderation/moderation.js";
 export * from "./generated/models/index.js";
 export { configureApiClient, customFetch } from "./mutator.js";
 export type { ApiClientResponse } from "./mutator.js";

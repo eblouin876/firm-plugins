@@ -38,7 +38,7 @@ import uuid
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.db.utils import Error as DjangoDBError
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -1989,25 +1989,44 @@ class AdminFlagResolveView(APIView):
         note = serializer.validated_data.get("note")
 
         audit_extra: dict = {}
-        if action == "none":
-            pass
-        elif action == "hide_content":
-            _hide_flag_content(flag)
-        elif action == "delete_content":
-            _delete_flag_content(flag)
-        elif action == "ban_author":
-            author = _resolve_flag_author(flag)
-            _ensure_not_self(claims, author, action="ban")
-            _ban_user(author)
-            audit_extra["banned_user"] = str(author.id)
-        else:  # pragma: no cover - unreachable, ChoiceField already 422s an unknown action
-            raise ValidationFailedError(f"Unknown action '{action}'.")
+        # `transaction.atomic()` around the mutation sequence (content/
+        # author action + the final `flag.save()`) so a failure partway
+        # through can't leave a half-applied state -- e.g. a banned author
+        # whose flag is still `open`, or (were `flag.save()` to fail) a
+        # user left banned with un-revoked sessions while the flag reports
+        # otherwise. Unlike `stores.py`'s `DjangoRefreshTokenStore` (whose
+        # own docstring locks OUT `transaction.atomic()` around its calls
+        # so each `.aupdate()` stays independently durable), THIS wrap is
+        # safe: `_ban_user`'s `async_to_sync(...revoke_all_for_user)` call
+        # still runs Django's async ORM `.aupdate()` via `sync_to_async`
+        # with its default `thread_sensitive=True`, which routes the write
+        # back onto THIS thread rather than a separate one -- so it shares
+        # this thread's connection/transaction state and participates in
+        # the same atomic block instead of racing it on another
+        # connection. Verified empirically (Stage 13c review fix): forcing
+        # the trailing `flag.save()` to raise rolls the preceding
+        # `_ban_user` write back too (see `tests/test_moderation.py`'s
+        # `test_resolve_ban_author_rolls_back_the_ban_if_flag_save_fails`).
+        with transaction.atomic():
+            if action == "none":
+                pass
+            elif action == "hide_content":
+                _hide_flag_content(flag)
+            elif action == "delete_content":
+                _delete_flag_content(flag)
+            elif action == "ban_author":
+                author = _resolve_flag_author(flag)
+                _ensure_not_self(claims, author, action="ban")
+                _ban_user(author)
+                audit_extra["banned_user"] = str(author.id)
+            else:  # pragma: no cover - unreachable, ChoiceField already 422s an unknown action
+                raise ValidationFailedError(f"Unknown action '{action}'.")
 
-        flag.status = "resolved"
-        flag.resolved_by_id = uuid.UUID(claims.sub)
-        flag.resolved_at = utc_now()
-        flag.resolution_note = note
-        flag.save(update_fields=["status", "resolved_by", "resolved_at", "resolution_note"])
+            flag.status = "resolved"
+            flag.resolved_by_id = uuid.UUID(claims.sub)
+            flag.resolved_at = utc_now()
+            flag.resolution_note = note
+            flag.save(update_fields=["status", "resolved_by", "resolved_at", "resolution_note"])
         audit_event(
             "admin.flag.resolve",
             actor=claims.sub,
