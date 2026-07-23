@@ -173,8 +173,35 @@ class SqlAlchemyUserStore:
     # session continuation past that point; there is no way to revoke a
     # single already-minted access token early without turning it into a
     # stateful token (out of scope here).
+    #
+    # SECURITY (Stage 13b, ban enforcement): both lookups below ALSO filter
+    # on `User.status == "active"` -- a suspended or banned user (`app/api/
+    # routers/admin.py`'s `suspend`/`ban` actions) is treated as
+    # unauthenticated on the LOGIN path (`get_by_email`, via `AuthService.
+    # login`) and the REFRESH path (`get_by_id`, via `AuthService.refresh`
+    # step 6), composed with (not replacing) the existing `not_deleted()`
+    # soft-delete filter above -- both conditions must hold. `get_by_id` is
+    # also what `GET /auth/me` (`app/api/routers/auth.py`) resolves the
+    # caller's profile through, so this closes that endpoint too for a
+    # suspended/banned caller holding a still-unexpired access token -- a
+    # bonus, not a scope creep: it's the SAME lookup already filtered here
+    # for soft-delete, not a new call site. The admin surface
+    # (`app/api/routers/admin.py`) never goes through `SqlAlchemyUserStore`
+    # at all -- it queries `User` directly via `AsyncRepository`, entirely
+    # unfiltered by `status`, so an admin can still see/act on suspended and
+    # banned accounts. The residual window where an already-minted, not-yet-
+    # expired ACCESS token still authenticates a just-banned user (bounded
+    # by `jwt_access_ttl_seconds`) is the identical, already-accepted race
+    # the soft-delete comment above documents -- `ban`/`suspend` additionally
+    # call `RefreshTokenStore.revoke_all_for_user` to kill every REFRESH
+    # token immediately, which is what actually stops session continuation
+    # past that short access-token window; there is no cheap way to revoke a
+    # single already-minted access token early without turning it into a
+    # stateful token (out of scope here, same as the note above).
     async def get_by_email(self, email: str) -> UserRecord | None:
-        result = await self._session.execute(select(User).where(User.email == email, User.not_deleted()))
+        result = await self._session.execute(
+            select(User).where(User.email == email, User.not_deleted(), User.status == "active")
+        )
         user = result.scalar_one_or_none()
         return _user_to_record(user) if user is not None else None
 
@@ -194,7 +221,9 @@ class SqlAlchemyUserStore:
         # same as `get_by_email` above -- `AuthService.refresh` step 6
         # then raises `InvalidToken`, consistent with its existing "user
         # gone" handling of a genuinely-missing row.
-        result = await self._session.execute(select(User).where(User.id == user_id, User.not_deleted()))
+        result = await self._session.execute(
+            select(User).where(User.id == user_id, User.not_deleted(), User.status == "active")
+        )
         user = result.scalar_one_or_none()
         return _user_to_record(user) if user is not None else None
 

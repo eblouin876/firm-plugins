@@ -5,23 +5,31 @@
  * OpenAPI spec version: 0.1.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
   DataTag,
   DefinedInitialDataOptions,
   DefinedUseQueryResult,
+  MutationFunction,
   QueryClient,
   QueryFunction,
   QueryKey,
   UndefinedInitialDataOptions,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
+  AdminRolesIn,
+  AdminUserOut,
   ErrorEnvelope,
-  HealthStatus
+  HealthStatus,
+  ListAdminUsersAdminUsersGetParams,
+  PageAdminUserOut
 } from '../../models';
 
 import { customFetch } from '../../../mutator';
@@ -181,3 +189,976 @@ export function useAdminPingAdminPingGet<TData = Awaited<ReturnType<typeof admin
 
 
 
+export type listAdminUsersAdminUsersGetResponse200 = {
+  data: PageAdminUserOut
+  status: 200
+}
+
+export type listAdminUsersAdminUsersGetResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type listAdminUsersAdminUsersGetResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type listAdminUsersAdminUsersGetResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type listAdminUsersAdminUsersGetResponseSuccess = (listAdminUsersAdminUsersGetResponse200) & {
+  headers: Headers;
+};
+export type listAdminUsersAdminUsersGetResponseError = (listAdminUsersAdminUsersGetResponse401 | listAdminUsersAdminUsersGetResponse403 | listAdminUsersAdminUsersGetResponse422) & {
+  headers: Headers;
+};
+
+export type listAdminUsersAdminUsersGetResponse = (listAdminUsersAdminUsersGetResponseSuccess | listAdminUsersAdminUsersGetResponseError)
+
+export const getListAdminUsersAdminUsersGetUrl = (params?: ListAdminUsersAdminUsersGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/admin/users?${stringifiedParams}` : `/admin/users`
+}
+
+/**
+ * Paginated user listing -- reuses the `pagination/` component's
+ * `PageParams`/`Page[T]` (the SAME shape `GET /items` uses,
+ * `app/api/routers/items.py`'s own `list_items`), `?q=` filters `email`
+ * case-insensitively via `.ilike()` (portable across sqlite/Postgres --
+ * see `sqlalchemy.md`/this app's own hermetic-test posture), `?status=`
+ * filters to one exact `UserStatus`. Unfiltered by soft-delete beyond
+ * `AsyncRepository`'s own default (excludes soft-deleted rows) -- see this
+ * module's docstring, "Admin queries are UNFILTERED by status": every
+ * status value is visible here, unlike the login/refresh path.
+ * @summary List users (admin)
+ */
+export const listAdminUsersAdminUsersGet = async (params?: ListAdminUsersAdminUsersGetParams, options?: RequestInit): Promise<listAdminUsersAdminUsersGetResponse> => {
+
+  return customFetch<listAdminUsersAdminUsersGetResponse>(getListAdminUsersAdminUsersGetUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListAdminUsersAdminUsersGetQueryKey = (params?: ListAdminUsersAdminUsersGetParams,) => {
+    return [
+    `/admin/users`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListAdminUsersAdminUsersGetQueryOptions = <TData = Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError = ErrorEnvelope>(params?: ListAdminUsersAdminUsersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminUsersAdminUsersGetQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>> = ({ signal }) => listAdminUsersAdminUsersGet(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListAdminUsersAdminUsersGetQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>>
+export type ListAdminUsersAdminUsersGetQueryError = ErrorEnvelope
+
+
+export function useListAdminUsersAdminUsersGet<TData = Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError = ErrorEnvelope>(
+ params: undefined |  ListAdminUsersAdminUsersGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminUsersAdminUsersGet<TData = Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError = ErrorEnvelope>(
+ params?: ListAdminUsersAdminUsersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminUsersAdminUsersGet<TData = Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError = ErrorEnvelope>(
+ params?: ListAdminUsersAdminUsersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List users (admin)
+ */
+
+export function useListAdminUsersAdminUsersGet<TData = Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError = ErrorEnvelope>(
+ params?: ListAdminUsersAdminUsersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminUsersAdminUsersGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListAdminUsersAdminUsersGetQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+export type getAdminUserAdminUsersUserIdGetResponse200 = {
+  data: AdminUserOut
+  status: 200
+}
+
+export type getAdminUserAdminUsersUserIdGetResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type getAdminUserAdminUsersUserIdGetResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type getAdminUserAdminUsersUserIdGetResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type getAdminUserAdminUsersUserIdGetResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type getAdminUserAdminUsersUserIdGetResponseSuccess = (getAdminUserAdminUsersUserIdGetResponse200) & {
+  headers: Headers;
+};
+export type getAdminUserAdminUsersUserIdGetResponseError = (getAdminUserAdminUsersUserIdGetResponse401 | getAdminUserAdminUsersUserIdGetResponse403 | getAdminUserAdminUsersUserIdGetResponse404 | getAdminUserAdminUsersUserIdGetResponse422) & {
+  headers: Headers;
+};
+
+export type getAdminUserAdminUsersUserIdGetResponse = (getAdminUserAdminUsersUserIdGetResponseSuccess | getAdminUserAdminUsersUserIdGetResponseError)
+
+export const getGetAdminUserAdminUsersUserIdGetUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}`
+}
+
+/**
+ * @summary Get user (admin)
+ */
+export const getAdminUserAdminUsersUserIdGet = async (userId: string, options?: RequestInit): Promise<getAdminUserAdminUsersUserIdGetResponse> => {
+
+  return customFetch<getAdminUserAdminUsersUserIdGetResponse>(getGetAdminUserAdminUsersUserIdGetUrl(userId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAdminUserAdminUsersUserIdGetQueryKey = (userId: string,) => {
+    return [
+    `/admin/users/${userId}`
+    ] as const;
+    }
+
+
+export const getGetAdminUserAdminUsersUserIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError = ErrorEnvelope>(userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAdminUserAdminUsersUserIdGetQueryKey(userId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>> = ({ signal }) => getAdminUserAdminUsersUserIdGet(userId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: userId !== null && userId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetAdminUserAdminUsersUserIdGetQueryResult = NonNullable<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>>
+export type GetAdminUserAdminUsersUserIdGetQueryError = ErrorEnvelope
+
+
+export function useGetAdminUserAdminUsersUserIdGet<TData = Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError = ErrorEnvelope>(
+ userId: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAdminUserAdminUsersUserIdGet<TData = Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError = ErrorEnvelope>(
+ userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAdminUserAdminUsersUserIdGet<TData = Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError = ErrorEnvelope>(
+ userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get user (admin)
+ */
+
+export function useGetAdminUserAdminUsersUserIdGet<TData = Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError = ErrorEnvelope>(
+ userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminUserAdminUsersUserIdGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetAdminUserAdminUsersUserIdGetQueryOptions(userId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse204 = {
+  data: void
+  status: 204
+}
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse409 = {
+  data: ErrorEnvelope
+  status: 409
+}
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponseSuccess = (deleteAdminUserAdminUsersUserIdDeleteResponse204) & {
+  headers: Headers;
+};
+export type deleteAdminUserAdminUsersUserIdDeleteResponseError = (deleteAdminUserAdminUsersUserIdDeleteResponse401 | deleteAdminUserAdminUsersUserIdDeleteResponse403 | deleteAdminUserAdminUsersUserIdDeleteResponse404 | deleteAdminUserAdminUsersUserIdDeleteResponse409 | deleteAdminUserAdminUsersUserIdDeleteResponse422) & {
+  headers: Headers;
+};
+
+export type deleteAdminUserAdminUsersUserIdDeleteResponse = (deleteAdminUserAdminUsersUserIdDeleteResponseSuccess | deleteAdminUserAdminUsersUserIdDeleteResponseError)
+
+export const getDeleteAdminUserAdminUsersUserIdDeleteUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}`
+}
+
+/**
+ * Soft-deletes via `AsyncRepository.delete()` (`obj.mark_deleted()` --
+ * `User` composes `SoftDeleteMixin`, same as every other model in this
+ * catalog; never a hard `DELETE`, matching this app's "never hard-delete a
+ * User row" posture documented on `app/models/user.py` and `_core.py`'s
+ * own soft-delete-vs-hard-delete notes). Self-protection: the acting admin
+ * cannot delete their own account (409).
+ * @summary Delete user (admin)
+ */
+export const deleteAdminUserAdminUsersUserIdDelete = async (userId: string, options?: RequestInit): Promise<deleteAdminUserAdminUsersUserIdDeleteResponse> => {
+
+  return customFetch<deleteAdminUserAdminUsersUserIdDeleteResponse>(getDeleteAdminUserAdminUsersUserIdDeleteUrl(userId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteAdminUserAdminUsersUserIdDeleteMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteAdminUserAdminUsersUserIdDelete>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteAdminUserAdminUsersUserIdDelete>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['deleteAdminUserAdminUsersUserIdDelete'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteAdminUserAdminUsersUserIdDelete>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  deleteAdminUserAdminUsersUserIdDelete(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteAdminUserAdminUsersUserIdDeleteMutationResult = NonNullable<Awaited<ReturnType<typeof deleteAdminUserAdminUsersUserIdDelete>>>
+
+    export type DeleteAdminUserAdminUsersUserIdDeleteMutationError = ErrorEnvelope
+
+    /**
+ * @summary Delete user (admin)
+ */
+export const useDeleteAdminUserAdminUsersUserIdDelete = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteAdminUserAdminUsersUserIdDelete>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteAdminUserAdminUsersUserIdDelete>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getDeleteAdminUserAdminUsersUserIdDeleteMutationOptions(options), queryClient);
+    }
+    export type suspendAdminUserAdminUsersUserIdSuspendPostResponse200 = {
+  data: AdminUserOut
+  status: 200
+}
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponse409 = {
+  data: ErrorEnvelope
+  status: 409
+}
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponseSuccess = (suspendAdminUserAdminUsersUserIdSuspendPostResponse200) & {
+  headers: Headers;
+};
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponseError = (suspendAdminUserAdminUsersUserIdSuspendPostResponse401 | suspendAdminUserAdminUsersUserIdSuspendPostResponse403 | suspendAdminUserAdminUsersUserIdSuspendPostResponse404 | suspendAdminUserAdminUsersUserIdSuspendPostResponse409 | suspendAdminUserAdminUsersUserIdSuspendPostResponse422) & {
+  headers: Headers;
+};
+
+export type suspendAdminUserAdminUsersUserIdSuspendPostResponse = (suspendAdminUserAdminUsersUserIdSuspendPostResponseSuccess | suspendAdminUserAdminUsersUserIdSuspendPostResponseError)
+
+export const getSuspendAdminUserAdminUsersUserIdSuspendPostUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}/suspend`
+}
+
+/**
+ * Valid only from `status == "active"` -- an already-`suspended` or
+ * already-`banned` user raises `ConflictError` (409); a banned user must
+ * be `reinstate`d before it can be suspended (suspend is not a "downgrade
+ * from banned" operation). Self-protection: the acting admin cannot
+ * suspend themselves (`_ensure_not_self`, 409). On success, also revokes
+ * every refresh token this user holds (`RefreshTokenStore.
+ * revoke_all_for_user` -- see `app/core/security/auth/stores.py`'s
+ * `SqlAlchemyUserStore` docstring for the accepted, bounded
+ * access-token-TTL race this does NOT close) so existing sessions die
+ * immediately rather than merely being unable to refresh once their
+ * access token expires.
+ * @summary Suspend user (admin)
+ */
+export const suspendAdminUserAdminUsersUserIdSuspendPost = async (userId: string, options?: RequestInit): Promise<suspendAdminUserAdminUsersUserIdSuspendPostResponse> => {
+
+  return customFetch<suspendAdminUserAdminUsersUserIdSuspendPostResponse>(getSuspendAdminUserAdminUsersUserIdSuspendPostUrl(userId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getSuspendAdminUserAdminUsersUserIdSuspendPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof suspendAdminUserAdminUsersUserIdSuspendPost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof suspendAdminUserAdminUsersUserIdSuspendPost>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['suspendAdminUserAdminUsersUserIdSuspendPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof suspendAdminUserAdminUsersUserIdSuspendPost>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  suspendAdminUserAdminUsersUserIdSuspendPost(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SuspendAdminUserAdminUsersUserIdSuspendPostMutationResult = NonNullable<Awaited<ReturnType<typeof suspendAdminUserAdminUsersUserIdSuspendPost>>>
+
+    export type SuspendAdminUserAdminUsersUserIdSuspendPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Suspend user (admin)
+ */
+export const useSuspendAdminUserAdminUsersUserIdSuspendPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof suspendAdminUserAdminUsersUserIdSuspendPost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof suspendAdminUserAdminUsersUserIdSuspendPost>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getSuspendAdminUserAdminUsersUserIdSuspendPostMutationOptions(options), queryClient);
+    }
+    export type banAdminUserAdminUsersUserIdBanPostResponse200 = {
+  data: AdminUserOut
+  status: 200
+}
+
+export type banAdminUserAdminUsersUserIdBanPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type banAdminUserAdminUsersUserIdBanPostResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type banAdminUserAdminUsersUserIdBanPostResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type banAdminUserAdminUsersUserIdBanPostResponse409 = {
+  data: ErrorEnvelope
+  status: 409
+}
+
+export type banAdminUserAdminUsersUserIdBanPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type banAdminUserAdminUsersUserIdBanPostResponseSuccess = (banAdminUserAdminUsersUserIdBanPostResponse200) & {
+  headers: Headers;
+};
+export type banAdminUserAdminUsersUserIdBanPostResponseError = (banAdminUserAdminUsersUserIdBanPostResponse401 | banAdminUserAdminUsersUserIdBanPostResponse403 | banAdminUserAdminUsersUserIdBanPostResponse404 | banAdminUserAdminUsersUserIdBanPostResponse409 | banAdminUserAdminUsersUserIdBanPostResponse422) & {
+  headers: Headers;
+};
+
+export type banAdminUserAdminUsersUserIdBanPostResponse = (banAdminUserAdminUsersUserIdBanPostResponseSuccess | banAdminUserAdminUsersUserIdBanPostResponseError)
+
+export const getBanAdminUserAdminUsersUserIdBanPostUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}/ban`
+}
+
+/**
+ * Valid from `status in {"active", "suspended"}` -- an already-`banned`
+ * user raises `ConflictError` (409, idempotent re-ban is rejected rather
+ * than silently no-op'd, matching `suspend`'s own strict-transition
+ * posture). Self-protection: the acting admin cannot ban themselves (409).
+ * Same refresh-token revocation as `suspend` above -- see that handler's
+ * own docstring.
+ * @summary Ban user (admin)
+ */
+export const banAdminUserAdminUsersUserIdBanPost = async (userId: string, options?: RequestInit): Promise<banAdminUserAdminUsersUserIdBanPostResponse> => {
+
+  return customFetch<banAdminUserAdminUsersUserIdBanPostResponse>(getBanAdminUserAdminUsersUserIdBanPostUrl(userId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getBanAdminUserAdminUsersUserIdBanPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof banAdminUserAdminUsersUserIdBanPost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof banAdminUserAdminUsersUserIdBanPost>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['banAdminUserAdminUsersUserIdBanPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof banAdminUserAdminUsersUserIdBanPost>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  banAdminUserAdminUsersUserIdBanPost(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type BanAdminUserAdminUsersUserIdBanPostMutationResult = NonNullable<Awaited<ReturnType<typeof banAdminUserAdminUsersUserIdBanPost>>>
+
+    export type BanAdminUserAdminUsersUserIdBanPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Ban user (admin)
+ */
+export const useBanAdminUserAdminUsersUserIdBanPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof banAdminUserAdminUsersUserIdBanPost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof banAdminUserAdminUsersUserIdBanPost>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getBanAdminUserAdminUsersUserIdBanPostMutationOptions(options), queryClient);
+    }
+    export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse200 = {
+  data: AdminUserOut
+  status: 200
+}
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse409 = {
+  data: ErrorEnvelope
+  status: 409
+}
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponseSuccess = (reinstateAdminUserAdminUsersUserIdReinstatePostResponse200) & {
+  headers: Headers;
+};
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponseError = (reinstateAdminUserAdminUsersUserIdReinstatePostResponse401 | reinstateAdminUserAdminUsersUserIdReinstatePostResponse403 | reinstateAdminUserAdminUsersUserIdReinstatePostResponse404 | reinstateAdminUserAdminUsersUserIdReinstatePostResponse409 | reinstateAdminUserAdminUsersUserIdReinstatePostResponse422) & {
+  headers: Headers;
+};
+
+export type reinstateAdminUserAdminUsersUserIdReinstatePostResponse = (reinstateAdminUserAdminUsersUserIdReinstatePostResponseSuccess | reinstateAdminUserAdminUsersUserIdReinstatePostResponseError)
+
+export const getReinstateAdminUserAdminUsersUserIdReinstatePostUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}/reinstate`
+}
+
+/**
+ * Valid from `status in {"suspended", "banned"}` -- an already-`active`
+ * user raises `ConflictError` (409, "nothing to reinstate"). No
+ * self-protection guard: reinstating one's own account is never harmful
+ * (it can only WIDEN the caller's own access back to what it already was
+ * before a suspend/ban, never grant anything new), matching this stage's
+ * own endpoint contract. No refresh-token action either -- reinstating
+ * doesn't need to kill sessions, only suspend/ban do.
+ * @summary Reinstate user (admin)
+ */
+export const reinstateAdminUserAdminUsersUserIdReinstatePost = async (userId: string, options?: RequestInit): Promise<reinstateAdminUserAdminUsersUserIdReinstatePostResponse> => {
+
+  return customFetch<reinstateAdminUserAdminUsersUserIdReinstatePostResponse>(getReinstateAdminUserAdminUsersUserIdReinstatePostUrl(userId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getReinstateAdminUserAdminUsersUserIdReinstatePostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reinstateAdminUserAdminUsersUserIdReinstatePost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof reinstateAdminUserAdminUsersUserIdReinstatePost>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['reinstateAdminUserAdminUsersUserIdReinstatePost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof reinstateAdminUserAdminUsersUserIdReinstatePost>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  reinstateAdminUserAdminUsersUserIdReinstatePost(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReinstateAdminUserAdminUsersUserIdReinstatePostMutationResult = NonNullable<Awaited<ReturnType<typeof reinstateAdminUserAdminUsersUserIdReinstatePost>>>
+
+    export type ReinstateAdminUserAdminUsersUserIdReinstatePostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Reinstate user (admin)
+ */
+export const useReinstateAdminUserAdminUsersUserIdReinstatePost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reinstateAdminUserAdminUsersUserIdReinstatePost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof reinstateAdminUserAdminUsersUserIdReinstatePost>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getReinstateAdminUserAdminUsersUserIdReinstatePostMutationOptions(options), queryClient);
+    }
+    export type setAdminUserRolesAdminUsersUserIdRolesPutResponse200 = {
+  data: AdminUserOut
+  status: 200
+}
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponse409 = {
+  data: ErrorEnvelope
+  status: 409
+}
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponseSuccess = (setAdminUserRolesAdminUsersUserIdRolesPutResponse200) & {
+  headers: Headers;
+};
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponseError = (setAdminUserRolesAdminUsersUserIdRolesPutResponse401 | setAdminUserRolesAdminUsersUserIdRolesPutResponse403 | setAdminUserRolesAdminUsersUserIdRolesPutResponse404 | setAdminUserRolesAdminUsersUserIdRolesPutResponse409 | setAdminUserRolesAdminUsersUserIdRolesPutResponse422) & {
+  headers: Headers;
+};
+
+export type setAdminUserRolesAdminUsersUserIdRolesPutResponse = (setAdminUserRolesAdminUsersUserIdRolesPutResponseSuccess | setAdminUserRolesAdminUsersUserIdRolesPutResponseError)
+
+export const getSetAdminUserRolesAdminUsersUserIdRolesPutUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}/roles`
+}
+
+/**
+ * Full-replace, not a delta -- `payload.roles` becomes the user's
+ * ENTIRE role list. Every requested role is validated against
+ * `_ALLOWED_ROLES` (module-level, above) -- an unknown role raises
+ * `ValidationFailedError` (422 `validation_failed`, with one `ErrorDetail`
+ * per unknown role) BEFORE any write, so this is never a mass-assignment
+ * of an arbitrary caller-supplied column. Self-protection: if `user_id` is
+ * the ACTING admin's own account and the requested role list would drop
+ * `"admin"`, raises `ConflictError` (409) instead of writing -- this is
+ * what stops an admin from locking themselves out via this endpoint.
+ * @summary Set user roles (admin)
+ */
+export const setAdminUserRolesAdminUsersUserIdRolesPut = async (userId: string,
+    adminRolesIn: AdminRolesIn, options?: RequestInit): Promise<setAdminUserRolesAdminUsersUserIdRolesPutResponse> => {
+
+  return customFetch<setAdminUserRolesAdminUsersUserIdRolesPutResponse>(getSetAdminUserRolesAdminUsersUserIdRolesPutUrl(userId),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(adminRolesIn)
+  }
+);}
+
+
+
+
+
+export const getSetAdminUserRolesAdminUsersUserIdRolesPutMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setAdminUserRolesAdminUsersUserIdRolesPut>>, TError,{userId: string;data: AdminRolesIn}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof setAdminUserRolesAdminUsersUserIdRolesPut>>, TError,{userId: string;data: AdminRolesIn}, TContext> => {
+
+const mutationKey = ['setAdminUserRolesAdminUsersUserIdRolesPut'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof setAdminUserRolesAdminUsersUserIdRolesPut>>, {userId: string;data: AdminRolesIn}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  setAdminUserRolesAdminUsersUserIdRolesPut(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SetAdminUserRolesAdminUsersUserIdRolesPutMutationResult = NonNullable<Awaited<ReturnType<typeof setAdminUserRolesAdminUsersUserIdRolesPut>>>
+    export type SetAdminUserRolesAdminUsersUserIdRolesPutMutationBody = AdminRolesIn
+    export type SetAdminUserRolesAdminUsersUserIdRolesPutMutationError = ErrorEnvelope
+
+    /**
+ * @summary Set user roles (admin)
+ */
+export const useSetAdminUserRolesAdminUsersUserIdRolesPut = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setAdminUserRolesAdminUsersUserIdRolesPut>>, TError,{userId: string;data: AdminRolesIn}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof setAdminUserRolesAdminUsersUserIdRolesPut>>,
+        TError,
+        {userId: string;data: AdminRolesIn},
+        TContext
+      > => {
+      return useMutation(getSetAdminUserRolesAdminUsersUserIdRolesPutMutationOptions(options), queryClient);
+    }
+    export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse200 = {
+  data: AdminUserOut
+  status: 200
+}
+
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse403 = {
+  data: ErrorEnvelope
+  status: 403
+}
+
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponseSuccess = (forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse200) & {
+  headers: Headers;
+};
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponseError = (forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse401 | forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse403 | forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse404 | forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse422) & {
+  headers: Headers;
+};
+
+export type forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse = (forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponseSuccess | forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponseError)
+
+export const getForceVerifyAdminUserAdminUsersUserIdForceVerifyPostUrl = (userId: string,) => {
+
+
+
+
+  return `/admin/users/${userId}/force-verify`
+}
+
+/**
+ * Idempotent: sets `email_verified=True`/`verified_at=<now>` if not
+ * already verified, otherwise a no-op read-back -- either way returns the
+ * current `AdminUserOut`. The one sanctioned way to unblock a user whose
+ * verification email never arrived without making them go through
+ * `AccountService`'s own token-issuing flow again.
+ * @summary Force-verify user email (admin)
+ */
+export const forceVerifyAdminUserAdminUsersUserIdForceVerifyPost = async (userId: string, options?: RequestInit): Promise<forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse> => {
+
+  return customFetch<forceVerifyAdminUserAdminUsersUserIdForceVerifyPostResponse>(getForceVerifyAdminUserAdminUsersUserIdForceVerifyPostUrl(userId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getForceVerifyAdminUserAdminUsersUserIdForceVerifyPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof forceVerifyAdminUserAdminUsersUserIdForceVerifyPost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof forceVerifyAdminUserAdminUsersUserIdForceVerifyPost>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['forceVerifyAdminUserAdminUsersUserIdForceVerifyPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof forceVerifyAdminUserAdminUsersUserIdForceVerifyPost>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  forceVerifyAdminUserAdminUsersUserIdForceVerifyPost(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ForceVerifyAdminUserAdminUsersUserIdForceVerifyPostMutationResult = NonNullable<Awaited<ReturnType<typeof forceVerifyAdminUserAdminUsersUserIdForceVerifyPost>>>
+
+    export type ForceVerifyAdminUserAdminUsersUserIdForceVerifyPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Force-verify user email (admin)
+ */
+export const useForceVerifyAdminUserAdminUsersUserIdForceVerifyPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof forceVerifyAdminUserAdminUsersUserIdForceVerifyPost>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof forceVerifyAdminUserAdminUsersUserIdForceVerifyPost>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getForceVerifyAdminUserAdminUsersUserIdForceVerifyPostMutationOptions(options), queryClient);
+    }

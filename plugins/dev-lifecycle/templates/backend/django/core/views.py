@@ -41,13 +41,14 @@ from django.db import connection
 from django.db.utils import Error as DjangoDBError
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from rest_framework import status, viewsets
+from rest_framework import generics, status, viewsets
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.contract.errors import NotFoundError
-from core.models import Item
+from core.contract.errors import ConflictError, ErrorDetail, NotFoundError, ValidationFailedError
+from core.models import Item, User
+from core.security.admin_rate_limit import enforce_admin_rate_limit
 from core.security.auth import (
     AuthService,
     InvalidToken,
@@ -55,6 +56,7 @@ from core.security.auth import (
     enforce_csrf,
     generate_csrf_token,
     read_refresh_cookie,
+    require_roles,
     resolve_principal,
     set_auth_cookies,
 )
@@ -70,7 +72,10 @@ from core.security.auth.stores import (
     get_token_service,
     utc_now,
 )
+from core.security.audit_logging.audit import audit_event
 from core.serializers import (
+    AdminRolesInSerializer,
+    AdminUserOutSerializer,
     ErrorEnvelopeSerializer,
     HealthStatusSerializer,
     ItemCreateSerializer,
@@ -839,3 +844,397 @@ class AdminPingView(APIView):
     )
     def get(self, request):
         return Response(HealthStatusSerializer({"status": "ok"}).data)
+
+
+# ---------------------------------------------------------------------------
+# Stage 13b: admin user management — the DRF counterpart to `app/api/
+# routers/admin.py`'s own admin user-management surface. See that module's
+# docstring for the full design this mirrors handler-for-handler
+# (self-protection, the suspend/ban/reinstate state machine, audit events,
+# the tighter per-route rate limit, `status`-unfiltered admin queries).
+#
+# **The auth gate.** Every view below calls `require_roles(request,
+# auth_service, "admin")` directly (`core.security.auth`, the vendored
+# Django adapter — NOT `has_role("admin")`, `AdminPingView`'s own
+# `permission_classes` gate) so the SAME call that enforces the role ALSO
+# hands back the resolved `AccessClaims` — `claims.sub` is the acting
+# admin's own id, needed here (unlike `AdminPingView`) as the audit actor
+# and for the self-protection guard. `has_role`'s `BasePermission` has no
+# way to hand its resolved claims back to the view body, so it would force
+# a SECOND, redundant token verification (`resolve_principal`, decoding the
+# JWT twice) to get the same information this single call already has —
+# see `app/api/deps.py`'s `require_admin` (FastAPI) for the identical
+# "gate + actor in one call" rationale. `permission_classes = [AllowAny]`/
+# `authentication_classes = []` below matches `MeView`'s own posture for
+# the same reason: this file enforces authentication/authorization itself.
+# ---------------------------------------------------------------------------
+
+# The allowed-role set `PUT /admin/users/{user_id}/roles` validates
+# against — matches `app/api/routers/admin.py`'s own `_ALLOWED_ROLES`
+# exactly (see that module's own comment for the "no mass-assignment"
+# rationale).
+_ALLOWED_ROLES: frozenset[str] = frozenset({"admin"})
+
+_ALLOWED_STATUS_VALUES = frozenset({"active", "suspended", "banned"})
+
+_ADMIN_NOT_FOUND_RESPONSE = {404: ErrorEnvelopeSerializer}
+_ADMIN_CONFLICT_RESPONSE = {409: ErrorEnvelopeSerializer}
+_ADMIN_VALIDATION_RESPONSE = {422: ErrorEnvelopeSerializer}
+_ADMIN_AUTH_RESPONSES = {401: ErrorEnvelopeSerializer, 403: ErrorEnvelopeSerializer}
+
+
+def _get_admin_user(user_id: str) -> User:
+    """Looks up `User.objects` (soft-delete-scoped by `UserManager`'s own
+    default, `core/models.py` — same scoping `AsyncRepository` applies on
+    the FastAPI track) by a caller-supplied, NOT-YET-VALIDATED path
+    segment. `<str:user_id>` (see `core/urls.py`), not Django's own
+    `<uuid:...>` converter, is what routes a malformed UUID to THIS
+    function rather than to Django's own unenveloped routing-level 404 —
+    mirrors `ItemViewSet.get_object`'s identical "accept a plain string
+    segment, validate by hand, raise the app's own NotFoundError" posture
+    and its own docstring's rationale for why (keeps a malformed-id request
+    inside DRF's exception-handler cycle, so it still renders THIS block's
+    `ErrorEnvelope`, not Django's raw 404 page)."""
+    try:
+        uid = uuid.UUID(user_id)
+    except (ValueError, TypeError):
+        raise NotFoundError(f"User {user_id} was not found.") from None
+    try:
+        return User.objects.get(id=uid)
+    except User.DoesNotExist:
+        raise NotFoundError(f"User {user_id} was not found.") from None
+
+
+def _ensure_not_self(claims, user: User, *, action: str) -> None:
+    """Self-protection guard — identical rule to `app/api/routers/admin.py`'s
+    `_ensure_not_self`: the acting admin can never `action` (ban/suspend/
+    delete) their OWN account."""
+    if str(user.id) == claims.sub:
+        raise ConflictError(f"An admin cannot {action} their own account.")
+
+
+class AdminUserListView(generics.ListAPIView):
+    """`GET /admin/users` — paginated listing via the SAME `core.pagination.
+    ContractPageNumberPagination` `GET /items` already uses (`config/
+    settings.py`'s `DEFAULT_PAGINATION_CLASS`), auto-wrapped into the
+    `{items, total, page, size, pages}` envelope by that class's own
+    `get_paginated_response` — this view declares no pagination wiring of
+    its own beyond `get_queryset`. `?q=` filters `email` case-insensitively
+    (`icontains` — Postgres/sqlite both apply case-INsensitive `LIKE`
+    semantics for ASCII by default; `?status=` filters to one exact status,
+    rejecting an unrecognized value with `ValidationFailedError` (422) —
+    matching `app/api/routers/admin.py`'s own `UserStatus` enum-typed query
+    param, which pydantic/FastAPI reject the same way automatically."""
+
+    serializer_class = AdminUserOutSerializer
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    # `.order_by(...)`: same "an unordered queryset paginates
+    # non-deterministically" rationale `ItemViewSet.queryset`'s own comment
+    # documents.
+    queryset = User.objects.all().order_by("created_at", "id")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        q = self.request.query_params.get("q")
+        if q:
+            queryset = queryset.filter(email__icontains=q)
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            if status_filter not in _ALLOWED_STATUS_VALUES:
+                raise ValidationFailedError(
+                    "Invalid status filter.",
+                    details=[ErrorDetail(field="status", message=f"Unknown status: {status_filter!r}")],
+                )
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    @extend_schema(
+        operation_id="list_admin_users_admin_users_get",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={200: AdminUserOutSerializer, **_ADMIN_AUTH_RESPONSES, **_ADMIN_VALIDATION_RESPONSE},
+    )
+    def get(self, request, *args, **kwargs):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        return super().get(request, *args, **kwargs)
+
+
+@extend_schema_view(
+    get=extend_schema(
+        operation_id="get_admin_user_admin_users__user_id__get",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: AdminUserOutSerializer,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    ),
+    delete=extend_schema(
+        operation_id="delete_admin_user_admin_users__user_id__delete",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            204: None,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_CONFLICT_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    ),
+)
+class AdminUserDetailView(APIView):
+    """`GET`/`DELETE /admin/users/{user_id}` — get and (soft-)delete one
+    user, the DRF counterpart to `app/api/routers/admin.py`'s
+    `get_admin_user`/`delete_admin_user`."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    def get(self, request, user_id):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        user = _get_admin_user(user_id)
+        return Response(AdminUserOutSerializer(user).data)
+
+    def delete(self, request, user_id):
+        """Soft-deletes via `User.mark_deleted()` (`core/models.py` — never
+        a hard `DELETE`, matching `ItemViewSet.perform_destroy`'s identical
+        posture for `Item`). Self-protection: the acting admin cannot
+        delete their own account (409)."""
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        user = _get_admin_user(user_id)
+        _ensure_not_self(claims, user, action="delete")
+        user.mark_deleted()
+        user.save(update_fields=["deleted_at"])
+        audit_event(
+            "admin.user.delete",
+            actor=claims.sub,
+            resource=f"user:{user.id}",
+            outcome="success",
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminUserSuspendView(APIView):
+    """`POST /admin/users/{user_id}/suspend` — the DRF counterpart to
+    `app/api/routers/admin.py`'s `suspend_admin_user`: valid only from
+    `status == "active"` (409 otherwise), self-protection (409), and
+    revokes every refresh token this user holds on success — see that
+    handler's own docstring for the full rationale, identical here."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="suspend_admin_user_admin_users__user_id__suspend_post",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: AdminUserOutSerializer,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_CONFLICT_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, user_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        user = _get_admin_user(user_id)
+        _ensure_not_self(claims, user, action="suspend")
+        if user.status != "active":
+            raise ConflictError(f"Cannot suspend a user with status '{user.status}'.")
+        user.status = "suspended"
+        user.save(update_fields=["status"])
+        async_to_sync(DjangoRefreshTokenStore().revoke_all_for_user)(str(user.id))
+        audit_event(
+            "admin.user.suspend",
+            actor=claims.sub,
+            resource=f"user:{user.id}",
+            outcome="success",
+            changed_fields=["status"],
+        )
+        return Response(AdminUserOutSerializer(user).data)
+
+
+class AdminUserBanView(APIView):
+    """`POST /admin/users/{user_id}/ban` — the DRF counterpart to `app/api/
+    routers/admin.py`'s `ban_admin_user`: valid from `status in {"active",
+    "suspended"}` (409 otherwise), self-protection (409), and revokes every
+    refresh token this user holds on success."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="ban_admin_user_admin_users__user_id__ban_post",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: AdminUserOutSerializer,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_CONFLICT_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, user_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        user = _get_admin_user(user_id)
+        _ensure_not_self(claims, user, action="ban")
+        if user.status not in ("active", "suspended"):
+            raise ConflictError(f"Cannot ban a user with status '{user.status}'.")
+        user.status = "banned"
+        user.save(update_fields=["status"])
+        async_to_sync(DjangoRefreshTokenStore().revoke_all_for_user)(str(user.id))
+        audit_event(
+            "admin.user.ban",
+            actor=claims.sub,
+            resource=f"user:{user.id}",
+            outcome="success",
+            changed_fields=["status"],
+        )
+        return Response(AdminUserOutSerializer(user).data)
+
+
+class AdminUserReinstateView(APIView):
+    """`POST /admin/users/{user_id}/reinstate` — the DRF counterpart to
+    `app/api/routers/admin.py`'s `reinstate_admin_user`: valid from `status
+    in {"suspended", "banned"}` (409 otherwise). No self-protection guard
+    and no refresh-token action — see that handler's own docstring for why
+    neither applies here."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="reinstate_admin_user_admin_users__user_id__reinstate_post",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: AdminUserOutSerializer,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_CONFLICT_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, user_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        user = _get_admin_user(user_id)
+        if user.status not in ("suspended", "banned"):
+            raise ConflictError(f"Cannot reinstate a user with status '{user.status}'.")
+        user.status = "active"
+        user.save(update_fields=["status"])
+        audit_event(
+            "admin.user.reinstate",
+            actor=claims.sub,
+            resource=f"user:{user.id}",
+            outcome="success",
+            changed_fields=["status"],
+        )
+        return Response(AdminUserOutSerializer(user).data)
+
+
+class AdminUserRolesView(APIView):
+    """`PUT /admin/users/{user_id}/roles` — the DRF counterpart to `app/
+    api/routers/admin.py`'s `set_admin_user_roles`: full-replace, every
+    requested role validated against `_ALLOWED_ROLES` (422 for an unknown
+    one — no mass-assignment), self-protection against the acting admin
+    dropping their OWN `"admin"` role (409)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="set_admin_user_roles_admin_users__user_id__roles_put",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        request=AdminRolesInSerializer,
+        responses={
+            200: AdminUserOutSerializer,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_CONFLICT_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    )
+    def put(self, request, user_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        serializer = AdminRolesInSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = _get_admin_user(user_id)
+        requested_roles = serializer.validated_data["roles"]
+        unknown = sorted(set(requested_roles) - _ALLOWED_ROLES)
+        if unknown:
+            raise ValidationFailedError(
+                "One or more requested roles is unknown.",
+                details=[ErrorDetail(field="roles", message=f"Unknown role: {role!r}") for role in unknown],
+            )
+        deduped = sorted(set(requested_roles))
+        if str(user.id) == claims.sub and "admin" not in deduped:
+            raise ConflictError("An admin cannot remove their own admin role.")
+        user.roles = deduped
+        user.save(update_fields=["roles"])
+        audit_event(
+            "admin.user.roles_set",
+            actor=claims.sub,
+            resource=f"user:{user.id}",
+            outcome="success",
+            changed_fields=["roles"],
+        )
+        return Response(AdminUserOutSerializer(user).data)
+
+
+class AdminUserForceVerifyView(APIView):
+    """`POST /admin/users/{user_id}/force-verify` — the DRF counterpart to
+    `app/api/routers/admin.py`'s `force_verify_admin_user`: idempotent,
+    sets `email_verified=True`/`verified_at=<now>` if not already
+    verified."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="force_verify_admin_user_admin_users__user_id__force-verify_post",
+        tags=["admin"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: AdminUserOutSerializer,
+            **_ADMIN_AUTH_RESPONSES,
+            **_ADMIN_NOT_FOUND_RESPONSE,
+            **_ADMIN_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, user_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        user = _get_admin_user(user_id)
+        if not user.email_verified:
+            user.email_verified = True
+            user.verified_at = utc_now()
+            user.save(update_fields=["email_verified", "verified_at"])
+        audit_event(
+            "admin.user.force_verify",
+            actor=claims.sub,
+            resource=f"user:{user.id}",
+            outcome="success",
+            changed_fields=["email_verified"],
+        )
+        return Response(AdminUserOutSerializer(user).data)

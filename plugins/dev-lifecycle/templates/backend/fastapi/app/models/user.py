@@ -13,7 +13,21 @@ defaults `False` at the Python/ORM level (every row this app inserts
 supplies it explicitly) — Alembic 0003 additionally gives the DB column a
 `server_default` of `false` so the migration itself backfills any
 pre-existing row without a NULL/undefined value, per that migration's own
-docstring."""
+docstring.
+
+Stage 13b: `status` backs the admin user-management surface
+(`app/api/routers/admin.py`) — an app-level, closed set of
+`{"active", "suspended", "banned"}` (`app/schemas/admin.py`'s `UserStatus`
+`StrEnum`), stored as a plain `String(16)`, **NOT** a DB-level enum —
+matching `roles`'s own JSON-not-`ARRAY` and
+`app/models/single_use_token.py`'s `purpose` column precedent: a DB enum
+type is a schema-migration event of its own to add/remove a member, and
+this app's hermetic sqlite test suite needs a column type sqlite actually
+has. Defaults `"active"` at the Python/ORM level, same two-layer
+`default`/`server_default` shape `email_verified` above documents — Alembic
+0004 gives the DB column a `server_default='active'` so that migration
+backfills every pre-existing row to a real, non-NULL `"active"` rather than
+leaving it undefined."""
 
 from __future__ import annotations
 
@@ -56,3 +70,4 @@ class User(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     roles: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")

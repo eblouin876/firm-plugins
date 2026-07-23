@@ -714,10 +714,789 @@
           }
         ]
       }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List users (admin)",
+        "description": "Paginated user listing -- reuses the `pagination/` component's\n`PageParams`/`Page[T]` (the SAME shape `GET /items` uses,\n`app/api/routers/items.py`'s own `list_items`), `?q=` filters `email`\ncase-insensitively via `.ilike()` (portable across sqlite/Postgres --\nsee `sqlalchemy.md`/this app's own hermetic-test posture), `?status=`\nfilters to one exact `UserStatus`. Unfiltered by soft-delete beyond\n`AsyncRepository`'s own default (excludes soft-deleted rows) -- see this\nmodule's docstring, \"Admin queries are UNFILTERED by status\": every\nstatus value is visible here, unlike the login/refresh path.",
+        "operationId": "list_admin_users_admin_users_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring match against email.",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring match against email."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/UserStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AdminUserOut_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Get user (admin)",
+        "operationId": "get_admin_user_admin_users__user_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete user (admin)",
+        "description": "Soft-deletes via `AsyncRepository.delete()` (`obj.mark_deleted()` --\n`User` composes `SoftDeleteMixin`, same as every other model in this\ncatalog; never a hard `DELETE`, matching this app's \"never hard-delete a\nUser row\" posture documented on `app/models/user.py` and `_core.py`'s\nown soft-delete-vs-hard-delete notes). Self-protection: the acting admin\ncannot delete their own account (409).",
+        "operationId": "delete_admin_user_admin_users__user_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the user's current state, or is a self-protection guard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/suspend": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Suspend user (admin)",
+        "description": "Valid only from `status == \"active\"` -- an already-`suspended` or\nalready-`banned` user raises `ConflictError` (409); a banned user must\nbe `reinstate`d before it can be suspended (suspend is not a \"downgrade\nfrom banned\" operation). Self-protection: the acting admin cannot\nsuspend themselves (`_ensure_not_self`, 409). On success, also revokes\nevery refresh token this user holds (`RefreshTokenStore.\nrevoke_all_for_user` -- see `app/core/security/auth/stores.py`'s\n`SqlAlchemyUserStore` docstring for the accepted, bounded\naccess-token-TTL race this does NOT close) so existing sessions die\nimmediately rather than merely being unable to refresh once their\naccess token expires.",
+        "operationId": "suspend_admin_user_admin_users__user_id__suspend_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the user's current state, or is a self-protection guard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/ban": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Ban user (admin)",
+        "description": "Valid from `status in {\"active\", \"suspended\"}` -- an already-`banned`\nuser raises `ConflictError` (409, idempotent re-ban is rejected rather\nthan silently no-op'd, matching `suspend`'s own strict-transition\nposture). Self-protection: the acting admin cannot ban themselves (409).\nSame refresh-token revocation as `suspend` above -- see that handler's\nown docstring.",
+        "operationId": "ban_admin_user_admin_users__user_id__ban_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the user's current state, or is a self-protection guard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/reinstate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Reinstate user (admin)",
+        "description": "Valid from `status in {\"suspended\", \"banned\"}` -- an already-`active`\nuser raises `ConflictError` (409, \"nothing to reinstate\"). No\nself-protection guard: reinstating one's own account is never harmful\n(it can only WIDEN the caller's own access back to what it already was\nbefore a suspend/ban, never grant anything new), matching this stage's\nown endpoint contract. No refresh-token action either -- reinstating\ndoesn't need to kill sessions, only suspend/ban do.",
+        "operationId": "reinstate_admin_user_admin_users__user_id__reinstate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the user's current state, or is a self-protection guard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/roles": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Set user roles (admin)",
+        "description": "Full-replace, not a delta -- `payload.roles` becomes the user's\nENTIRE role list. Every requested role is validated against\n`_ALLOWED_ROLES` (module-level, above) -- an unknown role raises\n`ValidationFailedError` (422 `validation_failed`, with one `ErrorDetail`\nper unknown role) BEFORE any write, so this is never a mass-assignment\nof an arbitrary caller-supplied column. Self-protection: if `user_id` is\nthe ACTING admin's own account and the requested role list would drop\n`\"admin\"`, raises `ConflictError` (409) instead of writing -- this is\nwhat stops an admin from locking themselves out via this endpoint.",
+        "operationId": "set_admin_user_roles_admin_users__user_id__roles_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminRolesIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the user's current state, or is a self-protection guard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{user_id}/force-verify": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Force-verify user email (admin)",
+        "description": "Idempotent: sets `email_verified=True`/`verified_at=<now>` if not\nalready verified, otherwise a no-op read-back -- either way returns the\ncurrent `AdminUserOut`. The one sanctioned way to unblock a user whose\nverification email never arrived without making them go through\n`AccountService`'s own token-issuing flow again.",
+        "operationId": "force_verify_admin_user_admin_users__user_id__force-verify_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AdminRolesIn": {
+        "properties": {
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AdminRolesIn",
+        "description": "`PUT /admin/users/{user_id}/roles`'s request body \u2014 a full-replace\nrole list (not a delta/patch), validated at the ROUTE layer\n(`app/api/routers/admin.py`'s `set_admin_user_roles`) against the\napp's own closed allowed-role set \u2014 this schema only enforces \"a list\nof strings\", never which strings, since the allowed set is a small,\napp-level policy decision, not a wire-shape constraint `extra=\"forbid\"`\ncan express."
+      },
+      "AdminUserOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          },
+          "email_verified": {
+            "type": "boolean",
+            "title": "Email Verified"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "roles",
+          "status",
+          "email_verified",
+          "created_at"
+        ],
+        "title": "AdminUserOut",
+        "description": "The read shape every admin user-management endpoint returns.\nDeliberately NO `password_hash`, NO token fields \u2014 this is the ONE\nplace `app/models/user.py`'s `User` ORM instance is ever serialized for\nan admin caller, and leaking either would be a straightforward secret\nleak into an HTTP response (and, via `app/api/routers/admin.py`'s own\n`audit_event(...)` calls, never into an audit log either \u2014 see that\nrouter's module docstring). `from_attributes=True` lets\n`AdminUserOut.model_validate(user)` read straight off the ORM\ninstance's attributes, the same convention `app/schemas/item.py`'s\n`ItemOut` documents."
+      },
       "ErrorBody": {
         "additionalProperties": false,
         "description": "The `error` object inside the envelope. `code` is a short, stable,\nmachine-matchable `ErrorCode` member \u2014 a client should switch on\n`code`, never on `message` (message is for humans, can change wording\nwithout breaking a client, and MUST NOT be treated as a stable\nidentifier). Typed as `ErrorCode`, not `str`, so Pydantic rejects an\nunrecognized code at construction time and OpenAPI documents the\nclosed set.",
@@ -951,6 +1730,47 @@
         ],
         "title": "LoginRequest"
       },
+      "Page_AdminUserOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUserOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size"
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "pages"
+        ],
+        "title": "Page[AdminUserOut]"
+      },
       "Page_ItemOut_": {
         "properties": {
           "items": {
@@ -1121,6 +1941,15 @@
           "refresh_token"
         ],
         "title": "TokenResponse"
+      },
+      "UserStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "suspended",
+          "banned"
+        ],
+        "title": "UserStatus"
       },
       "VerifyEmailRequest": {
         "properties": {

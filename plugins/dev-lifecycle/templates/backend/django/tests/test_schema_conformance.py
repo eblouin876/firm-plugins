@@ -386,6 +386,18 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # documents: this constant (and both stale-guards below, which still apply
 # to any FUTURE pending-parity op) stays the documented seam a later stage's
 # own in-flight parity work reuses.
+#
+# Stage 5d (#46) -> Stage 13b: backend/fastapi's Stage 13b implemented the
+# admin user-management surface -- `GET /admin/users`, `GET /admin/users/
+# {user_id}`, `POST /admin/users/{user_id}/{suspend,ban,reinstate,
+# force-verify}`, `PUT /admin/users/{user_id}/roles`, `DELETE /admin/users/
+# {user_id}` (`app/api/routers/admin.py`) -- and extended the frozen
+# contract with all eight new operations. Django parity (`core/views.py`'s
+# new admin user-management views, `core/urls.py`'s new routes,
+# `core.security.auth.require_roles` for the actor-yielding role gate) is
+# this same stage's job, landed in a follow-up commit -- these eight
+# entries are removed (this set goes back to empty) once that lands with a
+# wire-shape that matches the frozen contract exactly.
 _PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 
