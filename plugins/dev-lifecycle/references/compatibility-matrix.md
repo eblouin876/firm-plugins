@@ -1,7 +1,7 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07"
-last-verified: 2026-07-22
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07"
+last-verified: 2026-07-23
 provenance: manual
 sources:
   - https://pypi.org/project/fastapi/
@@ -14,6 +14,8 @@ sources:
   - https://www.djangoproject.com/download/
   - https://www.django-rest-framework.org/community/release-notes/
   - https://drf-spectacular.readthedocs.io/
+  - https://pypi.org/project/psycopg/
+  - https://docs.djangoproject.com/en/5.2/releases/5.2/
   - https://nodejs.org/en/about/previous-releases
   - https://www.npmjs.com/package/pnpm?activeTab=versions
   - https://devblogs.microsoft.com/typescript/
@@ -82,6 +84,7 @@ Re-verify against official release notes/registries before bumping any line — 
 | Django | **5.2 LTS** | LTS branch, supported through Apr 2028 — the right default for a starter kit over a non-LTS feature release. |
 | Django REST Framework | **3.17.x** | Current stable, tracks Django 5.2. |
 | drf-spectacular | **0.30.x** | OpenAPI 3 schema generation for DRF; current stable, keep in lockstep with DRF. |
+| psycopg | **3.3.x** (3.3.4), `[binary]` extra | Postgres driver for the Django track. Current stable (PyPI, verified for Stage 4 #27); Django 5.2's `django.db.backends.postgresql` engine auto-detects psycopg2 or psycopg (v3) and Django 5.2 prefers psycopg 3 — see Django 5.2 release notes' "Database backend API" note. The `[binary]` extra ships a self-contained wheel with no local libpq headers/C toolchain needed to install, matching this kit's "no surprise system deps" posture for `uv sync`. Added by Stage 4 Step 1 (#27), the first block on this track to need a real Postgres driver. |
 
 ## Frontend / web
 | Dep | Pinned line | Why this line |
