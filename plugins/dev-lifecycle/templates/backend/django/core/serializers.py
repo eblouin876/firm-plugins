@@ -133,6 +133,39 @@ class RefreshRequestSerializer(serializers.Serializer):
     refresh_token = serializers.CharField(min_length=1)
 
 
+class VerifyEmailRequestSerializer(serializers.Serializer):
+    """Stage 5c (#45) `POST /auth/verify-email` request shape — matches
+    `openapi.json`'s `VerifyEmailRequest` exactly: `token`, `min_length=1`,
+    required. Same strictness posture as `RegisterRequestSerializer`/
+    `LoginRequestSerializer` above — a plain `Serializer`, not
+    `ModelSerializer`; the raw single-use token itself is opaque to this
+    layer (`core.security.auth._core.SingleUseTokenService.consume` does
+    the only real validation of it — see `core/views.py`'s
+    `VerifyEmailView`)."""
+
+    token = serializers.CharField(min_length=1)
+
+
+class RequestPasswordResetRequestSerializer(serializers.Serializer):
+    """Stage 5c (#45) `POST /auth/request-password-reset` request shape —
+    matches `openapi.json`'s `RequestPasswordResetRequest`: `email`,
+    `min_length=1`, required. See `VerifyEmailRequestSerializer`."""
+
+    email = serializers.CharField(min_length=1)
+
+
+class ResetPasswordRequestSerializer(serializers.Serializer):
+    """Stage 5c (#45) `POST /auth/reset-password` request shape — matches
+    `openapi.json`'s `ResetPasswordRequest`: `token`/`new_password`, each
+    `min_length=1`, both required. `new_password` matches
+    `RegisterRequestSerializer.password`'s own policy — no further
+    complexity policy enforced at this layer (see that field's own
+    comment)."""
+
+    token = serializers.CharField(min_length=1)
+    new_password = serializers.CharField(min_length=1)
+
+
 class TokenResponseSerializer(serializers.Serializer):
     """Matches `openapi.json`'s `TokenResponse`. Documentation-only as of
     this step — every `/auth/*` handler returns the plain `{"detail": ...}`
