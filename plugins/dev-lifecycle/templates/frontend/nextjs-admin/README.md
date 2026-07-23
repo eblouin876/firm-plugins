@@ -32,13 +32,16 @@ internal admin tool are two different deployables for two different
 audiences). Everything here is **subordinate to a project's existing
 conventions** — when a scaffolded project has diverged, the project wins.
 
-**What Stage 13a ships:** the shell, nav, auth, and one working
+**What Stage 13a shipped:** the shell, nav, auth, and one working
 admin-gated call (`GET /admin/ping`) end to end — proof the whole-app gate
-and the shared client wiring actually work against a real backend. **What it
-does NOT ship:** any admin feature backend or feature UI. `users`,
-`moderation`, and `blog` are placeholder pages that resolve their nav links
-and prove the route tree builds; their real content, and the backend
-endpoints they'll call, land in later stages (13b/13c/13d).
+and the shared client wiring actually work against a real backend, with
+`users`, `moderation`, and `blog` as placeholder pages that resolved their
+nav links and proved the route tree builds. **What Stage 13b added:** real
+user-management UI at `app/(app)/users` — list/search/paginate via
+`GET /admin/users` and per-user suspend/ban/reinstate/force-verify/edit-roles
+/delete actions, driving the merged 13b backend endpoints through
+`@repo/api-client`. `moderation` and `blog` remain placeholder pages; their
+real content lands in later stages (13c/13d).
 
 ## Contents
 - Composition contract
@@ -52,7 +55,7 @@ endpoints they'll call, land in later stages (13b/13c/13d).
 - Build & deploy
 - Testing
 - Materialized-location paths
-- For later stages (13b/13c/13d)
+- For later stages (13c/13d)
 
 ## Composition contract
 
@@ -92,9 +95,9 @@ check shows.
   tree, the admin nav chrome, and one proven admin-gated call.
 - **Isn't:** a home for portable auth/query/forms logic (still
   `@repo/web-shared`, unchanged) or API-calling code (still
-  `@repo/api-client`'s mutator, unchanged). Also isn't yet a home for any
-  real admin feature (user management, moderation, blog editing) — those are
-  stub pages until 13b/13c/13d land.
+  `@repo/api-client`'s mutator, unchanged). Moderation and blog editing
+  aren't built yet — those stay stub pages until 13c/13d land. User
+  management shipped in Stage 13b (see "Routing + screens" below).
 
 ## Provider wiring
 Byte-for-byte the same as `templates/frontend/nextjs/app/providers.tsx`:
@@ -120,11 +123,22 @@ once at module scope, then mounts a per-mount `QueryClient` +
 - `app/(app)/dashboard` — the landing screen once gated through: greets the
   principal and fires the **admin-gated `GET /admin/ping` acceptance call**
   (see below), rendering both the 200 success and the 403 branch.
-- `app/(app)/users`, `app/(app)/moderation`, `app/(app)/blog` — stub pages
+- `app/(app)/users` — real user-management UI (Stage 13b): a searchable,
+  paginated table (`GET /admin/users`, `?q=`/`?status=`/`?page=`/`?size=`)
+  with per-row confirm-gated actions (Suspend/Ban/Reinstate/Force-verify/
+  Delete via `components/users/ConfirmActionDialog.tsx`) and a roles editor
+  (`components/users/RolesDialog.tsx`, `PUT .../roles`). Every mutation
+  invalidates the list query (`getListAdminUsersAdminUsersGetQueryKey`) so
+  the table reflects the new state; a 409 (invalid transition, or the
+  backend's self-protection against an admin locking themselves out)
+  surfaces the server's own message in the dialog rather than crashing or
+  silently no-op'ing — see `components/users/actionMeta.ts`'s
+  `describeApiError`.
+- `app/(app)/moderation`, `app/(app)/blog` — stub pages
   (`components/ComingSoon.tsx`) that resolve the nav links and prove the
   route tree builds. Admin-gated purely by inheriting the layout — no gate
-  logic of their own. Real content lands in 13b (users)/13c
-  (moderation)/13d (blog, TipTap-based editor).
+  logic of their own. Real content lands in 13c (moderation)/13d (blog,
+  TipTap-based editor).
 
 **The `/admin/ping` acceptance call.** `app/(app)/dashboard/page.tsx` fires a
 live `useQuery` against the generated `adminPingAdminPingGet` hook and
@@ -186,6 +200,14 @@ test here (unlike `apps/web`'s `app/page.test.tsx`) — `app/page.tsx` is a
 pure server-side `redirect()`, not a renderable screen a Testing-Library
 test can mount without triggering Next's redirect control-flow signal.
 
+`src/test/users.test.tsx` (Stage 13b) covers the users screen the same way:
+MSW-stubbed `GET /admin/users` renders a real page of users, a real
+`POST .../suspend` confirm-and-go action fires the exact request and
+refetches the list (proven by the row's status actually changing after the
+stubbed refetch, not just the dialog closing), and a stubbed 409 conflict
+response surfaces the server's own message in the dialog without crashing
+and without triggering a refetch.
+
 ## Materialized-location paths
 Same convention as `templates/frontend/nextjs/`: `tsconfig.json`'s `extends`
 and `eslint.config.mjs`'s import of the root config are written as
@@ -193,11 +215,13 @@ and `eslint.config.mjs`'s import of the root config are written as
 two levels below the project root). Don't "fix" them to be
 firm-plugins-relative.
 
-## For later stages (13b/13c/13d)
-- **Nav link targets / stub routes** this stage created: `/dashboard`,
+## For later stages (13c/13d)
+- **Nav link targets / stub routes** Stage 13a created: `/dashboard`,
   `/users`, `/moderation`, `/blog` — all under `app/(app)/`, all admin-gated
-  by inheriting `app/(app)/layout.tsx`. A later stage replaces a stub page's
-  body with real UI; it does not need to touch the gate, nav, or layout.
+  by inheriting `app/(app)/layout.tsx`. `/users` got its real UI in Stage
+  13b (see "Routing + screens" above); `/moderation` and `/blog` are still
+  stubs. A later stage replaces a stub page's body with real UI; it does not
+  need to touch the gate, nav, or layout.
 - **App identity**: package name `admin`, materializes to `apps/admin`, dev
   port **3001** (`next dev -p 3001` in `package.json`) and production port
   **3001** — both pinned off `apps/web`'s 3000 so `just dev` can run the

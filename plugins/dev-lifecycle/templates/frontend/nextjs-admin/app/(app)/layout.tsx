@@ -33,10 +33,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   );
 }
 
-// The nav's stub feature pages (see app/(app)/users, /moderation, /blog) —
-// each a placeholder "coming in 13b/13c/13d" screen for now, admin-gated by
-// inheriting this layout. Real content lands with the later stages that own
-// each surface.
+// The nav's feature pages, all admin-gated by inheriting this layout.
+// `/users` shipped real user-management UI in Stage 13b (see
+// app/(app)/users/page.tsx); /moderation and /blog remain placeholder
+// "coming in 13c/13d" screens for now — real content lands with the later
+// stages that own each surface.
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/users", label: "Users" },

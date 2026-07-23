@@ -53,7 +53,10 @@ export const TextInput = ({
 interface ButtonProps {
   children: ReactNode;
   type?: "button" | "submit";
-  variant?: "primary" | "secondary";
+  variant?: "primary" | "secondary" | "danger";
+  /** "sm" is the compact size used for dense contexts like per-row table
+   *  actions; "md" (default) is the normal form/dialog size. */
+  size?: "sm" | "md";
   loading?: boolean;
   disabled?: boolean;
   onClick?: () => void;
@@ -64,6 +67,7 @@ export const Button = ({
   children,
   type = "button",
   variant = "primary",
+  size = "md",
   loading = false,
   disabled = false,
   onClick,
@@ -73,11 +77,13 @@ export const Button = ({
     onClick={onClick}
     disabled={disabled || loading}
     className={cx(
-      "inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium",
+      "inline-flex items-center justify-center rounded-md font-medium",
+      size === "sm" ? "px-2.5 py-1 text-xs" : "px-4 py-2 text-sm",
       "outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60",
-      variant === "primary"
-        ? "bg-primary text-primary-foreground hover:bg-primary-hover"
-        : "border border-border bg-surface text-text hover:bg-bg",
+      variant === "primary" &&
+        "bg-primary text-primary-foreground hover:bg-primary-hover",
+      variant === "secondary" && "border border-border bg-surface text-text hover:bg-bg",
+      variant === "danger" && "bg-danger text-primary-foreground hover:opacity-90",
     )}
   >
     {loading ? "Working…" : children}
