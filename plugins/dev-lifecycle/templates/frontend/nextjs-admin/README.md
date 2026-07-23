@@ -40,8 +40,12 @@ nav links and proved the route tree builds. **What Stage 13b added:** real
 user-management UI at `app/(app)/users` — list/search/paginate via
 `GET /admin/users` and per-user suspend/ban/reinstate/force-verify/edit-roles
 /delete actions, driving the merged 13b backend endpoints through
-`@repo/api-client`. `moderation` and `blog` remain placeholder pages; their
-real content lands in later stages (13c/13d).
+`@repo/api-client`. **What Stage 13d added:** a real blog admin surface at
+`app/(app)/blog` — a TipTap WYSIWYG editor (`components/editor/
+BlogEditor.tsx`), posts list/create/edit with the publish/unpublish/delete
+workflow, and a lightweight comment Hide/Delete view — driving the merged
+13d backend endpoints through `@repo/api-client`. `moderation` remains a
+placeholder page; its real content lands in Stage 13c.
 
 ## Contents
 - Composition contract
@@ -62,7 +66,7 @@ real content lands in later stages (13c/13d).
 **NEEDS**
 - **`@repo/api-client`** (`workspace:*`) — the generated hooks, models, and `configureApiClient`, called once in `app/providers.tsx`. Same package, same generated surface as `apps/web` — no separate admin-only client.
 - **`@repo/web-shared`** (`workspace:*`) — `AuthProvider`, `RequireAuth`/`RequireRole` guards, `createQueryClient`, `getAccessToken`, `unwrap`/`ApiError`, `useZodForm`/`applyEnvelopeToForm`. Identical import surface to `apps/web`.
-- **App dependencies** — `react`, `react-dom`, `next`, `@tanstack/react-query`, `react-hook-form`, `zod`, `@hookform/resolvers`, `@headlessui/react`, `tailwindcss` + `@tailwindcss/postcss`. Same versions as `apps/web`, pinned via `references/compatibility-matrix.md`. **No TipTap dependency in this shell** — the matrix pins the TipTap version line now (see the "Editor (WYSIWYG)" section) so it's ratified ahead of need, but `package.json` here doesn't install it until the Stage 13d editor work actually consumes it (no unused dep shipped in the foundation).
+- **App dependencies** — `react`, `react-dom`, `next`, `@tanstack/react-query`, `react-hook-form`, `zod`, `@hookform/resolvers`, `@headlessui/react`, `tailwindcss` + `@tailwindcss/postcss`. Same versions as `apps/web`, pinned via `references/compatibility-matrix.md`. **Plus the Stage 13d TipTap editor stack** — `@tiptap/react`, `@tiptap/pm`, `@tiptap/starter-kit`, `@tiptap/extension-link` (all `3.28.0`, per the matrix's "Editor (WYSIWYG)" section) — the one dependency divergence from `apps/web`, which never consumes the editor.
 - **`NEXT_PUBLIC_API_BASE_URL`** — the PUBLIC backend origin (empty in dev; see the cookie fix below). A URL, never a secret.
 - **A cookie-mode auth backend** exposing `/auth/*` (login/me/refresh/logout) and the `admin`-role-gated `GET /admin/ping` — the only admin backend surface that exists as of this stage. Reached same-origin (dev rewrites / prod edge routing) or via credentialed CORS.
 - **The backend's `admin` role** on the authenticated principal — this app has no "authenticated but not admin" screen; see "Whole-app admin gate" below.
@@ -95,9 +99,10 @@ check shows.
   tree, the admin nav chrome, and one proven admin-gated call.
 - **Isn't:** a home for portable auth/query/forms logic (still
   `@repo/web-shared`, unchanged) or API-calling code (still
-  `@repo/api-client`'s mutator, unchanged). Moderation and blog editing
-  aren't built yet — those stay stub pages until 13c/13d land. User
-  management shipped in Stage 13b (see "Routing + screens" below).
+  `@repo/api-client`'s mutator, unchanged). Moderation isn't built yet — it
+  stays a stub page until Stage 13c lands. User management shipped in Stage
+  13b, blog posts + the TipTap editor shipped in Stage 13d (see "Routing +
+  screens" below).
 
 ## Provider wiring
 Byte-for-byte the same as `templates/frontend/nextjs/app/providers.tsx`:
@@ -134,11 +139,28 @@ once at module scope, then mounts a per-mount `QueryClient` +
   surfaces the server's own message in the dialog rather than crashing or
   silently no-op'ing — see `components/users/actionMeta.ts`'s
   `describeApiError`.
-- `app/(app)/moderation`, `app/(app)/blog` — stub pages
-  (`components/ComingSoon.tsx`) that resolve the nav links and prove the
-  route tree builds. Admin-gated purely by inheriting the layout — no gate
-  logic of their own. Real content lands in 13c (moderation)/13d (blog,
-  TipTap-based editor).
+- `app/(app)/blog` — real blog admin UI (Stage 13d): a status-filterable,
+  paginated posts table (`GET /admin/blog/posts`, `?status=`/`?page=`/
+  `?size=`) with row actions Edit/Publish/Unpublish/Delete
+  (`components/blog/ConfirmPostActionDialog.tsx`), a "New post" screen
+  (`app/(app)/blog/new`) and an edit screen (`app/(app)/blog/[id]/edit`)
+  that both embed the TipTap editor (`components/editor/BlogEditor.tsx`) and
+  submit both `body_json` (the opaque ProseMirror doc — also what an edit
+  reloads FROM, never `body_html`) and `body_html` to
+  `POST`/`PATCH /admin/blog/posts...`, plus a lightweight comment
+  Hide/Delete view (`app/(app)/blog/comments`, `GET /admin/blog/comments` —
+  NOT the Stage 13c moderation queue, see that page's own docstring). Every
+  mutation invalidates the relevant query
+  (`getListAdminBlogPostsAdminBlogPostsGetQueryKey`/
+  `getGetAdminBlogPostAdminBlogPostsPostIdGetQueryKey`); a 409 (duplicate
+  explicit slug, an invalid publish/unpublish transition) or 422 (bad
+  slug/title, oversize body) surfaces the server's own message via
+  `applyEnvelopeToForm`/a banner rather than crashing or silently no-op'ing
+  — see `components/blog/blogErrors.ts`'s `describeBlogError`.
+- `app/(app)/moderation` — a stub page (`components/ComingSoon.tsx`) that
+  resolves the nav link and proves the route tree builds. Admin-gated purely
+  by inheriting the layout — no gate logic of its own. Real content lands in
+  Stage 13c.
 
 **The `/admin/ping` acceptance call.** `app/(app)/dashboard/page.tsx` fires a
 live `useQuery` against the generated `adminPingAdminPingGet` hook and
@@ -208,6 +230,17 @@ stubbed refetch, not just the dialog closing), and a stubbed 409 conflict
 response surfaces the server's own message in the dialog without crashing
 and without triggering a refetch.
 
+`src/test/blog.test.tsx` (Stage 13d) covers the blog list + new-post screens
+the same way: MSW-stubbed `GET /admin/blog/posts` renders a real page of
+posts, a real `POST .../publish` confirm-and-go action fires the exact
+request and refetches the list, and a stubbed 409 surfaces the server's own
+message without crashing or refetching — plus a create-post test that waits
+for the real TipTap editor to mount (`immediatelyRender: false` defers it
+past first render), submits the form, and asserts the captured `POST
+/admin/blog/posts` body carries BOTH `body_json` (an object with `type:
+"doc"` — TipTap's own `editor.getJSON()` shape) AND `body_html` (a string —
+`editor.getHTML()`), plus a 409 duplicate-slug test.
+
 ## Materialized-location paths
 Same convention as `templates/frontend/nextjs/`: `tsconfig.json`'s `extends`
 and `eslint.config.mjs`'s import of the root config are written as
@@ -215,13 +248,14 @@ and `eslint.config.mjs`'s import of the root config are written as
 two levels below the project root). Don't "fix" them to be
 firm-plugins-relative.
 
-## For later stages (13c/13d)
+## For later stages (13c)
 - **Nav link targets / stub routes** Stage 13a created: `/dashboard`,
   `/users`, `/moderation`, `/blog` — all under `app/(app)/`, all admin-gated
   by inheriting `app/(app)/layout.tsx`. `/users` got its real UI in Stage
-  13b (see "Routing + screens" above); `/moderation` and `/blog` are still
-  stubs. A later stage replaces a stub page's body with real UI; it does not
-  need to touch the gate, nav, or layout.
+  13b, `/blog` got its real UI (posts CRUD + the TipTap editor) in Stage
+  13d (see "Routing + screens" above); `/moderation` is still a stub. A
+  later stage replaces a stub page's body with real UI; it does not need to
+  touch the gate, nav, or layout.
 - **App identity**: package name `admin`, materializes to `apps/admin`, dev
   port **3001** (`next dev -p 3001` in `package.json`) and production port
   **3001** — both pinned off `apps/web`'s 3000 so `just dev` can run the
@@ -230,7 +264,8 @@ firm-plugins-relative.
   at module scope in cookie mode; any new feature page just imports the
   already-configured generated hooks — no new `configureApiClient` call
   needed anywhere else in this app.
-- **TipTap**: pinned on the compatibility matrix now (`@tiptap/react`,
-  `@tiptap/pm`, `@tiptap/starter-kit`, `@tiptap/extension-link`, all
-  `3.28.x`), not yet installed. 13d adds it to this app's `package.json` when
-  it builds the blog editor.
+- **TipTap**: installed in Stage 13d — `@tiptap/react`, `@tiptap/pm`,
+  `@tiptap/starter-kit`, `@tiptap/extension-link`, all `3.28.0`, per the
+  compatibility matrix's "Editor (WYSIWYG)" section. `components/editor/
+  BlogEditor.tsx` is the one place this app touches TipTap; a later stage
+  extending the blog editor should start there.

@@ -62,8 +62,10 @@ The gate is UX only; the backend's 401/403 on every call is authoritative.
 ## Maintenance
 All versions follow `references/compatibility-matrix.md` (Frontend/web +
 Frontend testing rows, same pins as `apps/web` — not bumped independently
-between the two apps) plus the "Editor (WYSIWYG)" TipTap rows once 13d
-installs them. Admins are seeded (a backend admin-creation script or
+between the two apps) plus the "Editor (WYSIWYG)" TipTap rows (`@tiptap/
+react`, `@tiptap/pm`, `@tiptap/starter-kit`, `@tiptap/extension-link`, all
+`3.28.0`), installed starting Stage 13d and consumed only here — `apps/web`
+never installs them. Admins are seeded (a backend admin-creation script or
 migration, owned by a later stage — not built in this foundation stage),
 never self-registered — there is no `/register` flow in this app to keep in
 sync with the backend. When the backend's OpenAPI schema changes, run `just
