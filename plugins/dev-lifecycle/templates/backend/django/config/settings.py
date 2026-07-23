@@ -283,18 +283,18 @@ SECURE_REFERRER_POLICY = None  # core.security.security_headers sets it instead
 
 
 # ---------------------------------------------------------------------------
-# CORS — Stage 4 Step 3 (#27). Deny-by-default: the comma-separated
-# `CORS_ALLOWED_ORIGINS` env var is empty unless a project sets it, and an
-# empty tuple means NO cross-origin request is ever allowed — see
-# `_cors_allowed_origins` below and core.security.cors_lockdown.CORSPolicy's
-# own construction-time guard (raises InsecureCORSPolicyError on an empty or
-# wildcard allowlist; a project that wants a public, unauthenticated,
-# any-origin API doesn't construct a CORSPolicy at all, matching
-# backend/fastapi's own "no CORSMiddleware at all" equivalent posture — see
-# that block's app/main.py for the parallel comment). NEVER allow-all
-# (`"*"`) combined with credentials — CORSPolicy's constructor makes that
-# configuration impossible to construct in the first place, not just
-# discouraged.
+# CORS — Stage 4 Step 3 (#27); widened for web cookie mode, Stage 5d (#46).
+# Deny-by-default: the comma-separated `CORS_ALLOWED_ORIGINS` env var is
+# empty unless a project sets it, and an empty tuple means NO cross-origin
+# request is ever allowed — see `_cors_allowed_origins` below and
+# core.security.cors_lockdown.CORSPolicy's own construction-time guard
+# (raises InsecureCORSPolicyError on an empty or wildcard allowlist; a
+# project that wants a public, unauthenticated, any-origin API doesn't
+# construct a CORSPolicy at all, matching backend/fastapi's own "no
+# CORSMiddleware at all" equivalent posture — see that block's app/main.py
+# for the parallel comment). NEVER allow-all (`"*"`) combined with
+# credentials — CORSPolicy's constructor makes that configuration
+# impossible to construct in the first place, not just discouraged.
 # ---------------------------------------------------------------------------
 
 
@@ -303,9 +303,57 @@ def _cors_allowed_origins() -> tuple[str, ...]:
     return tuple(origin.strip() for origin in raw.split(",") if origin.strip())
 
 
+# Stage 5d (#46): gates whether the CORS policy below allows credentials
+# (cookies) and the two extra request headers cookie mode's SPA sends
+# cross-origin (`X-CSRF-Token`, `X-Auth-Mode`) — see the `if
+# AUTH_COOKIE_MODE_ENABLED:` branch below for exactly what this widens, and
+# `app/main.py`'s identically-gated CORS construction (`resolved_settings.
+# auth_cookie_mode_enabled`) on the FastAPI track for the byte-for-byte same
+# rationale this mirrors. SECURE DEFAULT: `False` — a bearer-only
+# deployment stays credential-free at the CORS layer even though `core/
+# views.py`'s `LoginView`/`RefreshView`/`LogoutView` already support an
+# `X-Auth-Mode: cookie` caller unconditionally (see those views' own
+# docstrings) — widening CORS is a SEPARATE, explicit opt-in a deployment
+# makes only once it actually serves a browser SPA using cookie mode
+# cross-origin; it is meaningless, and safe to leave off, for a mobile-only
+# or same-origin deployment.
+AUTH_COOKIE_MODE_ENABLED: bool = _env_bool("AUTH_COOKIE_MODE_ENABLED", False)
+
 _cors_origins = _cors_allowed_origins()
 if _cors_origins:
-    globals().update(cors_settings(CORSPolicy(allow_origins=_cors_origins)))
+    _cors_policy = CORSPolicy(allow_origins=_cors_origins)
+    if AUTH_COOKIE_MODE_ENABLED:
+        # Rebuilt (not mutated -- CORSPolicy is frozen) from the SAME
+        # validated `allow_origins`, extending `allow_headers` (the policy's
+        # own already-resolved default, `("Content-Type", "Authorization")`,
+        # read off the instance above rather than duplicated here as a
+        # literal that could silently drift from `cors_lockdown/_core.py`'s
+        # own default) with the two headers cookie mode's SPA sends
+        # cross-origin. `cors_settings`/`to_django_cors_headers_settings`
+        # (`core/security/cors_lockdown/_core.py`) lowercases every header
+        # name for `CORS_ALLOW_HEADERS` (django-cors-headers' own
+        # convention) -- `X-CSRF-Token`/`X-Auth-Mode` land as `x-csrf-token`/
+        # `x-auth-mode`, matching what `core/security/auth/django.py`'s
+        # `enforce_csrf`/`core/views.py`'s cookie-mode branches actually
+        # read off `request.headers` (a case-insensitive mapping either
+        # way).
+        #
+        # **Invariant, stated plainly: credentials require explicit
+        # origins.** This flag only ever WIDENS what's already a validated,
+        # non-wildcard allowlist — `CORSPolicy.__post_init__`'s
+        # `InsecureCORSPolicyError` guard already forbids a wildcard origin
+        # outright, credentials or not (see that guard's own docstring),
+        # and there is no code path here that skips constructing
+        # `CORSPolicy` in the first place — so this can never smuggle a
+        # wildcard-plus-credentials configuration past that guard. Byte-
+        # for-byte the same gating logic as `app/main.py`'s own
+        # `auth_cookie_mode_enabled`-gated CORS construction.
+        _cors_policy = CORSPolicy(
+            allow_origins=_cors_policy.allow_origins,
+            allow_credentials=True,
+            allow_headers=(*_cors_policy.allow_headers, "X-CSRF-Token", "X-Auth-Mode"),
+        )
+    globals().update(cors_settings(_cors_policy))
 else:
     # No CORS_ALLOWED_ORIGINS configured: leave django-cors-headers' own
     # settings entirely unset. CorsMiddleware is still in MIDDLEWARE (it has
@@ -319,6 +367,10 @@ else:
     # reached via CorsMiddleware's own empty-allowlist default instead of
     # omitting the middleware (which Django's static MIDDLEWARE list can't
     # do per-request/per-environment the way an ASGI factory function can).
+    # `AUTH_COOKIE_MODE_ENABLED` is irrelevant here regardless of its value
+    # -- there is no CORSPolicy at all to widen when no origin is
+    # configured, matching the "credentials require explicit origins"
+    # invariant documented above.
     pass
 
 
