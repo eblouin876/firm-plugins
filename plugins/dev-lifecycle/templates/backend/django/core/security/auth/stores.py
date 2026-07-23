@@ -183,8 +183,27 @@ class DjangoUserStore:
     # single already-minted access token early without turning it into a
     # stateful token (out of scope here). Identical caveat to
     # `SqlAlchemyUserStore`'s own.
+    #
+    # SECURITY (Stage 13b, ban enforcement): both lookups below ALSO filter
+    # on `status="active"` -- a suspended or banned user (`core/views.py`'s
+    # `AdminUserSuspendView`/`AdminUserBanView`) is treated as
+    # unauthenticated on the LOGIN path (`get_by_email`, via `AuthService.
+    # login`) and the REFRESH path (`get_by_id`, via `AuthService.refresh`
+    # step 6), composed with (not replacing) `UserManager`'s own default
+    # soft-delete scoping. `get_by_id` is also what `GET /auth/me`
+    # (`MeView`) resolves the caller's profile through, so this closes that
+    # endpoint too for a suspended/banned caller holding a still-unexpired
+    # access token -- the identical bonus `app/core/security/auth/
+    # stores.py`'s own equivalent fix documents. The admin surface
+    # (`core/views.py`'s `AdminUser*View` classes) never goes through
+    # `DjangoUserStore` at all -- it queries `User.objects` directly,
+    # entirely unfiltered by `status`, so an admin can still see/act on
+    # suspended and banned accounts. Same accepted, bounded
+    # access-token-TTL race the comment above documents -- `suspend`/`ban`
+    # additionally call `RefreshTokenStore.revoke_all_for_user` to kill
+    # every REFRESH token immediately.
     async def get_by_email(self, email: str) -> UserRecord | None:
-        user = await User.objects.filter(email=email).afirst()
+        user = await User.objects.filter(email=email, status="active").afirst()
         return _user_to_record(user) if user is not None else None
 
     async def get_by_id(self, id: str) -> UserRecord | None:
@@ -197,7 +216,7 @@ class DjangoUserStore:
             # handling of a genuinely-missing row. Identical to
             # `SqlAlchemyUserStore.get_by_id`'s own guard.
             return None
-        user = await User.objects.filter(id=user_id).afirst()
+        user = await User.objects.filter(id=user_id, status="active").afirst()
         return _user_to_record(user) if user is not None else None
 
     async def create(self, email: str, password_hash: str, roles: Sequence[str]) -> UserRecord:

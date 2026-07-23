@@ -232,6 +232,16 @@ class User(models.Model):
     # `verified_at` pair.
     email_verified = models.BooleanField(default=False, db_default=False)
     verified_at = models.DateTimeField(null=True, blank=True, default=None)
+    # Stage 13b: backs the admin user-management surface (`core/views.py`'s
+    # `AdminUser*View` classes) -- an app-level, closed set of
+    # `{"active", "suspended", "banned"}`, a plain `CharField`, NOT a DB
+    # enum -- column-for-column match to `app/models/user.py`'s `status`
+    # (see that column's own docstring for the full "hermetic sqlite
+    # testability" rationale this mirrors). `db_default="active"` is the
+    # SAME `db_default`-vs-`default` two-layer precedent `email_verified`
+    # above already establishes -- migration 0004 backfills every
+    # pre-existing row to a real, non-NULL `"active"`.
+    status = models.CharField(max_length=16, default="active", db_default="active")
 
     objects = UserManager()
     all_objects = models.Manager()

@@ -398,16 +398,7 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # this same stage's job, landed in a follow-up commit -- these eight
 # entries are removed (this set goes back to empty) once that lands with a
 # wire-shape that matches the frozen contract exactly.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = {
-    ("/admin/users", "get"),
-    ("/admin/users/{param}", "get"),
-    ("/admin/users/{param}/suspend", "post"),
-    ("/admin/users/{param}/ban", "post"),
-    ("/admin/users/{param}/reinstate", "post"),
-    ("/admin/users/{param}/roles", "put"),
-    ("/admin/users/{param}/force-verify", "post"),
-    ("/admin/users/{param}", "delete"),
-}
+_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:

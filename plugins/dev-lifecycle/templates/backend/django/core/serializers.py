@@ -232,3 +232,41 @@ class ErrorEnvelopeSerializer(serializers.Serializer):
     "Conformance")."""
 
     error = ErrorBodySerializer()
+
+
+# ---------------------------------------------------------------------------
+# Stage 13b: admin user management -- matches
+# `app/schemas/admin.py`'s `AdminUserOut`/`AdminRolesIn`/`UserStatus`
+# field-for-field.
+# ---------------------------------------------------------------------------
+
+_USER_STATUS_CHOICES = ["active", "suspended", "banned"]
+
+
+class AdminUserOutSerializer(serializers.Serializer):
+    """The read shape every admin user-management endpoint returns.
+    Deliberately NO `password_hash`, NO token fields -- see `app/schemas/
+    admin.py`'s `AdminUserOut` docstring for the identical rationale. A
+    plain `Serializer` (not `ModelSerializer`) constructed directly from a
+    `core.models.User` instance (`AdminUserOutSerializer(user).data`) --
+    DRF's plain `Serializer` reads each field via `getattr` on whatever
+    instance it's given, the same as `ModelSerializer` would, without
+    tying this shape to the model's own field set (e.g. `roles`/`status`
+    stay plain declared fields here, not auto-derived)."""
+
+    id = serializers.UUIDField()
+    email = serializers.CharField()
+    roles = serializers.ListField(child=serializers.CharField())
+    status = serializers.ChoiceField(choices=_USER_STATUS_CHOICES)
+    email_verified = serializers.BooleanField()
+    created_at = serializers.DateTimeField()
+
+
+class AdminRolesInSerializer(serializers.Serializer):
+    """`PUT /admin/users/{user_id}/roles`'s request body -- matches `app/
+    schemas/admin.py`'s `AdminRolesIn`: a full-replace role list, validated
+    at the VIEW layer (`core/views.py`'s `AdminUserRolesView`) against the
+    app's own closed allowed-role set -- this serializer only enforces "a
+    list of strings", same posture that schema's own docstring documents."""
+
+    roles = serializers.ListField(child=serializers.CharField(), default=list)

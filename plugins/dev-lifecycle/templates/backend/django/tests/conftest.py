@@ -10,6 +10,17 @@ import pytest
 from rest_framework.test import APIClient
 
 import core.security.rate_limiting.django as rate_limiting_django
+from core.security.admin_rate_limit import reset_admin_rate_limit_store_for_tests
+
+
+@pytest.fixture(autouse=True)
+def _reset_admin_rate_limit_store() -> None:
+    """Stage 13b: same test-isolation rationale as `_reset_rate_limit_store`
+    immediately below, for the admin user-management surface's OWN, tighter
+    per-route bucket (`core/security/admin_rate_limit.py`) -- a separate
+    module-level singleton from the whole-app middleware's own store, so it
+    needs its own reset."""
+    reset_admin_rate_limit_store_for_tests()
 
 
 @pytest.fixture(autouse=True)

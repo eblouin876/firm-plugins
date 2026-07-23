@@ -10,6 +10,13 @@ from rest_framework.routers import SimpleRouter
 
 from core.views import (
     AdminPingView,
+    AdminUserBanView,
+    AdminUserDetailView,
+    AdminUserForceVerifyView,
+    AdminUserListView,
+    AdminUserReinstateView,
+    AdminUserRolesView,
+    AdminUserSuspendView,
     HealthCheckView,
     ItemViewSet,
     LoginView,
@@ -49,6 +56,24 @@ urlpatterns = [
     # AdminPingView for what it demonstrates and why it needs no new auth
     # logic of its own.
     path("admin/ping", AdminPingView.as_view(), name="admin-ping"),
+    # Stage 13b: admin user management -- see core/views.py's own
+    # module-level comment for the full design. `<str:user_id>`, NOT
+    # Django's `<uuid:...>` converter -- see `_get_admin_user`'s own
+    # docstring for why a plain string segment (validated by hand, inside
+    # DRF's exception-handler cycle) is required for a malformed id to
+    # still render THIS block's ErrorEnvelope rather than Django's raw,
+    # unenveloped routing-level 404.
+    path("admin/users", AdminUserListView.as_view(), name="admin-user-list"),
+    path("admin/users/<str:user_id>", AdminUserDetailView.as_view(), name="admin-user-detail"),
+    path("admin/users/<str:user_id>/suspend", AdminUserSuspendView.as_view(), name="admin-user-suspend"),
+    path("admin/users/<str:user_id>/ban", AdminUserBanView.as_view(), name="admin-user-ban"),
+    path("admin/users/<str:user_id>/reinstate", AdminUserReinstateView.as_view(), name="admin-user-reinstate"),
+    path("admin/users/<str:user_id>/roles", AdminUserRolesView.as_view(), name="admin-user-roles"),
+    path(
+        "admin/users/<str:user_id>/force-verify",
+        AdminUserForceVerifyView.as_view(),
+        name="admin-user-force-verify",
+    ),
     *router.urls,
 ]
 
