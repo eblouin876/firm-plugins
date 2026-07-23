@@ -6,12 +6,13 @@ versions-pinned-to: references/compatibility-matrix.md
 needs:
   - PyJWT 2.13.x (tested against 2.13.0): the sole non-stdlib dependency for token minting/verification
   - argon2-cffi 25.1.x (tested against 25.1.0): the sole non-stdlib dependency for password hashing
-  - a framework adapter (FastAPI or Django -- fastapi.py/django.py, NOT yet part of this component): wires UserStore/RefreshTokenStore against a real ORM/session, and maps this module's exceptions onto ErrorEnvelope/ErrorCode
+  - app-level wiring (NOT part of this component): UserStore/RefreshTokenStore implementations against a real ORM/session, AuthService construction with a real signing key/TTLs at app startup, and an app exception handler using this component's own AUTH_ERROR_HTTP table to map onto ErrorEnvelope/ErrorCode -- see backend/fastapi's app/core/security/auth/stores.py + app/main.py for the reference implementation (Stage 5a, #41)
 exposes:
   - PasswordService (hash, verify, needs_rehash, dummy_verify), TokenService (mint_access, mint_refresh, decode_access, decode_refresh), AuthService (register, login, refresh, logout, resolve_access) -- in _core.py
   - UserStore / RefreshTokenStore (Protocols), UserRecord / RefreshRecord (frozen dataclasses), hash_token(raw) -- the storage seam a framework adapter implements
   - TokenPair, AccessClaims, RefreshClaims -- the claim/result shapes
   - AuthError hierarchy: InvalidCredentials, InvalidToken, TokenReused, EmailAlreadyExists -- each documents the ErrorCode it maps to
+  - bearer_scheme, build_get_current_principal, require_roles, AUTH_ERROR_HTTP -- the FastAPI wiring, in fastapi.py (Stage 5a, #41; a django.py adapter is Stage 5b, #44)
   - its co-located doc fragment: docs/fragment.md
 -->
 
@@ -30,23 +31,32 @@ component. Embodies `references/security/secure-baseline.md`'s
 "Authentication & authorization" section (password hashing with a strong
 adaptive algorithm; tokens validated fully — signature, expiry, issuer;
 short-lived access tokens with refresh over long-lived static tokens).
-Lives at `templates/components/security/auth/` in this repo; a Stage 5
-backend block copies `_core.py` into `app/core/security/auth/_core.py`.
+Lives at `templates/components/security/auth/` in this repo; a Stage 5a
+(#41) backend block copies `_core.py` + `fastapi.py` into
+`app/core/security/auth/`.
 
 This is a **catalog component** (`template-author`'s partial-contract
 kind), not an app-layer template block.
 
-**This component ships `_core.py` only — no framework wiring.** There is
-deliberately no `fastapi.py`/`django.py` alongside `_core.py` yet: a
-FastAPI or Django adapter (implementing `UserStore`/`RefreshTokenStore`
-against a real ORM, constructing `AuthService` with real secrets/TTLs at
-app startup, and mapping this module's own exceptions onto
-`error-envelope/`'s `ErrorCode` — see "Judgment calls") is separate work
-that composes with this component the same way `rate-limiting/`'s
-`fastapi.py`/`django.py` compose with ITS `_core.py`. Zero FastAPI,
-Django, or SQLAlchemy import exists anywhere in `_core.py` — verified by
-this component's own `tests/`, which import and exercise `_core.py`
-completely standalone.
+**This component ships `_core.py` + `fastapi.py`.** `fastapi.py` (Stage
+5a, #41) is pure framework glue over `_core.py` — the `HTTPBearer` scheme,
+a `build_get_current_principal` dependency FACTORY (takes the app's own
+`get_auth_service` provider, since this component has no DB session/
+settings of its own to build one from), `require_roles`, and the
+`AUTH_ERROR_HTTP` exception -> `(status, ErrorCode string)` table — with
+**zero `app.*` import**, matching `_core.py`'s own "zero FastAPI/Django/
+SQLAlchemy import" posture in reverse (see `fastapi.py`'s own module
+docstring). Vendoring these two files is still NOT the whole wiring job:
+`UserStore`/`RefreshTokenStore` implementations against a real ORM,
+`AuthService` construction with real secrets/TTLs at app startup, real
+route handlers, and an app-level exception handler for the `AuthError`
+base class are all APP code (they import the app's own models/settings),
+never part of this vendored component — see `backend/fastapi`'s
+`app/core/security/auth/stores.py` + `app/main.py`'s `_auth_error_handler`
+for the reference implementation. A `django.py` adapter is Stage 5b (#44)
+— not yet part of this component. Zero FastAPI, Django, or SQLAlchemy
+import exists anywhere in `_core.py` — verified by this component's own
+`tests/`, which import and exercise `_core.py` completely standalone.
 
 ## Contents
 - Composition contract
@@ -70,15 +80,18 @@ completely standalone.
   code that first actually consumes it in a running backend.
 - **argon2-cffi 25.1.x** (tested against the exact pin **25.1.0**) — the
   only dependency `PasswordService` needs. Same matrix caveat as above.
-- **A framework adapter** (not part of this component) — implements
-  `UserStore` and `RefreshTokenStore` against a real ORM/session,
-  constructs `TokenService`/`AuthService` with a real signing key (from
-  secrets-loading, never hardcoded) and real TTLs at app startup, and
-  maps `AuthError` subclasses onto `error-envelope/`'s `ErrorEnvelope`/
-  `ErrorCode` in its own exception handler. See "Exception hierarchy →
-  ErrorCode mapping" below for the exact mapping the adapter must apply.
+- **App-level wiring** (not part of this component, even with `fastapi.py`
+  vendored) — implements `UserStore` and `RefreshTokenStore` against a
+  real ORM/session, constructs `TokenService`/`AuthService` with a real
+  signing key (from secrets-loading, never hardcoded) and real TTLs at
+  app startup, wires real route handlers, and registers an app exception
+  handler for the `AuthError` base class that renders `fastapi.py`'s own
+  `AUTH_ERROR_HTTP` table as `error-envelope/`'s `ErrorEnvelope`/
+  `ErrorCode`. See "Exception hierarchy → ErrorCode mapping" below for
+  the exact mapping, and `backend/fastapi`'s `app/core/security/auth/
+  stores.py` for a concrete implementation.
 
-**EXPOSES** (all in `_core.py`)
+**EXPOSES** (`_core.py` unless noted)
 - `PasswordService` — `hash(password) -> str`, `verify(stored_hash,
   password) -> bool`, `needs_rehash(stored_hash) -> bool`,
   `dummy_verify() -> None` (user-enumeration timing defense — see below).
@@ -98,6 +111,17 @@ completely standalone.
 - `TokenPair`, `AccessClaims`, `RefreshClaims` — the result/claim shapes.
 - `AuthError` and its subclasses `InvalidCredentials`, `InvalidToken`,
   `TokenReused`, `EmailAlreadyExists` — see the mapping section below.
+- **`fastapi.py`**: `bearer_scheme` (an `HTTPBearer(auto_error=False)`
+  instance), `build_get_current_principal(get_auth_service) ->
+  <dependency>` (a dependency FACTORY — takes the app's own per-request
+  `AuthService` provider, returns a dependency resolving a bearer token to
+  `AccessClaims`), `require_roles(get_current_principal, *roles) ->
+  <dependency>` (role-gated dependency factory; RBAC's wire surface is
+  Stage 5d — this just enforces `AccessClaims.roles` membership),
+  `InsufficientRole` (a component-level exception mapping to the existing
+  `permission_denied`/403 — no new `ErrorCode` invented), and
+  `AUTH_ERROR_HTTP` (the exception-type -> `(status, ErrorCode string)`
+  table an app's own exception handler consults).
 - Its co-located doc fragment: `docs/fragment.md`.
 
 ## Password hashing: Argon2id + the timing-defense `dummy_verify()`
@@ -267,16 +291,19 @@ ini configuration needed, matching this catalog's `db-session` component.)
 
 ## Judgment calls
 
-- **Ship `_core.py` alone, with no `fastapi.py`/`django.py` yet.** Every
-  other dual-framework component in this catalog (`rate-limiting/`,
-  `security-headers/`, ...) ships its core alongside both adapters in the
-  same commit. This component's core is unusually security-sensitive
-  (the whole point of Stage 5a is proving the state machine exhaustively
-  in isolation before any framework code touches it) — splitting "prove
-  the core is correct" from "wire it into a real backend, with real
-  secrets/settings/DB sessions" into two separate pieces of work was
-  judged the right call here specifically, not a precedent for other
-  components in this catalog to follow.
+- **Shipped `_core.py` alone first, `fastapi.py` in a separate follow-up
+  commit — not both adapters (`fastapi.py`+`django.py`) in one commit
+  like every other dual-framework component in this catalog
+  (`rate-limiting/`, `security-headers/`, ...).** This component's core is
+  unusually security-sensitive (Stage 5a's whole point was proving the
+  reuse-detection state machine exhaustively in isolation before any
+  framework code touched it) — splitting "prove the core is correct" from
+  "wire a FastAPI adapter" into two pieces of work was judged the right
+  call specifically for this component. `django.py` is Stage 5b (#44),
+  deliberately deferred further still — a project on the Django track
+  cannot yet vendor this component's framework wiring, only `_core.py`
+  directly (implementing its own adapter by hand, same as any other
+  catalog component before its second framework lands).
 - **Expiry checked by hand against an injected `now`, not PyJWT's
   built-in `verify_exp`.** See "Tokens" above — PyJWT has no parameter to
   substitute a fake "current time" into its own exp/iat validation, so
