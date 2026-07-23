@@ -83,7 +83,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from app.api.routers import admin, auth, health, items
+from app.api.routers import admin, auth, blog, health, items
 from app.core.config import Settings, get_settings
 from app.core.db import configure_engine
 from app.core.errors import AppError, ErrorBody, ErrorCode, ErrorDetail, ErrorEnvelope
@@ -392,6 +392,11 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
     # own module docstring for what it demonstrates and why it needs no new
     # auth logic of its own.
     app.include_router(admin.router)
+    # Stage 13d: the blog/CMS admin surface -- see app/api/routers/blog.py's
+    # own module docstring; reuses admin.py's require_admin_rate_limit, so
+    # it must be registered after admin.router is constructed (import-time
+    # dependency, not a request-time ordering concern).
+    app.include_router(blog.router)
 
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
     app.add_exception_handler(AppError, _app_error_handler)
