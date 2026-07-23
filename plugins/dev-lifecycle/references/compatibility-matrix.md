@@ -1,7 +1,7 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07"
-last-verified: 2026-07-22
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07"
+last-verified: 2026-07-23
 provenance: manual
 sources:
   - https://pypi.org/project/fastapi/
@@ -14,6 +14,9 @@ sources:
   - https://www.djangoproject.com/download/
   - https://www.django-rest-framework.org/community/release-notes/
   - https://drf-spectacular.readthedocs.io/
+  - https://pypi.org/project/psycopg/
+  - https://pypi.org/project/django-cors-headers/
+  - https://docs.djangoproject.com/en/5.2/releases/5.2/
   - https://nodejs.org/en/about/previous-releases
   - https://www.npmjs.com/package/pnpm?activeTab=versions
   - https://devblogs.microsoft.com/typescript/
@@ -82,6 +85,8 @@ Re-verify against official release notes/registries before bumping any line — 
 | Django | **5.2 LTS** | LTS branch, supported through Apr 2028 — the right default for a starter kit over a non-LTS feature release. |
 | Django REST Framework | **3.17.x** | Current stable, tracks Django 5.2. |
 | drf-spectacular | **0.30.x** | OpenAPI 3 schema generation for DRF; current stable, keep in lockstep with DRF. |
+| psycopg | **3.3.x** (3.3.4), `[binary]` extra | Postgres driver for the Django track. Current stable (PyPI, verified for Stage 4 #27); Django 5.2's `django.db.backends.postgresql` engine auto-detects psycopg2 or psycopg (v3) and Django 5.2 prefers psycopg 3 — see Django 5.2 release notes' "Database backend API" note. The `[binary]` extra ships a self-contained wheel with no local libpq headers/C toolchain needed to install, matching this kit's "no surprise system deps" posture for `uv sync`. Added by Stage 4 Step 1 (#27), the first block on this track to need a real Postgres driver. |
+| django-cors-headers | **4.9.x** (4.9.0) | Current stable (PyPI, released Sep 18 2025 — verified via `pypi.org/pypi/django-cors-headers/json`, `info.version`). The Django-ecosystem convention for CORS; `core/security/cors_lockdown/django.py` (Stage 4 Step 3, #27) emits this package's settings from `CORSPolicy` but never imports it directly — the Django block itself installs it and puts `"corsheaders"` in `INSTALLED_APPS` + `corsheaders.middleware.CorsMiddleware` in `MIDDLEWARE`. Supports Django 4.2–6.0 per its own PyPI classifiers, comfortably covering this matrix's Django 5.2 LTS pin above. |
 
 ## Frontend / web
 | Dep | Pinned line | Why this line |
@@ -129,8 +134,8 @@ Re-verify against official release notes/registries before bumping any line — 
 | --- | --- | --- |
 | Python base image | **`python:3.13-slim-bookworm`** | Matches the Python pin above; explicit Debian codename (not floating `slim`) for reproducible builds. |
 | Node base image | **`node:24-bookworm-slim`** | Matches the Node LTS pin above; Bookworm remains in full support through 2026+. |
-| Postgres image (dev compose) | **`postgres:18-bookworm`** | Matches the "Data" row's PostgreSQL 18.x pin, Bookworm-based for consistency with the two rows above. Used by `templates/backend/fastapi/docker-compose.yml` (Stage 3 #26, Step 4's dev-run seam). **Judgment call:** a sandboxed/offline verification environment without registry access may only have Postgres 16 installed locally (`pg_ctlcluster`) to prove the alembic/asyncpg path against directly — that's a verification-environment substitute, not a repin of this compose file, which stays on the matrix's real 18.x line. |
-| uv base image (Dockerfile) | **`ghcr.io/astral-sh/uv:0.11.31`** | Same uv version already pinned above ("Security tooling" row, for CI's `deps` job) — one uv version across the kit rather than a Docker-only drift. `templates/backend/fastapi/Dockerfile` copies the `uv`/`uvx` binaries out of this image via `COPY --from=`, per uv's own documented Docker integration pattern. |
+| Postgres image (dev compose) | **`postgres:18-bookworm`** | Matches the "Data" row's PostgreSQL 18.x pin, Bookworm-based for consistency with the two rows above. Used by `templates/backend/fastapi/docker-compose.yml` (Stage 3 #26, Step 4's dev-run seam) AND `templates/backend/django/docker-compose.yml` (Stage 4 #27, Step 4's own dev-run seam — the same pin, cited once, reused rather than re-pinned separately per backend track). **Judgment call:** a sandboxed/offline verification environment without registry access may only have Postgres 16 installed locally (`pg_ctlcluster`) to prove the alembic/asyncpg (FastAPI) or migrate/psycopg (Django) path against directly — that's a verification-environment substitute, not a repin of either compose file, both of which stay on the matrix's real 18.x line. |
+| uv base image (Dockerfile) | **`ghcr.io/astral-sh/uv:0.11.31`** | Same uv version already pinned above ("Security tooling" row, for CI's `deps` job) — one uv version across the kit rather than a Docker-only drift. `templates/backend/fastapi/Dockerfile` AND `templates/backend/django/Dockerfile` both copy the `uv`/`uvx` binaries out of this image via `COPY --from=`, per uv's own documented Docker integration pattern. |
 
 ## Security tooling (CI scanners)
 The pin set `assets/workflows/security.yml` (the firm's security-gate workflow, `references/security/secure-baseline.md`'s CI-scanning section) runs against. Each tool's **binary/CLI** is invoked at an exact pinned version so a gate's pass/fail is reproducible run to run — that part is not a moving target. **Caveat:** semgrep's two rulesets (`p/ci`, `p/owasp-top-ten`) are pulled live from Semgrep's public registry on every run and are *not* pinned — they float by design, since a pinned/vendored ruleset would mean either a Semgrep AppSec Platform login (to pull a fixed registry snapshot) or hand-maintaining the rule set ourselves. Accepted tradeoff for staying unauthenticated on `GITHUB_TOKEN` only: the semgrep binary version is reproducible, its finding set is not.

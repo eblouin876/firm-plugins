@@ -1,0 +1,104 @@
+# Dev-only Docker Compose (Stage 4 #27, Step 4): boots this block's API
+# alongside a real Postgres for local development. MATERIALIZES to
+# `apps/api/docker-compose.yml` — the SAME slot `backend/fastapi/
+# docker-compose.yml` materializes into (README.md's "Composition
+# contract": this block is an ALTERNATIVE to backend/fastapi in that one
+# slot, never both at once) — so the monorepo justfile's existing `dev`
+# recipe (`templates/monorepo/justfile`) boots THIS compose file with NO
+# changes: that recipe only checks whether `apps/api/docker-compose.yml`
+# exists and, if so, runs `docker compose up --build` in `apps/api` — it
+# has no FastAPI-specific assumption baked in. Confirmed by direct
+# inspection of that recipe (Stage 4 Step 4, #27), not just asserted.
+#
+# NOT a production deploy manifest (no secrets management, no replicas, a
+# throwaway local DB password) — Stage 9's devops/infrastructure block
+# owns real deployment, matching `backend/fastapi/docker-compose.yml`'s
+# own disclaimer.
+#
+# Postgres image tag per references/compatibility-matrix.md's "Containers"
+# row (`postgres:18-bookworm`) — the SAME pin `backend/fastapi/
+# docker-compose.yml` uses, now cited for both blocks in that matrix row.
+# NOTE: a sandboxed/CI verification environment without internet access to
+# pull a fresh 18.x image may only have Postgres 16 installed locally
+# (`pg_ctlcluster 16 main`, not this compose file) to prove the
+# psycopg/migrate path against — a verification-environment constraint,
+# not a reason to pin this file to 16. See this block's README.md
+# "Database & migrations" section for that PG16 proof.
+
+services:
+  db:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - django-block-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Dev-only credentials/secret, matching the `db` service above --
+      # never reused for a real environment. Plain `postgresql://` scheme
+      # (not `+asyncpg`/`+psycopg` -- `dj_database_url.config()`,
+      # config/settings.py, and Django's own `django.db.backends.
+      # postgresql` engine both auto-detect the installed driver
+      # (psycopg 3, per this track's pin) from the bare scheme, no
+      # dialect suffix needed the way SQLAlchemy's URL requires one).
+      DATABASE_URL: postgresql://app:app@db:5432/app
+      SECRET_KEY: dev-only-not-for-real-use-see-readme-composition-contract
+      DEBUG: "false"
+      # Secure-default posture kept even in dev (DEBUG=false above) --
+      # ALLOWED_HOSTS must still be set explicitly (config/settings.py's
+      # own required-env-var guard has no fallback to "allow everything"
+      # the way DEBUG=True would). `api` (the compose service's own DNS
+      # name) is included alongside the host-facing names for the rare
+      # case something inside the compose network addresses this
+      # container by service name rather than through the published port.
+      ALLOWED_HOSTS: "localhost,127.0.0.1,api"
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount over the image's copied-in source so gunicorn's
+      # `--reload` (Dockerfile's CMD) picks up host edits live -- the
+      # image build itself (`uv sync`) still bakes in dependencies, only
+      # source is live-mounted. Matches `backend/fastapi/docker-
+      # compose.yml`'s identical bind-mount pattern for its own `./app`.
+      - ./core:/app/core
+      - ./config:/app/config
+    depends_on:
+      db:
+        condition: service_healthy
+    # Applies pending migrations before serving traffic -- the same
+    # "migrate then boot" order `backend/fastapi/docker-compose.yml` uses
+    # (`alembic upgrade head` there, `manage.py migrate` here), so `just
+    # dev` never hands you a running API against a schema-less DB.
+    command: >
+      sh -c "python manage.py migrate --no-input && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --reload"
+    # `backend/fastapi/docker-compose.yml` has no equivalent `api`-level
+    # healthcheck (only its `db` service's) -- this one is added because
+    # it's cheap and stdlib-only: `python:3.13-slim-bookworm` has no
+    # `curl`/`wget` installed, so `urllib.request` (already in the image,
+    # no extra package) hits the liveness probe directly rather than
+    # skipping an api-level healthcheck for lack of a CLI HTTP client.
+    healthcheck:
+      test: [
+        "CMD", "python", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  django-block-db-data:
