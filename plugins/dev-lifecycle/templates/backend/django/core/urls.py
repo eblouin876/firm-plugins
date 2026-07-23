@@ -17,6 +17,9 @@ from core.views import (
     ReadinessCheckView,
     RefreshView,
     RegisterView,
+    RequestPasswordResetView,
+    ResetPasswordView,
+    VerifyEmailView,
 )
 
 # `trailing_slash=False`: backend/fastapi's contract has no trailing slash
@@ -34,6 +37,13 @@ urlpatterns = [
     path("auth/refresh", RefreshView.as_view(), name="auth-refresh"),
     path("auth/logout", LogoutView.as_view(), name="auth-logout"),
     path("auth/me", MeView.as_view(), name="auth-me"),
+    path("auth/verify-email", VerifyEmailView.as_view(), name="auth-verify-email"),
+    path(
+        "auth/request-password-reset",
+        RequestPasswordResetView.as_view(),
+        name="auth-request-password-reset",
+    ),
+    path("auth/reset-password", ResetPasswordView.as_view(), name="auth-reset-password"),
     *router.urls,
 ]
 

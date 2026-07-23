@@ -349,19 +349,19 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # /auth/request-password-reset`, `POST /auth/reset-password` (against the
 # vendored `AccountService`: email verification, per-account lockout, and
 # `AuthService.login`'s `require_verification` gate) -- and extended the
-# frozen contract with all three operations. This Django block implements
-# NONE of them yet (`core/urls.py` has no routes for them at all, so they
-# are absent from `django_keys` entirely, not merely present-with-a-wrong-
-# shape the way Stage 5a's stubbed `login`/`refresh`/`me` were -- see the
-# FIX C note above for that distinct case). Implementing them -- and
-# `AuthService`/`LoginView`'s own lockout + verification-gate wiring on
-# this track -- is explicitly the NEXT Django-parity stage's job, not this
-# surgical edit's.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = {
-    ("/auth/verify-email", "post"),
-    ("/auth/request-password-reset", "post"),
-    ("/auth/reset-password", "post"),
-}
+# frozen contract with all three operations.
+#
+# Stage 5c (#45) landed full Django parity for all three ops (core/
+# views.py's `VerifyEmailView`/`RequestPasswordResetView`/
+# `ResetPasswordView`, `core/urls.py`'s new routes, and `LoginView`'s own
+# lockout + verification-gate wiring, `_build_login_auth_service`) with a
+# wire-shape that matches the frozen contract exactly -- proven by the
+# strict comparison above, which now includes every one of them. EMPTY,
+# not deleted -- same posture Stage 5a -> Stage 5b's own comment (just
+# above this one) already documents: this constant (and both stale-guards
+# below, which still apply to any FUTURE pending-parity op) stays the
+# documented seam a later stage's own in-flight parity work reuses.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
