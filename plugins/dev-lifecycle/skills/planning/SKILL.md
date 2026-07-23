@@ -1,19 +1,19 @@
 ---
 name: "planning"
-description: "Produce a clear, actionable implementation plan before any code is written, then — once the user approves it — file it as a GitHub issue and hand it to the build pipeline. Use this skill WHENEVER the user asks to plan, scope, design, or \"figure out how to approach\" anything — a new project, a feature, a refactor, a performance push, a bug fix, or a technical investigation. Trigger it even when the user doesn't say the word \"plan\" but is clearly asking how something should be built or fixed (e.g. \"how would we add X\", \"what's the best way to tackle Y\", \"I need to fix this bug\"). Planning is investigation and design only — it never writes or runs implementation code. It gathers context efficiently, proposes an approach, iterates with the user to approval, then records the approved plan as a GitHub issue and tags @claude to start the build."
+description: "Produce a clear, actionable implementation plan before any code is written, then — once the user approves it — file it as a GitHub issue and hand it to the build pipeline. Use this skill WHENEVER the user asks to plan, scope, design, or \"figure out how to approach\" anything — a new project, a feature, a refactor, a performance push, a bug fix, or a technical investigation. Trigger it even when the user doesn't say the word \"plan\" but is clearly asking how something should be built or fixed (e.g. \"how would we add X\", \"what's the best way to tackle Y\", \"I need to fix this bug\"). Planning is investigation and design only — it never writes or runs implementation code. It gathers context efficiently, proposes an approach, iterates with the user to approval, then records the approved plan as a GitHub issue."
 ---
 
 # Planning
 
-A plan is a thinking artifact, not a coding session. Understand the problem, learn what already exists, lay out a concrete path forward — then stop, get the user's approval, and only then file it and kick off the build. No implementation code is written here; none of it would be run or reviewed at this stage, so writing it now just burns context and pre-commits to decisions the plan hasn't justified.
+A plan is a thinking artifact, not a coding session. Understand the problem, learn what already exists, lay out a concrete path forward — then stop, get the user's approval, and only then file it. No implementation code is written here; none of it would be run or reviewed at this stage, so writing it now just burns context and pre-commits to decisions the plan hasn't justified.
 
-Planning is the entry point to the pipeline: the approved plan becomes a GitHub issue, and tagging @claude on that issue starts the build agent (the frontend/backend skills) that opens the PR. So the plan is also the build agent's brief — it must be clear enough to implement from.
+Planning is the entry point to the pipeline: the approved plan becomes a GitHub issue. So the plan is also the build agent's brief — it must be clear enough to implement from.
 
 ## Core rules
 
 - **Investigate, don't implement.** Read and search the codebase as needed. Do not write feature code, scaffolding, or migrations. Tiny illustrative snippets (a few lines showing an interface shape or a data model) are fine when they make the plan clearer; full implementations are not.
 - **Work context-efficiently.** Context is the budget. Locate with search before reading; read the specific spans that change the plan, not whole files or directories; state reasonable inferences as assumptions rather than verifying everything. See `${CLAUDE_PLUGIN_ROOT}/shared/token-efficiency.md`.
-- **Stop for approval.** Present the plan and iterate on feedback. Do NOT file the issue or tag @claude until the user explicitly approves. The plan is the deliverable; the user's approval is the trigger.
+- **Stop for approval.** Present the plan and iterate on feedback. Do NOT file the issue until the user explicitly approves. The plan is the deliverable; the user's approval is the trigger.
 - **Detailed but concise.** Every section earns its place. A senior engineer — or the build agent — should be able to read the plan and start building. Cut throat-clearing, restating the obvious, and filler.
 
 ## Workflow
@@ -92,7 +92,7 @@ checklist.
 
 Present the plan in the conversation. Discuss, adjust, and iterate on the user's feedback until they **explicitly approve**. This is the back-and-forth, and it may take several rounds. Do not file anything or trigger the build during this step. If the user requests changes, revise and re-present. Only explicit approval moves to step 5.
 
-### 5. Record the approved plan and kick off the build
+### 5. Record the approved plan
 
 On approval, and only then:
 
@@ -100,15 +100,13 @@ On approval, and only then:
 - **If this issue belongs to an epic** (a `product-planning` roadmap stage, or any tracking issue), link it so the epic reconciles itself when the work merges:
   - Register it as a native **sub-issue** of the epic (`gh api` / GitHub's sub-issues endpoint, or the `sub_issue_write` tool) — this alone moves the epic's progress bar when the issue closes, no automation required.
   - Add an `Epic: #<n>` marker line to this issue's body, and make sure the epic's checklist line for this stage carries this issue's number, e.g. `- [ ] Stage 3 — Auth (#<this-issue>)`. That pair is what the `epic-checkoff` workflow keys on to flip `- [ ]` → `- [x]` in the epic when the issue closes (via the merged PR's `Closes #`). Without the marker and the number on the line, the box won't tick.
-- **Tag @claude to start the build.** Trigger the build agent by mentioning @claude on the issue (e.g. a comment: "@claude implement this plan"), so the Claude GitHub Action picks it up, implements against the plan, and opens a PR. If **you** are posting this comment as the Claude bot rather than as the human owner (e.g. planning is running headless in the pipeline), also include the hidden sentinel `<!-- firm:route-to-claude -->` on its own line — the implement gate re-triggers on a *bot* comment only when it carries that marker; a bare `@claude` from a bot is inert (this is the self-tagging-loop guard). A comment authored by the human owner needs no sentinel.
-- **If the Action isn't installed on the repo,** file the issue but note @claude won't respond until the repo is scaffolded into the pipeline (see the `scaffolding` skill).
 - **If GitHub isn't available** (no `github.com` remote, or the CLI/API can't create issues), present the plan inline, say plainly it couldn't be filed, and note the build wasn't auto-triggered. Never silently drop the plan.
 
-Filing the issue and tagging @claude is recording and delegating, not implementing — this does not violate "investigate, don't implement." Planning still writes no code; the build agent does.
+Filing the issue is recording and delegating, not implementing — this does not violate "investigate, don't implement." Planning still writes no code; the build agent does.
 
 ### 6. Hand off
 
-Share the issue link and a one-line summary, and note that @claude has been tagged and the build is running in the pipeline (a PR will follow). The next checkpoint is the user's: reviewing the PR the pipeline produces.
+Share the issue link and a one-line summary.
 
 ## What this skill does NOT do
 
