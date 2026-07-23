@@ -86,5 +86,26 @@ services:
   #   depends_on:
   #     - api
 
+  # --- Admin tool (uncomment once templates/frontend/nextjs-admin/ is scaffolded to
+  # apps/admin/) --------------------------------------------------------------
+  # A SECOND, standalone Next.js app — NOT mutually exclusive with the `web`
+  # variant above (a project can run both: the public app and the internal,
+  # whole-app-admin-gated tool are two different deployables for two
+  # different audiences). Same shape as the Next.js `web` service above
+  # (same Dockerfile pattern, no separate `dev` stage, dev loop runs via
+  # `just dev` on the host), except port 3001 (not 3000 — avoids a local
+  # collision when both apps run side by side) and this app's own
+  # NEXT_PUBLIC_API_BASE_URL:
+  # admin:
+  #   build:
+  #     context: ./apps/admin
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+  #   ports:
+  #     - "3001:3001"
+  #   depends_on:
+  #     - api
+
 volumes:
   monorepo-db-data:

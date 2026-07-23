@@ -1,6 +1,6 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07; Stage 6 Frontend/web + Frontend testing rows for the Vite SPA / @repo/web-shared stack, 2026-07; Stage 8 Mobile expo-router/expo-secure-store/react-native-screens/react-native-safe-area-context rows, 2026-07; Stage 7 Next.js frontend @tailwindcss/postcss row (Frontend testing rows reused unchanged from Stage 6 — same vitest/Testing Library/jsdom/msw toolchain), 2026-07"
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07; Stage 6 Frontend/web + Frontend testing rows for the Vite SPA / @repo/web-shared stack, 2026-07; Stage 8 Mobile expo-router/expo-secure-store/react-native-screens/react-native-safe-area-context rows, 2026-07; Stage 7 Next.js frontend @tailwindcss/postcss row (Frontend testing rows reused unchanged from Stage 6 — same vitest/Testing Library/jsdom/msw toolchain), 2026-07; Stage 13 admin tool (editor) — new 'Editor (WYSIWYG)' TipTap rows (@tiptap/react, @tiptap/pm, @tiptap/starter-kit, @tiptap/extension-link), consumed only by apps/admin (Stage 13d, not yet), 2026-07"
 last-verified: 2026-07-23
 provenance: manual
 sources:
@@ -54,6 +54,10 @@ sources:
   - https://www.npmjs.com/package/@testing-library/jest-dom
   - https://www.npmjs.com/package/jsdom
   - https://www.npmjs.com/package/msw
+  - https://registry.npmjs.org/@tiptap/react
+  - https://registry.npmjs.org/@tiptap/pm
+  - https://registry.npmjs.org/@tiptap/starter-kit
+  - https://registry.npmjs.org/@tiptap/extension-link
   - https://pypi.org/project/bandit/
   - https://pypi.org/project/semgrep/
   - https://pypi.org/project/pip-audit/
@@ -77,6 +81,7 @@ sources:
 - Backend — Django track
 - Frontend / web
 - Frontend testing
+- Editor (WYSIWYG)
 - Client codegen
 - Mobile
 - Kit-wide lint & format tooling
@@ -142,6 +147,16 @@ The web-stack test toolchain: component tests via Testing Library over the kit's
 | @testing-library/jest-dom | **6.x** (6.10.0) | Custom DOM matchers (`toBeInTheDocument`, `toHaveTextContent`), wired into vitest's `expect` via a setup file (`import "@testing-library/jest-dom/vitest"`). |
 | jsdom | **29.x** (29.1.1) | The DOM implementation vitest runs component tests against (`environment: "jsdom"`); provides `document`/`window`/`document.cookie` so the cookie-mode CSRF echo and React rendering work headlessly. |
 | msw | **2.x** (2.15.0) | Mock Service Worker — intercepts the api-client mutator's `fetch` at the network boundary (`setupServer` from `msw/node`) so tests exercise the real data-fetching path (login → `X-Auth-Mode` header, 401 → refresh → retry) rather than stubbing the client. v2 is the current major (distinct request-handler API from v1). |
+
+## Editor (WYSIWYG)
+The rich-text editor stack for the admin tool's blog editor (`templates/frontend/nextjs-admin/`, Stage 13). Pinned now, at Stage 13a (the admin-app **foundation** stage), so the version line is ratified once — but **consumed only by `apps/admin`**, and only starting at the later Stage 13d editor work; `apps/admin`'s `package.json` does not install these yet (no unused dep in the shell). Never consumed by `apps/web`, `@repo/web-shared`, or any backend block.
+
+| Dep | Pinned line | Why this line |
+| --- | --- | --- |
+| @tiptap/react | **3.28.x** (3.28.0) | Current stable (npm, published 2026-07-15) — the React bindings for TipTap's ProseMirror-based editor. `peerDependencies` accept `react`/`react-dom` `^17 \|\| ^18 \|\| ^19` and `@tiptap/core`/`@tiptap/pm` pinned to the exact `3.28.0` release — compatible with this matrix's React 19.2.x pin. Clears the workspace `minimumReleaseAge: 1440` window comfortably (published >7 days before this pin's `last-verified`; no downgrade needed, unlike the `@tanstack/react-query`/Expo rows above). |
+| @tiptap/pm | **3.28.x** (3.28.0) | TipTap's own bundled/re-exported ProseMirror packages (`prosemirror-state`, `-view`, `-model`, etc.) — the editor engine `@tiptap/react` and `@tiptap/starter-kit` both peer-depend on at the exact same `3.28.0` release. Same npm publish date and `minimumReleaseAge` clearance as the row above. |
+| @tiptap/starter-kit | **3.28.x** (3.28.0) | The bundled "batteries included" extension set (bold/italic/lists/headings/code-block/etc.) — the fastest path to a working editor without hand-assembling two dozen individual `@tiptap/extension-*` packages. Depends on `@tiptap/core`/`@tiptap/pm` `^3.28.0` (including `@tiptap/extension-link` transitively — pinned directly below anyway, since the blog editor needs it explicitly configured, not just present). Same publish date/clearance as the rows above. |
+| @tiptap/extension-link | **3.28.x** (3.28.0) | The link mark/extension — pinned directly (not left to `starter-kit`'s transitive copy) because the blog editor configures it explicitly (URL validation/autolink options). `peerDependencies` pin `@tiptap/core`/`@tiptap/pm` to the exact `3.28.0` release, same line as every other row here. Same publish date/clearance as the rows above. |
 
 ## Client codegen
 | Dep | Pinned line | Why this line |

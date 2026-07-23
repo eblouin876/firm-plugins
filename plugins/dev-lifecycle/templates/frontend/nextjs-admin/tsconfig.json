@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // NOTE (materialized-location path): this app is authored at
+  // templates/frontend/nextjs-admin/ but scaffolding MATERIALIZES it into
+  // <project>/apps/admin/ (the pnpm-workspace `apps/*` glob), so this
+  // "extends" path is written for the materialized location — two levels up
+  // from apps/admin/ to the project root — NOT for where this file sits in
+  // the firm-plugins repo. Same convention as @repo/api-client,
+  // @repo/web-shared, the Vite SPA block, and this block's own clone source
+  // (templates/frontend/nextjs); don't "fix" it to be firm-plugins-relative.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The base pins Node-executed `module`/`moduleResolution` (NodeNext),
+    // which requires explicit `.js` extensions on relative imports. Next.js
+    // (Turbopack) bundles this app itself and imports the extensionless
+    // @repo/api-client / @repo/web-shared builds, so it overrides to
+    // `bundler` resolution — the same override the Vite SPA makes.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // Next owns the JSX transform for both server and client components;
+    // `preserve` hands JSX through untouched for Next's own compiler rather
+    // than tsc emitting it (contrast the SPA's `react-jsx`, which tsc/Vite's
+    // React plugin transforms directly).
+    "jsx": "preserve",
+    "allowJs": true,
+    "incremental": true,
+    // The Next.js TS plugin (editor-only: route-typing, `next/link` href
+    // checks, etc.) — has no effect on `tsc --noEmit` itself.
+    "plugins": [{ "name": "next" }],
+    // Ambient types the test suite relies on: vitest's globals (vitest.config.ts
+    // sets `globals: true`), jest-dom's matcher augmentation of vitest's
+    // `expect` (applied via vitest.setup.ts's import, picked up here because
+    // that file is in this program too — see `include` below), and node
+    // (msw/node). React/Next's own ambient types are pulled in via `import`
+    // and next-env.d.ts's triple-slash references respectively, not this
+    // list — same split @repo/web-shared's tsconfig.json makes.
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"],
+    // Next owns the app bundle; tsc here is a pure typechecker (see
+    // package.json's `typecheck`), so it never emits.
+    "noEmit": true
+  },
+  // App Router source, component source, and the test suite (`src/test/`,
+  // plus co-located `*.test.tsx` files under `app/`). next.config.ts and
+  // vitest.config.ts/vitest.setup.ts are linted via the eslint config's
+  // `allowDefaultProject` rather than typechecked here, the same split the
+  // Vite SPA uses for vite.config.ts.
+  "include": ["next-env.d.ts", "app", "components", "src"],
+  "exclude": ["node_modules"]
+}
