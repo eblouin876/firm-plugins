@@ -16,6 +16,10 @@ from core.views import (
     AdminBlogPostListCreateView,
     AdminBlogPostPublishView,
     AdminBlogPostUnpublishView,
+    AdminFlagDetailView,
+    AdminFlagDismissView,
+    AdminFlagListView,
+    AdminFlagResolveView,
     AdminPingView,
     AdminUserBanView,
     AdminUserDetailView,
@@ -108,6 +112,14 @@ urlpatterns = [
         AdminBlogCommentDeleteView.as_view(),
         name="admin-blog-comment-delete",
     ),
+    # Stage 13c: the moderation admin surface -- see core/views.py's own
+    # module-level comment for the full design. `<str:flag_id>`, same
+    # malformed-id-stays-enveloped rationale as `admin/users/<str:user_id>`
+    # above.
+    path("admin/flags", AdminFlagListView.as_view(), name="admin-flag-list"),
+    path("admin/flags/<str:flag_id>", AdminFlagDetailView.as_view(), name="admin-flag-detail"),
+    path("admin/flags/<str:flag_id>/resolve", AdminFlagResolveView.as_view(), name="admin-flag-resolve"),
+    path("admin/flags/<str:flag_id>/dismiss", AdminFlagDismissView.as_view(), name="admin-flag-dismiss"),
     *router.urls,
 ]
 

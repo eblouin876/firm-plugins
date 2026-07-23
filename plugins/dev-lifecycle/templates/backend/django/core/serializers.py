@@ -484,3 +484,73 @@ class CommentOutSerializer(serializers.Serializer):
     body = serializers.CharField(allow_blank=True)
     status = serializers.ChoiceField(choices=_COMMENT_STATUS_CHOICES)
     created_at = serializers.DateTimeField()
+
+
+# ---------------------------------------------------------------------------
+# Stage 13c: moderation -- matches `app/schemas/moderation.py`'s `FlagOut`/
+# `FlagResolveIn`/`FlagDismissIn`/`FlagTargetType`/`FlagStatus`/
+# `ResolveAction` field-for-field.
+# ---------------------------------------------------------------------------
+
+_FLAG_TARGET_TYPE_CHOICES = ["blog_post", "comment", "user"]
+_FLAG_STATUS_CHOICES = ["open", "resolved", "dismissed"]
+_RESOLVE_ACTION_CHOICES = ["none", "hide_content", "delete_content", "ban_author"]
+
+
+class FlagOutSerializer(serializers.Serializer):
+    """The read shape every moderation admin endpoint returns -- matches
+    `app/schemas/moderation.py`'s `FlagOut` exactly. A plain `Serializer`
+    constructed directly from a `core.models.Flag` instance (`reporter_id`/
+    `resolved_by_id` read straight off Django's own auto-generated
+    `<fk_name>_id` attribute, no explicit `source=` needed), same
+    convention `BlogPostSummaryOutSerializer`'s own docstring documents."""
+
+    id = serializers.UUIDField()
+    target_type = serializers.ChoiceField(choices=_FLAG_TARGET_TYPE_CHOICES)
+    target_id = serializers.UUIDField()
+    reporter_id = serializers.UUIDField(allow_null=True)
+    reason = serializers.CharField()
+    status = serializers.ChoiceField(choices=_FLAG_STATUS_CHOICES)
+    resolved_by_id = serializers.UUIDField(allow_null=True)
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    resolution_note = serializers.CharField(allow_null=True, allow_blank=True)
+    created_at = serializers.DateTimeField()
+
+
+class FlagResolveInSerializer(serializers.Serializer):
+    """`POST /admin/flags/{flag_id}/resolve`'s request body -- matches
+    `app/schemas/moderation.py`'s `FlagResolveIn`: `action` picks the
+    content/author side effect (validated at the VIEW layer, per
+    `target_type` -- see `core/views.py`'s `AdminFlagResolveView`), `note`
+    is an optional free-text resolution note. `validate()` below rejects
+    any key in the request body that isn't a declared field -- same
+    parity-with-`extra="forbid"` posture `AdminRolesInSerializer.
+    validate()`'s own docstring documents."""
+
+    action = serializers.ChoiceField(choices=_RESOLVE_ACTION_CHOICES)
+    note = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
+
+    def validate(self, attrs: dict) -> dict:
+        unexpected = set(self.initial_data) - set(self.fields)
+        if unexpected:
+            raise serializers.ValidationError(
+                {field: "This field is not recognized." for field in sorted(unexpected)}
+            )
+        return attrs
+
+
+class FlagDismissInSerializer(serializers.Serializer):
+    """`POST /admin/flags/{flag_id}/dismiss`'s request body -- matches
+    `app/schemas/moderation.py`'s `FlagDismissIn`: no content action,
+    ever; `note` is the same optional free-text resolution note
+    `FlagResolveInSerializer.note` documents."""
+
+    note = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
+
+    def validate(self, attrs: dict) -> dict:
+        unexpected = set(self.initial_data) - set(self.fields)
+        if unexpected:
+            raise serializers.ValidationError(
+                {field: "This field is not recognized." for field in sorted(unexpected)}
+            )
+        return attrs

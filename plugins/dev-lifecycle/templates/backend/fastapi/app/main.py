@@ -83,7 +83,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from app.api.routers import admin, auth, blog, health, items
+from app.api.routers import admin, auth, blog, health, items, moderation
 from app.core.config import Settings, get_settings
 from app.core.db import configure_engine
 from app.core.errors import AppError, ErrorBody, ErrorCode, ErrorDetail, ErrorEnvelope
@@ -397,6 +397,12 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
     # it must be registered after admin.router is constructed (import-time
     # dependency, not a request-time ordering concern).
     app.include_router(blog.router)
+    # Stage 13c: the moderation admin surface -- see app/api/routers/
+    # moderation.py's own module docstring; reuses admin.py's
+    # require_admin_rate_limit/ban_user/_ensure_not_self, so it must be
+    # registered after admin.router is constructed, same ordering
+    # constraint blog.router documents above.
+    app.include_router(moderation.router)
 
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
     app.add_exception_handler(AppError, _app_error_handler)

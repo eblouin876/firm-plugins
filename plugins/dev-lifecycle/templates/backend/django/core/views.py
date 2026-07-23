@@ -38,7 +38,7 @@ import uuid
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.db.utils import Error as DjangoDBError
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -48,7 +48,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.contract.errors import ConflictError, ErrorDetail, NotFoundError, ValidationFailedError
-from core.models import BlogPost, Comment, Item, User
+from core.models import BlogPost, Comment, Flag, Item, User
 from core.pagination import ContractPageNumberPagination
 from core.security.admin_rate_limit import enforce_admin_rate_limit
 from core.security.auth import (
@@ -84,6 +84,9 @@ from core.serializers import (
     BlogPostUpdateSerializer,
     CommentOutSerializer,
     ErrorEnvelopeSerializer,
+    FlagDismissInSerializer,
+    FlagOutSerializer,
+    FlagResolveInSerializer,
     HealthStatusSerializer,
     ItemCreateSerializer,
     ItemOutSerializer,
@@ -921,6 +924,23 @@ def _ensure_not_self(claims, user: User, *, action: str) -> None:
         raise ConflictError(f"An admin cannot {action} their own account.")
 
 
+def _ban_user(user: User) -> None:
+    """THE ban action — extracted so `AdminUserBanView.post` (below) and
+    Stage 13c's moderation `resolve` action (`AdminFlagResolveView`, this
+    module's own moderation section) share ONE implementation rather than
+    each hand-rolling the state-machine check + status write + session
+    revocation. Byte-identical posture to `app/api/routers/admin.py`'s own
+    `ban_user()` extraction on the FastAPI track — see that function's own
+    docstring for why this deliberately does NOT perform the
+    self-protection check or emit an audit event itself; both stay the
+    CALLER's responsibility."""
+    if user.status not in ("active", "suspended"):
+        raise ConflictError(f"Cannot ban a user with status '{user.status}'.")
+    user.status = "banned"
+    user.save(update_fields=["status"])
+    async_to_sync(DjangoRefreshTokenStore().revoke_all_for_user)(str(user.id))
+
+
 class AdminUserListView(generics.ListAPIView):
     """`GET /admin/users` — paginated listing via the SAME `core.pagination.
     ContractPageNumberPagination` `GET /items` already uses (`config/
@@ -1101,11 +1121,7 @@ class AdminUserBanView(APIView):
         enforce_admin_rate_limit(request)
         user = _get_admin_user(user_id)
         _ensure_not_self(claims, user, action="ban")
-        if user.status not in ("active", "suspended"):
-            raise ConflictError(f"Cannot ban a user with status '{user.status}'.")
-        user.status = "banned"
-        user.save(update_fields=["status"])
-        async_to_sync(DjangoRefreshTokenStore().revoke_all_for_user)(str(user.id))
+        _ban_user(user)
         audit_event(
             "admin.user.ban",
             actor=claims.sub,
@@ -1731,3 +1747,342 @@ class AdminBlogCommentDeleteView(APIView):
             outcome="success",
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Stage 13c: moderation admin surface — the DRF counterpart to `app/api/
+# routers/moderation.py`'s own moderation admin surface. See that module's
+# docstring for the full design this mirrors handler-for-handler (the
+# resolve state machine, the per-`target_type` action dispatch, audit
+# events, the shared per-route rate limit). Same auth-gate posture as the
+# Stage 13b/13d admin views above: every view calls `require_roles(request,
+# auth_service, "admin")` directly so the SAME call yields the resolved
+# `AccessClaims` this router needs as the audit actor and for the
+# `ban_author` self-protection guard (`_ensure_not_self`, above).
+#
+# **Admin-only queue, no end-user write path.** There is no `POST /flags`
+# view anywhere in this module — a consuming app writes `Flag` rows itself
+# (via the ORM); this section only ships the admin list/get/resolve/
+# dismiss surface over rows that already exist, byte-identical scope to
+# `app/api/routers/moderation.py`'s own module docstring.
+# ---------------------------------------------------------------------------
+
+_FLAG_NOT_FOUND_RESPONSE = {404: ErrorEnvelopeSerializer}
+_FLAG_CONFLICT_RESPONSE = {409: ErrorEnvelopeSerializer}
+_FLAG_VALIDATION_RESPONSE = {422: ErrorEnvelopeSerializer}
+_FLAG_AUTH_RESPONSES = {401: ErrorEnvelopeSerializer, 403: ErrorEnvelopeSerializer}
+
+_ALLOWED_FLAG_STATUS_VALUES = frozenset({"open", "resolved", "dismissed"})
+_ALLOWED_FLAG_TARGET_TYPE_VALUES = frozenset({"blog_post", "comment", "user"})
+
+
+def _get_admin_flag(flag_id: str) -> Flag:
+    """`<str:flag_id>`, NOT Django's `<uuid:...>` converter — same "accept
+    a plain string segment, validate by hand, raise the app's own
+    NotFoundError" posture `_get_admin_user`/`_get_admin_blog_post`'s own
+    docstrings document, applied here to `Flag`."""
+    try:
+        uid = uuid.UUID(flag_id)
+    except (ValueError, TypeError):
+        raise NotFoundError(f"Flag {flag_id} was not found.") from None
+    try:
+        return Flag.objects.get(id=uid)
+    except Flag.DoesNotExist:
+        raise NotFoundError(f"Flag {flag_id} was not found.") from None
+
+
+def _resolve_flag_author(flag: Flag) -> User:
+    """`ban_author`'s target resolution — byte-identical dispatch to
+    `app/api/routers/moderation.py`'s `_resolve_author`: for a `blog_post`/
+    `comment` target, resolves the author via that row's `author_id` (a
+    `comment` with a NULL `author_id` has no author to ban — 404); for a
+    `user` target, the target IS the author. Raises `NotFoundError` (404)
+    for a missing target row, a target row with no author at all, or an
+    author whose `User` row is itself missing/soft-deleted."""
+    if flag.target_type == "user":
+        try:
+            return User.objects.get(id=flag.target_id)
+        except User.DoesNotExist:
+            raise NotFoundError(f"User {flag.target_id} was not found.") from None
+    if flag.target_type == "blog_post":
+        try:
+            post = BlogPost.objects.get(id=flag.target_id)
+        except BlogPost.DoesNotExist:
+            raise NotFoundError(f"Blog post {flag.target_id} was not found.") from None
+        try:
+            return User.objects.get(id=post.author_id)
+        except User.DoesNotExist:
+            raise NotFoundError(f"User {post.author_id} was not found.") from None
+    if flag.target_type == "comment":
+        try:
+            comment = Comment.objects.get(id=flag.target_id)
+        except Comment.DoesNotExist:
+            raise NotFoundError(f"Comment {flag.target_id} was not found.") from None
+        if comment.author_id is None:
+            raise NotFoundError(f"Comment {flag.target_id} has no author to ban.")
+        try:
+            return User.objects.get(id=comment.author_id)
+        except User.DoesNotExist:
+            raise NotFoundError(f"User {comment.author_id} was not found.") from None
+    raise ValidationFailedError(f"Unknown target_type '{flag.target_type}'.")
+
+
+def _hide_flag_content(flag: Flag) -> None:
+    if flag.target_type == "comment":
+        try:
+            comment = Comment.objects.get(id=flag.target_id)
+        except Comment.DoesNotExist:
+            raise NotFoundError(f"Comment {flag.target_id} was not found.") from None
+        comment.status = "hidden"
+        comment.save(update_fields=["status"])
+        return
+    if flag.target_type == "blog_post":
+        try:
+            post = BlogPost.objects.get(id=flag.target_id)
+        except BlogPost.DoesNotExist:
+            raise NotFoundError(f"Blog post {flag.target_id} was not found.") from None
+        post.status = "draft"
+        post.published_at = None
+        post.save(update_fields=["status", "published_at"])
+        return
+    if flag.target_type == "user":
+        raise ValidationFailedError("hide_content is not a valid action for a 'user' target.")
+    raise ValidationFailedError(f"Unknown target_type '{flag.target_type}'.")
+
+
+def _delete_flag_content(flag: Flag) -> None:
+    if flag.target_type == "comment":
+        try:
+            comment = Comment.objects.get(id=flag.target_id)
+        except Comment.DoesNotExist:
+            raise NotFoundError(f"Comment {flag.target_id} was not found.") from None
+        comment.mark_deleted()
+        comment.save(update_fields=["deleted_at"])
+        return
+    if flag.target_type == "blog_post":
+        try:
+            post = BlogPost.objects.get(id=flag.target_id)
+        except BlogPost.DoesNotExist:
+            raise NotFoundError(f"Blog post {flag.target_id} was not found.") from None
+        post.mark_deleted()
+        post.save(update_fields=["deleted_at"])
+        return
+    if flag.target_type == "user":
+        raise ValidationFailedError(
+            "delete_content is not a valid action for a 'user' target; use ban_author instead."
+        )
+    raise ValidationFailedError(f"Unknown target_type '{flag.target_type}'.")
+
+
+class AdminFlagListView(generics.ListAPIView):
+    """`GET /admin/flags` — paginated listing via the SAME
+    `ContractPageNumberPagination` every other admin list view uses.
+    `?status=`/`?target_type=` each filter to one exact value, composable
+    — matching `app/api/routers/moderation.py`'s `list_admin_flags`."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    serializer_class = FlagOutSerializer
+    queryset = Flag.objects.all().order_by("created_at", "id")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            if status_filter not in _ALLOWED_FLAG_STATUS_VALUES:
+                raise ValidationFailedError(
+                    "Invalid status filter.",
+                    details=[ErrorDetail(field="status", message=f"Unknown status: {status_filter!r}")],
+                )
+            queryset = queryset.filter(status=status_filter)
+        target_type_filter = self.request.query_params.get("target_type")
+        if target_type_filter:
+            if target_type_filter not in _ALLOWED_FLAG_TARGET_TYPE_VALUES:
+                raise ValidationFailedError(
+                    "Invalid target_type filter.",
+                    details=[
+                        ErrorDetail(field="target_type", message=f"Unknown target_type: {target_type_filter!r}")
+                    ],
+                )
+            queryset = queryset.filter(target_type=target_type_filter)
+        return queryset
+
+    @extend_schema(
+        operation_id="list_admin_flags_admin_flags_get",
+        tags=["moderation"],
+        auth=[{"HTTPBearer": []}],
+        responses={200: FlagOutSerializer, **_FLAG_AUTH_RESPONSES, **_FLAG_VALIDATION_RESPONSE},
+    )
+    def get(self, request, *args, **kwargs):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        return super().get(request, *args, **kwargs)
+
+
+class AdminFlagDetailView(APIView):
+    """`GET /admin/flags/{flag_id}` — get one flag, the DRF counterpart to
+    `app/api/routers/moderation.py`'s `get_admin_flag`."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="get_admin_flag_admin_flags__flag_id__get",
+        tags=["moderation"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: FlagOutSerializer,
+            **_FLAG_AUTH_RESPONSES,
+            **_FLAG_NOT_FOUND_RESPONSE,
+            **_FLAG_VALIDATION_RESPONSE,
+        },
+    )
+    def get(self, request, flag_id):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        flag = _get_admin_flag(flag_id)
+        return Response(FlagOutSerializer(flag).data)
+
+
+class AdminFlagResolveView(APIView):
+    """`POST /admin/flags/{flag_id}/resolve` — the DRF counterpart to
+    `app/api/routers/moderation.py`'s `resolve_admin_flag`: only an `open`
+    flag can be resolved (409 otherwise, checked BEFORE any content/author
+    side effect runs, so a 404/409/422 raised by that side effect leaves
+    the flag untouched). Dispatches on `action`, per `flag.target_type` —
+    see this module's own moderation-section docstring for the full
+    per-action behavior. `ban_author` calls this module's own `_ban_user`
+    (the SAME implementation `AdminUserBanView.post` uses, above) plus
+    `_ensure_not_self` — an admin can never `ban_author` themselves, even
+    indirectly via a flag whose target/author happens to be their own
+    account (409)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="resolve_admin_flag_admin_flags__flag_id__resolve_post",
+        tags=["moderation"],
+        auth=[{"HTTPBearer": []}],
+        request=FlagResolveInSerializer,
+        responses={
+            200: FlagOutSerializer,
+            **_FLAG_AUTH_RESPONSES,
+            **_FLAG_NOT_FOUND_RESPONSE,
+            **_FLAG_CONFLICT_RESPONSE,
+            **_FLAG_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, flag_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        flag = _get_admin_flag(flag_id)
+        if flag.status != "open":
+            raise ConflictError(f"Cannot resolve a flag with status '{flag.status}'.")
+
+        serializer = FlagResolveInSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        action = serializer.validated_data["action"]
+        note = serializer.validated_data.get("note")
+
+        audit_extra: dict = {}
+        # `transaction.atomic()` around the mutation sequence (content/
+        # author action + the final `flag.save()`) so a failure partway
+        # through can't leave a half-applied state -- e.g. a banned author
+        # whose flag is still `open`, or (were `flag.save()` to fail) a
+        # user left banned with un-revoked sessions while the flag reports
+        # otherwise. Unlike `stores.py`'s `DjangoRefreshTokenStore` (whose
+        # own docstring locks OUT `transaction.atomic()` around its calls
+        # so each `.aupdate()` stays independently durable), THIS wrap is
+        # safe: `_ban_user`'s `async_to_sync(...revoke_all_for_user)` call
+        # still runs Django's async ORM `.aupdate()` via `sync_to_async`
+        # with its default `thread_sensitive=True`, which routes the write
+        # back onto THIS thread rather than a separate one -- so it shares
+        # this thread's connection/transaction state and participates in
+        # the same atomic block instead of racing it on another
+        # connection. Verified empirically (Stage 13c review fix): forcing
+        # the trailing `flag.save()` to raise rolls the preceding
+        # `_ban_user` write back too (see `tests/test_moderation.py`'s
+        # `test_resolve_ban_author_rolls_back_the_ban_if_flag_save_fails`).
+        with transaction.atomic():
+            if action == "none":
+                pass
+            elif action == "hide_content":
+                _hide_flag_content(flag)
+            elif action == "delete_content":
+                _delete_flag_content(flag)
+            elif action == "ban_author":
+                author = _resolve_flag_author(flag)
+                _ensure_not_self(claims, author, action="ban")
+                _ban_user(author)
+                audit_extra["banned_user"] = str(author.id)
+            else:  # pragma: no cover - unreachable, ChoiceField already 422s an unknown action
+                raise ValidationFailedError(f"Unknown action '{action}'.")
+
+            flag.status = "resolved"
+            flag.resolved_by_id = uuid.UUID(claims.sub)
+            flag.resolved_at = utc_now()
+            flag.resolution_note = note
+            flag.save(update_fields=["status", "resolved_by", "resolved_at", "resolution_note"])
+        audit_event(
+            "admin.flag.resolve",
+            actor=claims.sub,
+            resource=f"flag:{flag.id}",
+            outcome="success",
+            action_taken=action,
+            target=f"{flag.target_type}:{flag.target_id}",
+            **audit_extra,
+        )
+        return Response(FlagOutSerializer(flag).data)
+
+
+class AdminFlagDismissView(APIView):
+    """`POST /admin/flags/{flag_id}/dismiss` — the DRF counterpart to
+    `app/api/routers/moderation.py`'s `dismiss_admin_flag`: only an `open`
+    flag can be dismissed (409 otherwise). Never performs a content/author
+    action — dismiss is "this report doesn't warrant action," not a
+    moderation outcome."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="dismiss_admin_flag_admin_flags__flag_id__dismiss_post",
+        tags=["moderation"],
+        auth=[{"HTTPBearer": []}],
+        request=FlagDismissInSerializer,
+        responses={
+            200: FlagOutSerializer,
+            **_FLAG_AUTH_RESPONSES,
+            **_FLAG_NOT_FOUND_RESPONSE,
+            **_FLAG_CONFLICT_RESPONSE,
+            **_FLAG_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, flag_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        flag = _get_admin_flag(flag_id)
+        if flag.status != "open":
+            raise ConflictError(f"Cannot dismiss a flag with status '{flag.status}'.")
+
+        serializer = FlagDismissInSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        note = serializer.validated_data.get("note")
+
+        flag.status = "dismissed"
+        flag.resolved_by_id = uuid.UUID(claims.sub)
+        flag.resolved_at = utc_now()
+        flag.resolution_note = note
+        flag.save(update_fields=["status", "resolved_by", "resolved_at", "resolution_note"])
+        audit_event(
+            "admin.flag.dismiss",
+            actor=claims.sub,
+            resource=f"flag:{flag.id}",
+            outcome="success",
+        )
+        return Response(FlagOutSerializer(flag).data)

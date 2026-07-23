@@ -413,6 +413,18 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # strict comparison above, which now includes every one of them. EMPTY, not
 # deleted -- same posture every prior stage's own comment (above) already
 # documents.
+#
+# Stage 13d -> Stage 13c: backend/fastapi's Stage 13c implemented the
+# moderation admin surface -- `GET /admin/flags`, `GET /admin/flags/
+# {flag_id}`, `POST /admin/flags/{flag_id}/{resolve,dismiss}`
+# (`app/api/routers/moderation.py`) -- and extended the frozen contract
+# with all four new operations. Stage 13c landed full Django parity for
+# all four ops (`core/models.py`'s new `Flag`, `core/serializers.py`'s new
+# serializers, `core/views.py`'s new moderation admin views, `core/
+# urls.py`'s new routes) with a wire-shape that matches the frozen
+# contract exactly -- proven by the strict comparison above, which now
+# includes every one of them. EMPTY, not deleted -- same posture every
+# prior stage's own comment (above) already documents.
 _PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 

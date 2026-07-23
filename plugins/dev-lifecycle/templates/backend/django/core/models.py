@@ -652,3 +652,118 @@ class Comment(models.Model):
         from django.utils import timezone
 
         self.deleted_at = when or timezone.now()
+
+
+# ---------------------------------------------------------------------------
+# Stage 13c: moderation -- the `Flag` admin queue. Column-for-column match
+# to backend/fastapi's `app/models/flag.py` -- see that model's own
+# docstring for the full "admin-only queue, polymorphic target, no
+# cross-table FK" rationale this mirrors. Not a vendored file -- this
+# block's own app code, same as Item/User/BlogPost/Comment above.
+# ---------------------------------------------------------------------------
+
+
+class FlagQuerySet(models.QuerySet):
+    """`Flag`'s soft-delete filter -- identical shape to
+    `ItemQuerySet`/`UserQuerySet`/`BlogPostQuerySet`/`CommentQuerySet`
+    above."""
+
+    def not_deleted(self) -> "FlagQuerySet":
+        return self.filter(deleted_at__isnull=True)
+
+    def with_deleted(self) -> "FlagQuerySet":
+        return self
+
+
+class FlagManager(models.Manager.from_queryset(FlagQuerySet)):
+    def get_queryset(self) -> FlagQuerySet:
+        return super().get_queryset().not_deleted()
+
+
+class Flag(models.Model):
+    """Column-for-column match to `backend/fastapi`'s `app/models/flag.py`
+    `Flag` -- see that model's own docstring for the full rationale this
+    mirrors: admin-only moderation queue (no end-user create endpoint
+    anywhere in this app -- a consuming app writes rows itself), a
+    POLYMORPHIC `target_type`/`target_id` pair with deliberately NO
+    cross-table FK (`target_type` is what `core/views.py`'s moderation
+    resolve view dispatches on; `target_id` is looked up by hand, per
+    `target_type`, at the view layer), and `reporter` as the ONE FK on
+    this model that is NOT `on_delete=models.PROTECT` (`SET_NULL` instead --
+    see the FastAPI model's own docstring for why a flag's own audit value
+    outlives its reporter's account).
+
+    `target_type`/`status` are both plain `CharField`s, NOT DB enums -- the
+    SAME `User.status`/`BlogPost.status`/`Comment.status` precedent (see
+    each of those fields' own comments). `status` defaults `"open"` at both
+    the Python/ORM level and the DB level (`db_default="open"`), the same
+    two-layer shape `BlogPost.status`/`Comment.status` document."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Plain CharField, NOT a DB enum -- see class docstring. No FK on
+    # target_id below -- this column is what a lookup dispatches on.
+    target_type = models.CharField(max_length=16, db_index=True)
+    # Polymorphic, deliberately no ForeignKey -- see class docstring.
+    target_id = models.UUIDField(db_index=True)
+    # Optional -- a consuming app supplies it; NULL is a legitimate,
+    # permanent state. SET_NULL, not PROTECT/CASCADE -- see class
+    # docstring for why this is the one FK on this model that isn't
+    # RESTRICT/PROTECT like every other FK in this catalog.
+    reporter = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        db_index=True,
+        null=True,
+        blank=True,
+        related_name="reported_flags",
+    )
+    reason = models.TextField()
+    # Plain CharField, NOT a DB enum -- see class docstring. `db_index=True`
+    # (unlike `BlogPost.status`/`Comment.status`, which rely solely on
+    # their own `Meta.indexes` entry) -- byte-identical intent to
+    # `app/models/flag.py`'s individually-`index=True` `status` column on
+    # the FastAPI track, on top of the SAME composite `Meta.indexes` entry
+    # below (`flags_status_target_type_idx`) both tracks also carry.
+    status = models.CharField(max_length=16, default="open", db_default="open", db_index=True)
+    # The ACTING ADMIN -- set once, at resolve/dismiss time. PROTECT, not
+    # CASCADE/SET_NULL -- the SAME "don't silently cascade away an audit
+    # trail" rationale `BlogPost.author`/`RefreshToken.user` document above
+    # (see class docstring for why this FK differs from `reporter`'s).
+    resolved_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        db_index=True,
+        null=True,
+        blank=True,
+        related_name="resolved_flags",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True, default=None)
+    resolution_note = models.TextField(null=True, blank=True, default=None)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    objects = FlagManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        db_table = "flags"
+        indexes = [
+            # The admin queue's own composite filter shape (`?status=&
+            # target_type=`) -- byte-identical intent to
+            # `app/models/flag.py`'s `ix_flags_status_target_type` on the
+            # FastAPI track.
+            models.Index(fields=["status", "target_type"], name="flags_status_target_type_idx"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"Flag(target_type={self.target_type}, target_id={self.target_id})"
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    def mark_deleted(self, *, when=None) -> None:
+        from django.utils import timezone
+
+        self.deleted_at = when or timezone.now()

@@ -204,6 +204,32 @@ def _ensure_not_self(claims: AccessClaims, user_id: uuid.UUID, *, action: str) -
         raise ConflictError(f"An admin cannot {action} their own account.")
 
 
+async def ban_user(db: AsyncSession, user: User) -> User:
+    """THE ban action -- extracted so `ban_admin_user` (below) and Stage
+    13c's moderation `resolve` action (`app/api/routers/moderation.py`'s
+    `ban_author`, which imports and calls this function directly) share
+    ONE implementation rather than each hand-rolling the state-machine
+    check + status write + session revocation. Valid from `status in
+    {"active", "suspended"}` -- an already-`banned` user raises
+    `ConflictError` (409, idempotent re-ban is rejected rather than
+    silently no-op'd). Same refresh-token revocation `suspend_admin_user`
+    documents for its own action.
+
+    Deliberately does NOT perform the self-protection check
+    (`_ensure_not_self`) or emit the `admin.user.ban` audit event itself --
+    both callers have their own `claims`/audit-action-name context this
+    function has no business assuming (moderation's own resolve emits
+    `admin.flag.resolve`, not `admin.user.ban`, as its audit action -- see
+    that router's own docstring), so those two steps stay the CALLER's
+    responsibility, exactly as they already were before this extraction."""
+    repo = AsyncRepository(db, User)
+    if user.status not in (UserStatus.ACTIVE.value, UserStatus.SUSPENDED.value):
+        raise ConflictError(f"Cannot ban a user with status '{user.status}'.")
+    user = await repo.update(user, status=UserStatus.BANNED.value)
+    await SqlAlchemyRefreshTokenStore(db).revoke_all_for_user(str(user.id))
+    return user
+
+
 @router.get(
     "/ping",
     response_model=HealthStatus,
@@ -358,10 +384,7 @@ async def ban_admin_user(
     if user is None:
         raise NotFoundError(f"User {user_id} was not found.")
     _ensure_not_self(claims, user.id, action="ban")
-    if user.status not in (UserStatus.ACTIVE.value, UserStatus.SUSPENDED.value):
-        raise ConflictError(f"Cannot ban a user with status '{user.status}'.")
-    user = await repo.update(user, status=UserStatus.BANNED.value)
-    await SqlAlchemyRefreshTokenStore(db).revoke_all_for_user(str(user.id))
+    user = await ban_user(db, user)
     audit_event(
         "admin.user.ban",
         actor=claims.sub,
