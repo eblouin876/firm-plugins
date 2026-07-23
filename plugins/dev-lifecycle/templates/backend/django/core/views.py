@@ -35,6 +35,7 @@ from __future__ import annotations
 import uuid
 
 from asgiref.sync import async_to_sync
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection
 from django.db.utils import Error as DjangoDBError
@@ -46,8 +47,17 @@ from rest_framework.views import APIView
 
 from core.contract.errors import NotFoundError
 from core.models import Item
-from core.security.auth import InvalidToken, resolve_principal
-from core.security.auth.stores import DjangoUserStore, build_auth_service
+from core.security.auth import AuthService, InvalidToken, resolve_principal
+from core.security.auth.stores import (
+    AuditAuthEventSink,
+    DjangoRefreshTokenStore,
+    DjangoUserStore,
+    build_auth_service,
+    build_lockout_policy,
+    get_password_service,
+    get_token_service,
+    utc_now,
+)
 from core.serializers import (
     ErrorEnvelopeSerializer,
     HealthStatusSerializer,
@@ -61,6 +71,47 @@ from core.serializers import (
     RegisterRequestSerializer,
     TokenResponseSerializer,
 )
+
+
+def _build_login_auth_service() -> AuthService:
+    """Stage 5c (#45): the LOGIN-GATED `AuthService` — same store/service
+    composition `core.security.auth.stores.build_auth_service()` uses
+    (fresh `DjangoUserStore`/`DjangoRefreshTokenStore`, the process-wide
+    `get_password_service()`, a fresh `get_token_service()`, `utc_now` as
+    the shared clock), PLUS `lockout=build_lockout_policy()`,
+    `require_verification=settings.AUTH_REQUIRE_EMAIL_VERIFICATION`, and
+    `events=AuditAuthEventSink()` — mirroring `backend/fastapi`'s
+    `app/api/deps.py:get_auth_service`'s own Stage 5c wiring exactly.
+
+    Built here at the view call site, not inside `build_auth_service()`
+    itself (Agent A's factory — deliberately left unchanged this stage;
+    see that function's own docstring: "wiring `AuthService`'s own new
+    keyword parameters into `LoginView`/`RegisterView` ... is Agent B's
+    job"). `build_lockout_policy()` is called fresh here — same
+    `DjangoLockoutStore`-backed table `core.security.auth.stores.
+    build_account_service()`'s own `lockout=build_lockout_policy()` call
+    reads/writes (Django's async ORM has no per-request session object to
+    share the way `backend/fastapi`'s `AsyncSession` does — see
+    `build_lockout_policy`'s own docstring — so "the same policy" here
+    means "the same underlying table", which is what actually matters:
+    a lockout `LoginView` records is visible to, and can be lifted by, a
+    later `AccountService.reset_password` call built from a completely
+    separate `build_lockout_policy()` invocation).
+
+    `RegisterView` deliberately does NOT use this — `AuthService.register`
+    never consults `lockout`/`require_verification`/`events` at all (see
+    `_core.AuthService.register`'s own docstring), so the plain, unwired
+    `build_auth_service()` remains the right (and simpler) choice there."""
+    return AuthService(
+        users=DjangoUserStore(),
+        refresh_tokens=DjangoRefreshTokenStore(),
+        passwords=get_password_service(),
+        tokens=get_token_service(),
+        now=utc_now,
+        lockout=build_lockout_policy(),
+        require_verification=settings.AUTH_REQUIRE_EMAIL_VERIFICATION,
+        events=AuditAuthEventSink(),
+    )
 
 # Stage 4 Step 4 (#27): every `operation_id`/`tags` value below is set to
 # the EXACT string `packages/api-client/openapi.json` (the frozen FastAPI
@@ -295,11 +346,22 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
-    """`POST /auth/login` (Stage 5b, #44) — real handler. Delegates to
-    `AuthService.login` — raises `InvalidCredentials` (-> 401
-    `unauthenticated`) identically for an unknown email or a wrong
-    password (see that exception's own docstring on the deliberate
-    user-enumeration defense), uncaught here."""
+    """`POST /auth/login` (Stage 5b, #44; verification + lockout + audit
+    gate Stage 5c, #45) — real handler. Delegates to `AuthService.login`
+    — raises `InvalidCredentials` (-> 401 `unauthenticated`) identically
+    for an unknown email, a wrong password, an account locked out from
+    too many recent failures, AND (as of Stage 5c) an account whose email
+    isn't verified yet — all four are wire-BYTE-IDENTICAL, uncaught here
+    (see that exception's own docstring on the deliberate
+    user-enumeration defense, and `_core.AuthService.login`'s own
+    docstring for the full 6-step state machine this now runs through
+    `_build_login_auth_service()`'s wiring).
+
+    Stage 5c: `auth_service` is now built via `_build_login_auth_service()`
+    (this module, above) instead of the plain `build_auth_service()` every
+    other `/auth/*` view still uses — the SAME `lockout`/
+    `require_verification`/`events` wiring `backend/fastapi`'s
+    `app/api/deps.py:get_auth_service` applies to its own `AuthService`."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -313,7 +375,7 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        auth_service = build_auth_service()
+        auth_service = _build_login_auth_service()
         pair = async_to_sync(auth_service.login)(
             serializer.validated_data["email"], serializer.validated_data["password"]
         )
