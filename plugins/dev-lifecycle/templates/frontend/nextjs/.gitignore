@@ -1,0 +1,6 @@
+# Next-specific build artifacts not covered by the monorepo root .gitignore
+# (which only knows about dist/build/.turbo, not Next's own .next/ output or
+# its generated ambient-types file).
+.next/
+next-env.d.ts
+node_modules/
