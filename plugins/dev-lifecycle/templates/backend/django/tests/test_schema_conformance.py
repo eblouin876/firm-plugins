@@ -306,6 +306,37 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Stage 5a (#41) -> Stage 5b (#44): pending Django auth parity
+# ---------------------------------------------------------------------------
+# backend/fastapi's Stage 5a implemented real auth (register/login/refresh/
+# logout/me against the vendored auth component) and extended the frozen
+# contract (packages/api-client/openapi.json) with two operations this
+# Django block does not implement AT ALL yet: `POST /auth/register` (never
+# existed on this track) and `POST /auth/logout` (ditto). Implementing
+# them -- and giving `POST /auth/login`, `POST /auth/refresh`, `GET
+# /auth/me` their own real behavior, currently still 501 stubs on this
+# track (`core/views.py`'s `LoginView`/`RefreshView`/`MeView`) -- is
+# explicitly Stage 5b's job (#44), NOT this surgical edit's.
+#
+# `login`/`refresh`/`me` are deliberately NOT listed below: verified by
+# hand (comparing this test's own `_wire_surface()` output for those three
+# ops between `_django_schema()` and `_frozen_contract_schema()`) that
+# their SCHEMA shape -- request body, documented response statuses, each
+# response body -- already matches the frozen contract exactly, even
+# though the runtime behavior behind them is still a stub; this test only
+# proves schema/wire-shape identity, never runtime behavior, so those
+# three need no exclusion to pass. Only genuinely-ABSENT operations
+# (`register`, `logout` — present in the frozen contract's `paths`, absent
+# from Django's entirely) need to be excluded from the key-set equality
+# check below, or that check fails on set membership alone before ever
+# reaching a per-op shape comparison.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = {
+    ("/auth/register", "post"),
+    ("/auth/logout", "post"),
+}
+
+
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
     """THE conformance proof. Fails loudly (with a readable diff, not just
     `assert False`) on the first genuine divergence found -- see this
@@ -320,7 +351,14 @@ def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
     frozen_surface = _wire_surface(_frozen_contract_schema())
 
     django_keys = set(django_surface)
-    frozen_keys = set(frozen_surface)
+    # `_PENDING_PARITY_OPS` (Stage 5a -> Stage 5b, #44): operations the
+    # frozen contract documents that this Django block does not implement
+    # at all yet -- excluded here so the key-set equality check below
+    # doesn't fail on their mere ABSENCE; genuinely NEW divergences (any
+    # other key-set mismatch) still fail loudly. See that constant's own
+    # module-level comment for exactly which ops and why.
+    frozen_keys_all = set(frozen_surface)
+    frozen_keys = frozen_keys_all - _PENDING_PARITY_OPS
     assert django_keys == frozen_keys, (
         f"documented (path, method) operations differ:\n"
         f"  only in Django's schema: {sorted(django_keys - frozen_keys)}\n"
@@ -330,6 +368,17 @@ def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
     mismatches = []
     known_divergences_hit: set[tuple[tuple[str, str], str]] = set()
     for key in sorted(django_keys):
+        if key in _PENDING_PARITY_OPS:
+            # Defensive/explicit, not currently reachable: every op listed
+            # in `_PENDING_PARITY_OPS` today is ABSENT from `django_keys`
+            # entirely (see that constant's own comment), so this branch
+            # never actually fires yet -- kept so a future op that lands
+            # PARTIALLY (present in Django, wrong shape, still pending
+            # full parity) is also skipped here rather than failing this
+            # gate, per instruction: pending ops are excluded from the
+            # per-op comparison loop too, not just the key-set check above.
+            continue
+
         django_op = django_surface[key]
         frozen_op = frozen_surface[key]
 
@@ -379,6 +428,29 @@ def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
         f"divergence appears fixed; remove these stale entries: {stale}"
     )
 
+    # Stale-guard for `_PENDING_PARITY_OPS` (Stage 5a -> Stage 5b, #44) --
+    # mirrors `_KNOWN_DIVERGENCES`'s own stale-guard immediately above, two
+    # ways an entry can go stale instead of one:
+    #
+    # 1. It no longer exists in the frozen contract at all (the operation
+    #    was renamed/removed upstream) -- the exclusion is masking nothing;
+    #    DELETE the entry.
+    # 2. It's now IMPLEMENTED in Django (`#44` landed it) -- leaving it
+    #    listed would keep excluding it from the real comparison above
+    #    forever, silently masking a future regression on that exact op;
+    #    REMOVE the entry so it rejoins the strict, real comparison.
+    missing_from_frozen = _PENDING_PARITY_OPS - frozen_keys_all
+    assert not missing_from_frozen, (
+        f"_PENDING_PARITY_OPS entries no longer exist in the frozen contract -- "
+        f"remove these stale entries: {missing_from_frozen}"
+    )
+    already_implemented_in_django = _PENDING_PARITY_OPS & django_keys
+    assert not already_implemented_in_django, (
+        f"_PENDING_PARITY_OPS entries are already present in Django's own schema -- "
+        f"Stage 5b (#44) landed some parity; remove these entries now that they're "
+        f"covered by the real, strict comparison above: {already_implemented_in_django}"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Best-effort parity report (operationId + component names) -- documented
@@ -417,6 +489,14 @@ def test_operation_id_and_component_name_parity_report(capsys: pytest.CaptureFix
         key: (django_ids.get(key), frozen_ids.get(key))
         for key in sorted(set(django_ids) | set(frozen_ids))
         if django_ids.get(key) != frozen_ids.get(key)
+        # Stage 5a -> Stage 5b (#44): `_PENDING_PARITY_OPS` ops have no
+        # Django operationId at all (the view doesn't exist yet -- same
+        # root cause as the main wire-surface test's own exclusion above,
+        # not a new/independent naming divergence) -- excluded here for
+        # the identical reason, so this report/gate stays meaningful for
+        # every OTHER operationId instead of permanently red on a gap
+        # that's already tracked and stale-guarded above.
+        and key not in _PENDING_PARITY_OPS
     }
 
     django_components = set(django_schema.get("components", {}).get("schemas", {}))
