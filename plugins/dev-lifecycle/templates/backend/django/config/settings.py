@@ -333,11 +333,21 @@ else:
 # behind exactly one trusted edge proxy (e.g. a single ALB) sets this to 1,
 # per core/security/rate_limiting/_core.py's client_ip_key docstring; never
 # guessed, never higher than the real proxy count.
+#
+# `RATE_LIMIT_MAX_KEYS` (Stage 4 review fix, #27) bounds the in-process
+# InMemoryBucketStore's key cardinality (this app's own addition -- see
+# core/security/rate_limiting/django.py's module DRIFT note); default
+# 50_000 buckets, a generous cap for a per-client-IP key space that still
+# guards against unbounded memory growth under a high-cardinality-client
+# burst. `/health` and `/readyz` are exempt from rate limiting entirely
+# (same module, `_DEFAULT_EXEMPT_PATHS`) so a readiness/liveness probe can
+# never be 429'd by ordinary traffic sharing the same bucket space.
 # ---------------------------------------------------------------------------
 
 RATE_LIMIT_CAPACITY = int(os.environ.get("RATE_LIMIT_CAPACITY", "60"))
 RATE_LIMIT_REFILL_PER_SECOND = float(os.environ.get("RATE_LIMIT_REFILL_PER_SECOND", "1.0"))
 RATE_LIMIT_TRUSTED_HOPS = int(os.environ.get("RATE_LIMIT_TRUSTED_HOPS", "0"))
+RATE_LIMIT_MAX_KEYS = int(os.environ.get("RATE_LIMIT_MAX_KEYS", "50000"))
 
 
 # ---------------------------------------------------------------------------

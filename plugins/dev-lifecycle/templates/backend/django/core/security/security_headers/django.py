@@ -4,9 +4,11 @@
 # DRIFT: `import _core` (bare sibling import) rewritten to `from . import _core`
 # (package-relative) for in-app packaging — see backend/fastapi's
 # app/core/db/__init__.py precedent and this block's README.md "Vendored
-# components" invariant. The rest of this file is unchanged: every other
-# reference stays `_core.<name>`, so this is a one-line, surgical drift, not
-# a rewrite of the module's body.
+# components" invariant. Every other reference stays `_core.<name>`, so this
+# is a surgical drift, not a rewrite of the module's body. The docstring's
+# "copy this whole directory" line below also dropped `fastapi.py` from its
+# file list (this block never vendors the FastAPI adapter) -- declared here
+# rather than silently edited, so the freshness audit doesn't misflag it.
 
 """Django wiring for the security-headers component: a MIDDLEWARE class that
 sets the header set `_core.SecurityHeadersPolicy` builds on every outbound
@@ -14,9 +16,10 @@ response, taking the final word over any overlapping header Django's own
 `django.middleware.security.SecurityMiddleware` may already have set. Canon:
 references/security/secure-baseline.md ("Security headers & CSP").
 
-Drop-in: copy this whole directory (this file, `_core.py`) into
-app/core/security/security_headers/ and keep them together. This file
-imports its core logic with a bare `import _core`, matching `fastapi.py` —
+Drop-in: copy this whole directory (this file, `_core.py`, `fastapi.py`)
+into app/core/security/security_headers/ and keep them together. This file
+imports its core logic with a bare `import _core`, matching `fastapi.py`
+(this app doesn't vendor `fastapi.py` itself -- see the DRIFT note above) —
 see that file's docstring for why a bare (not relative) import is correct
 here.
 

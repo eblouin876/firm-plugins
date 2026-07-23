@@ -6,15 +6,23 @@ each vendored component's own tests/ already cover in
 templates/components/security/*/tests/.
 
 Uses `/health` (no auth, no DB write) as the probe route throughout, except
-where a distinct route is needed (JSONRenderer-only uses `/items`, the one
-route with a browsable-API-relevant list action).
+where a distinct route is needed: JSONRenderer-only uses `/items` (the one
+route with a browsable-API-relevant list action), and the rate-limiting
+tests ALSO use `/items` instead of `/health` -- Stage 4 review fix, #27:
+`/health`/`/readyz` are now exempt from rate limiting entirely (`core/
+security/rate_limiting/django.py`'s `_DEFAULT_EXEMPT_PATHS` -- a readiness
+probe must never be 429'd), so `/health` can no longer be used to prove
+rate-limiting behavior; `/items` (not exempt) is the probe for those two
+tests instead.
 
-Rate-limiting tests reset the shared module-level `_default_store`
-(`core.security.rate_limiting.django._default_store`) before running, since
-it is a process-wide singleton (see that module's own docstring) that would
-otherwise carry state across tests sharing the same test-client REMOTE_ADDR
-('127.0.0.1' by default) — each test constructs a fresh `APIClient()` AFTER
-overriding `RATE_LIMIT_*` settings, since `RateLimitMiddleware` reads them at
+The shared module-level `_default_store` singleton
+(`core.security.rate_limiting.django._default_store`) is reset before every
+test in this suite by the autouse `_reset_rate_limit_store` fixture
+(`tests/conftest.py`) — see that fixture's own docstring for why (a
+process-wide bucket keyed on the test client's constant REMOTE_ADDR would
+otherwise leak state, and 429s, across unrelated tests). The rate-limiting
+tests below still construct a fresh `APIClient()` AFTER overriding
+`RATE_LIMIT_*` settings, since `RateLimitMiddleware` reads them at
 `__init__` time (not per-request — Django instantiates a MIDDLEWARE entry
 with only `get_response`, no way to pass per-request kwargs) and each new
 `APIClient()`/`Client()` rebuilds its own middleware chain from current
@@ -27,8 +35,6 @@ import re
 
 import pytest
 from rest_framework.test import APIClient
-
-import core.security.rate_limiting.django as rate_limiting_django
 
 pytestmark = pytest.mark.django_db
 
@@ -134,14 +140,13 @@ def test_cors_denies_every_origin_when_unconfigured(api_client: APIClient, setti
 
 
 def test_rate_limit_returns_429_with_retry_after_once_burst_exhausted(settings) -> None:
-    rate_limiting_django._default_store = None  # fresh per-process singleton for this test
     settings.RATE_LIMIT_CAPACITY = 2
     settings.RATE_LIMIT_REFILL_PER_SECOND = 0.0001  # effectively no refill within this test's runtime
     client = APIClient()  # constructed AFTER the settings override, see module docstring
 
-    first = client.get("/health")
-    second = client.get("/health")
-    third = client.get("/health")
+    first = client.get("/items")
+    second = client.get("/items")
+    third = client.get("/items")
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -151,15 +156,35 @@ def test_rate_limit_returns_429_with_retry_after_once_burst_exhausted(settings) 
 
 
 def test_rate_limit_does_not_deny_a_fresh_capacity_budget(settings) -> None:
-    rate_limiting_django._default_store = None
     settings.RATE_LIMIT_CAPACITY = 60
     settings.RATE_LIMIT_REFILL_PER_SECOND = 1.0
     client = APIClient()
 
-    response = client.get("/health")
+    response = client.get("/items")
 
     assert response.status_code == 200
     assert "Retry-After" not in response.headers
+
+
+def test_health_and_readyz_are_never_rate_limited_even_under_burst(settings) -> None:
+    """Stage 4 review fix (#27): `/health`/`/readyz` are exempt from rate
+    limiting (`core/security/rate_limiting/django.py`'s `_DEFAULT_EXEMPT_
+    PATHS`) so a load balancer's readiness/liveness probe can never be
+    429'd into a false-unhealthy signal. Proven here by setting a
+    capacity of 1 (the smallest burst that would deny a second same-bucket
+    request within a second of the first) and hammering both exempt routes
+    well past it -- every response must still be 200."""
+    settings.RATE_LIMIT_CAPACITY = 1
+    settings.RATE_LIMIT_REFILL_PER_SECOND = 0.0001  # effectively no refill within this test's runtime
+    client = APIClient()
+
+    for _ in range(5):
+        health_response = client.get("/health")
+        readyz_response = client.get("/readyz")
+        assert health_response.status_code == 200
+        assert readyz_response.status_code == 200
+        assert "Retry-After" not in health_response.headers
+        assert "Retry-After" not in readyz_response.headers
 
 
 # ---------------------------------------------------------------------------

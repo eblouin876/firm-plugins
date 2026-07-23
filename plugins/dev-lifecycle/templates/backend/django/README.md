@@ -302,6 +302,21 @@ client never triggers):
   surface; these framework-negotiation edges are honestly out of scope for
   byte-identical status matching, though both sides still return a real,
   enveloped `ErrorEnvelope` (never a bare 500) for every one of them.
+- **429 (rate limit exceeded) is the one non-enveloped error shape in this
+  block** — `core/security/rate_limiting/django.py`'s `RateLimitMiddleware`
+  returns a plain `{"detail": "rate limit exceeded"}` body (never
+  `ErrorEnvelope`), same as every other vendored security-composition
+  component that short-circuits outside DRF's own exception-handling path
+  (it runs as MIDDLEWARE, before `EXCEPTION_HANDLER` ever sees the
+  request). Cross-track consistent, not a Django-only gap:
+  `backend/fastapi`'s equivalent `RateLimitMiddleware`
+  (`app/core/security/rate_limiting/fastapi.py`) returns the identical
+  `{"detail": ...}` shape for the same reason — a rate-limit denial is
+  deliberately NOT wrapped in `ErrorCode`/`ErrorEnvelope` on either track,
+  since `ErrorCode` (a locked, versioned enum) has no rate-limit member and
+  adding one is exactly the kind of contract change the vendored
+  `core/contract/errors.py`'s own docstring says needs the same
+  coordination as any other wire-shape edit.
 - **The 422 `details[]` array's exact content is NOT byte-identical**
   between the two tracks, even though the envelope's outer shape (`code`,
   `status`, `message`) is. `field` differs (DRF's `ValidationError.detail`
@@ -415,6 +430,32 @@ documented multi-worker/multi-replica limitation
 `templates/components/security/rate-limiting/README.md` describes; a
 Redis-backed store is Stage 11 work on both tracks.
 
+**`/health` and `/readyz` are exempt from rate limiting** (Stage 4 review
+fix, #27 — `core/security/rate_limiting/django.py`'s `_DEFAULT_EXEMPT_
+PATHS`, proven by `tests/test_security_composition.py`'s
+`test_health_and_readyz_are_never_rate_limited_even_under_burst`). A
+readiness/liveness probe sitting behind an edge proxy at
+`RATE_LIMIT_TRUSTED_HOPS=0` polls far more often than a general per-client
+ceiling allows for ordinary traffic — without this exemption, a burst of
+probe traffic (or probe traffic sharing a bucket with real traffic from the
+same untrusted-proxy IP) could 429 the readiness check itself, reading as
+an outage at the load balancer and pulling a healthy instance out of
+rotation. This is a per-app policy decision documented as DRIFT in that
+file, not a change to the canonical `templates/components/security/
+rate-limiting/` component. **`backend/fastapi`'s `RateLimitMiddleware` has
+the same whole-app-including-`/health` gap and is NOT fixed here** — flagged
+as a cross-track follow-up in this PR's decision log, since fixing it there
+is out of this step's scope (this block only touches `backend/django`).
+
+**`RATE_LIMIT_MAX_KEYS`** (default `50000`, env-configurable, Stage 4
+review fix, #27) bounds the in-process `InMemoryBucketStore`'s key
+cardinality by threading a `max_keys` value into its construction —
+`_core.InMemoryBucketStore` already supports this bound (its own
+docstring); this block just wires a setting to it instead of leaving it at
+the component's own unbounded (`None`) default, so a high-cardinality
+client-IP key space (many distinct clients over the process lifetime) has
+a hard per-process memory ceiling on top of the existing idle-TTL eviction.
+
 **`webhook_signature`/`idempotency` are referenced, not wired** — see
 above; the Stage 11 payments recipe adds them when there's a real webhook
 endpoint.
@@ -489,23 +530,37 @@ unchanged and not repeated here.
   `Origin` (no `Access-Control-Allow-Origin`), allows a configured one, and
   denies every origin when `CORS_ALLOWED_ORIGINS` is unset (deny-by-default);
   rate limiting returns `429` with a `Retry-After` header once a small
-  test-configured burst (`RATE_LIMIT_CAPACITY=2`) is exhausted, and a fresh
-  budget is not denied; `X-Request-ID` is bound and reflected — minted as a
+  test-configured burst (`RATE_LIMIT_CAPACITY=2`) is exhausted against
+  `/items`, and a fresh budget is not denied; **`/health`/`/readyz` are
+  never rate-limited even under a `RATE_LIMIT_CAPACITY=1` burst (Stage 4
+  review fix, #27)**; `X-Request-ID` is bound and reflected — minted as a
   `uuid4` when absent, reflected verbatim when the inbound header is
   shape-valid, and replaced (not reflected) when it's malformed (embedded
   CR/LF) or oversize (>128 chars); `/items` is JSON-only (no browsable-API
-  HTML in the response body). Rate-limiting tests reset the shared
-  module-level `InMemoryBucketStore` singleton
-  (`core.security.rate_limiting.django._default_store`) before running and
-  construct a fresh `APIClient()` after overriding `RATE_LIMIT_*` settings
-  — see the test file's own module docstring for why (the middleware reads
-  settings at `__init__`, not per-request, and each `Client()`/`APIClient()`
-  rebuilds its own middleware chain from current settings at construction).
+  HTML in the response body). **Test isolation (Stage 4 review fix, #27):**
+  the shared module-level `InMemoryBucketStore` singleton
+  (`core.security.rate_limiting.django._default_store`) is now reset before
+  EVERY test in the suite by an autouse fixture
+  (`tests/conftest.py`'s `_reset_rate_limit_store`), not just the
+  rate-limiting tests by hand — so the shared bucket can't leak a 429 into
+  an unrelated test as the suite grows. Rate-limiting tests still construct
+  a fresh `APIClient()` after overriding `RATE_LIMIT_*` settings — see the
+  test file's own module docstring for why (the middleware reads settings
+  at `__init__`, not per-request, and each `Client()`/`APIClient()` rebuilds
+  its own middleware chain from current settings at construction).
 
 Verification for this step: `manage.py check` (hermetic-sqlite), `manage.py
 migrate` clean, the full pytest suite green (39 tests — the 26 above plus 13
 new in `test_security_composition.py`), and `scripts/validate_plugin.py` 0
-warnings.
+warnings. **Review fix round (this state, #27):** one new test
+(`test_health_and_readyz_are_never_rate_limited_even_under_burst`) brings
+the suite to 40, still green; order-independence verified directly by
+running the full test-module list both forwards and reversed (e.g.
+`test_security_composition.py`, then `test_items.py`, then
+`test_conformance_pagination.py`, and the same three files in the opposite
+order) — both orderings pass, confirming the autouse
+`_reset_rate_limit_store` fixture (`tests/conftest.py`) actually decouples
+the rate-limiting tests' outcome from whatever ran before them.
 
 ## Judgment calls
 

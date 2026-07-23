@@ -3,7 +3,10 @@
 # for the composition contract this file is part of.
 # DRIFT: `import _core` (bare sibling import) rewritten to `from . import _core`
 # (package-relative) for in-app packaging — see this block's README.md
-# "Vendored components" invariant. The rest of this file is unchanged.
+# "Vendored components" invariant. The docstring's "copy this whole
+# directory" line also dropped `fastapi.py` from its file list (this block
+# never vendors the FastAPI adapter) -- declared here rather than silently
+# edited, so the freshness audit doesn't misflag it. Otherwise unchanged.
 
 """Django wiring for the cors-lockdown component: a config EMITTER, not a
 middleware. Django's own CORS convention is the third-party
@@ -12,9 +15,10 @@ module's job is turning `_core.CORSPolicy` into the settings dict that
 package reads, not reimplementing what it already does well. Canon:
 references/security/secure-baseline.md ("CORS lockdown").
 
-Drop-in: copy this whole directory (this file, `_core.py`) into
-app/core/security/cors_lockdown/ and keep them together. This file
-imports its core logic with a bare `import _core`, matching `fastapi.py`.
+Drop-in: copy this whole directory (this file, `_core.py`, `fastapi.py`)
+into app/core/security/cors_lockdown/ and keep them together. This file
+imports its core logic with a bare `import _core`, matching `fastapi.py`
+(this app doesn't vendor `fastapi.py` itself -- see the DRIFT note above).
 
 Django only (`django`) for the settings-merge helper below -- `corsheaders`
 itself is declared as a NEEDS, not imported here: this module never imports
