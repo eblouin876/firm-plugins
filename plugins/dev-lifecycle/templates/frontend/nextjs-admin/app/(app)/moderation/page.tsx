@@ -263,8 +263,10 @@ export default function ModerationPage(): ReactNode {
                     </div>
                   ) : (
                     <div className="text-xs text-muted">
-                      <span className="capitalize">{flag.status}</span>
-                      {flag.resolved_at && <> · {formatDate(flag.resolved_at)}</>}
+                      {/* The Status column already carries the raw `open`/`resolved`/
+                          `dismissed` value via its badge — this reads as a sentence
+                          rather than repeating that word verbatim. */}
+                      {flag.resolved_at && <>{formatDate(flag.resolved_at)}</>}
                       {flag.resolved_by_id && (
                         <>
                           {" "}

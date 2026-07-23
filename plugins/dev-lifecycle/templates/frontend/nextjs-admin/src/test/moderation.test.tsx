@@ -172,7 +172,11 @@ describe("Moderation queue page", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() => {
       const refreshedRow = screen.getByText("Harassing comment.").closest("tr") as HTMLElement;
+      // The Status column's badge — the row's Actions column no longer
+      // offers Resolve/Dismiss once resolved, so this is the one place
+      // "resolved" appears in the row.
       expect(within(refreshedRow).getByText("resolved")).toBeInTheDocument();
+      expect(within(refreshedRow).queryByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
     });
   });
 
