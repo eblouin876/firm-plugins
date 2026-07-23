@@ -9,11 +9,13 @@ Stage 5c (#45) additionally adds this app's `EmailSender` (`get_email_sender`
 SMTP is configured) and `AuthEventSink` (`AuditAuthEventSink`, forwarding to
 the vendored audit-logging component) implementations, plus
 `build_lockout_policy`/`build_account_service` factories for the new
-`AccountService` (email verification + password reset). These are NEW
-factories alongside the existing `get_auth_service` (in `app/api/deps.py`)
--- this stage does not modify that function or wire `AccountService`/
-lockout/verification into login itself; that is the next stage's endpoint
-work.
+`AccountService` (email verification + password reset). `app/api/deps.py`'s
+`get_auth_service` now also wires `lockout=build_lockout_policy(...)`,
+`require_verification=settings.auth_require_email_verification`, and
+`events=AuditAuthEventSink()` into the `AuthService` it builds, and a new
+`get_account_service` dependency (same module) builds an `AccountService`
+via `build_account_service` for the `/auth/verify-email`, `/auth/request-
+password-reset`, `/auth/reset-password` routes (`app/api/routers/auth.py`).
 
 **NOT a vendored file** — it lives alongside `_core.py`/`fastapi.py`/
 `__init__.py` in this directory because that is where this app's auth
@@ -696,7 +698,12 @@ def build_lockout_policy(settings: Settings, session: AsyncSession) -> LockoutPo
     )
 
 
-def build_account_service(settings: Settings, session: AsyncSession) -> AccountService:
+def build_account_service(
+    settings: Settings,
+    session: AsyncSession,
+    *,
+    email: EmailSender | None = None,
+) -> AccountService:
     """Builds a per-request `AccountService`, the SAME composition shape
     `app/api/deps.py:get_auth_service` uses for `AuthService` — a fresh
     `SqlAlchemyUserStore`/`SqlAlchemyRefreshTokenStore`/
@@ -709,15 +716,26 @@ def build_account_service(settings: Settings, session: AsyncSession) -> AccountS
     `auth_verify_ttl_seconds`/`auth_reset_ttl_seconds` for the link-building
     and TTL configuration.
 
-    Intentionally analogous to (but NOT calling, and NOT called from)
-    `app/api/deps.py:get_auth_service` — this stage adds the factory, the
-    next stage adds the FastAPI dependency (`get_account_service`, in
-    `app/api/deps.py`) and the `/auth/verify-email`, `/auth/request-
-    password-reset`, `/auth/reset-password` routes that call it."""
+    `email` (Stage 5c #45 endpoint work, keyword-only): the `EmailSender`
+    to use — `None` (the default) resolves it the same way this function
+    always has (`get_email_sender(settings)`). A caller that already has
+    one resolved from elsewhere passes it directly instead — this is the
+    seam `app/api/deps.py:get_account_service` uses to hand this function
+    the SAME `EmailSender` a FastAPI dependency (overridable via
+    `app.dependency_overrides` in tests, see `tests/test_auth.py`'s
+    `capturing_email_sender` fixture) resolved, rather than this function
+    re-resolving its own independent instance that a test override would
+    never reach.
+
+    Intentionally analogous to `app/api/deps.py:get_auth_service` — this
+    factory is called from `get_account_service`, the FastAPI dependency
+    the `/auth/verify-email`, `/auth/request-password-reset`, `/auth/
+    reset-password` routes (and `register`'s post-registration
+    verification-email side effect) depend on."""
     return AccountService(
         users=SqlAlchemyUserStore(session),
         tokens=SingleUseTokenService(SqlAlchemySingleUseTokenStore(session), now=utc_now),
-        email=get_email_sender(settings),
+        email=email if email is not None else get_email_sender(settings),
         passwords=get_password_service(),
         refresh_tokens=SqlAlchemyRefreshTokenStore(session),
         now=utc_now,
