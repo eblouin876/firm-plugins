@@ -16,11 +16,18 @@ real Postgres without a local Python install. Hermetic checks needing no
 real database server use `DJANGO_SETTINGS_MODULE=config.settings_test`
 (Django's stdlib sqlite3 backend). `GET /health` is the liveness probe (no
 DB, never rate-limited); `GET /readyz` is readiness (`SELECT 1`, also
-never rate-limited). Full CRUD lives at `/items`; `/auth/login`,
-`/auth/refresh`, `/auth/me` are Stage-5 stubs (501) with their schemas and
-the `HTTPBearer` scheme already locked into `/api/schema`. `manage.py
-spectacular --format openapi-json --file <path>` exports that schema
-without a live database. Optional config, all with secure defaults:
+never rate-limited). Full CRUD lives at `/items`. `/auth/register`,
+`/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/me` (Stage 5b, #44)
+are real handlers against the vendored auth component
+(`core/security/auth/`, Argon2id password hashing + HS256 JWT access/
+refresh pairs with rotation-with-reuse-detection) — register 201 / login
+200 / refresh 200 (rotates; reusing an already-rotated token 401s AND
+revokes the whole token family) / logout 204 (idempotent) / me 200, with
+the `HTTPBearer` scheme locked into `/api/schema`. Needs `JWT_SIGNING_KEY`
+set (see "Secrets" below) — unset, every `/auth/*` route fails closed to
+500, never signs a token with an empty key. `manage.py spectacular
+--format openapi-json --file <path>` exports that schema without a live
+database. Optional config, all with secure defaults:
 `RATE_LIMIT_CAPACITY` (60) / `RATE_LIMIT_REFILL_PER_SECOND` (1.0) /
 `RATE_LIMIT_TRUSTED_HOPS` (0) / `RATE_LIMIT_MAX_KEYS` (50000),
 `CORS_ALLOWED_ORIGINS` (`[]` — CORS is deny-by-default until set).
@@ -33,18 +40,20 @@ client regeneration — not a promise that `backend/fastapi`'s exact
 committed generated client is a drop-in replacement once a project swaps
 tracks. Full rationale: the block README's "Conformance" section.
 
-**Stage 4 Step 4 (#27) delivered the PROOF**: `tests/
-test_schema_conformance.py` loads both this block's drf-spectacular-
-generated schema and the frozen `packages/api-client/openapi.json`,
-normalizes each documented operation's request/response JSON Schema, and
-asserts the wire surfaces are EQUAL — 14/14 documented operations match,
-with exactly one further, individually-documented exception (a discovered
-nullability gap in the frozen contract's own `ItemUpdate.name`/
-`update_item`, not mirrored into this block — see that test file's own
-`_KNOWN_DIVERGENCES` and the block README's "Step 4" section). OperationIds
-match the frozen contract exactly (set by hand per view); component names
-match 11 of 14 (the rest are drf-spectacular's own naming conventions for
-enums/pagination-envelopes/PATCH variants — see the README's parity
+**Stage 4 Step 4 (#27) delivered the PROOF; Stage 5b (#44) extended it to
+full `/auth/*` parity**: `tests/test_schema_conformance.py` loads both
+this block's drf-spectacular-generated schema and the frozen `packages/
+api-client/openapi.json`, normalizes each documented operation's request/
+response JSON Schema, and asserts the wire surfaces are EQUAL — 19/19
+documented operations match (the original 14 plus all five `/auth/*`
+operations, `_PENDING_PARITY_OPS` now empty), with exactly one further,
+individually-documented exception (a discovered nullability gap in the
+frozen contract's own `ItemUpdate.name`/`update_item`, not mirrored into
+this block — see that test file's own `_KNOWN_DIVERGENCES` and the block
+README's "Step 4" section) — no auth-specific divergence was needed.
+OperationIds match the frozen contract exactly (set by hand per view);
+component names match 12 of 15 (the rest are drf-spectacular's own naming
+conventions for enums/pagination-envelopes/PATCH variants — see the README's parity
 table).
 
 ## Secrets
@@ -52,7 +61,7 @@ table).
 | `DATABASE_URL` | backend/django | Required, no default — a `postgres://` connection string parsed via `dj-database-url`. `config/settings_test.py` overrides to hermetic sqlite for checks/tests needing no real server. |
 | `CORS_ALLOWED_ORIGINS` | backend/django | Optional, comma-separated. Empty/unset means NO cross-origin request is ever allowed (deny-by-default) — see `config/settings.py`'s "CORS" section and the block README's "Security composition". Not a secret value itself, but env-driven per this block's composition contract. |
 | `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` / `RATE_LIMIT_MAX_KEYS` | backend/django | Optional — fall back to defaults (60, 1.0, 0, 50000) when unset. `RATE_LIMIT_TRUSTED_HOPS` MUST be set deliberately, per-environment, to the exact number of trusted proxies in front of this app — never guessed (see `core/security/rate_limiting/_core.py`'s `client_ip_key` docstring). `/health`/`/readyz` are exempt from rate limiting entirely regardless of these values (Stage 4 review fix, #27). |
-| `JWT_SIGNING_KEY` | backend/django | Optional (`required=False`, no invented default) — resolved via `core.contract.secret_store.get_secret`, the composition seam for Stage 5's (#28) real authentication. Unconsumed as of this step; never logged. |
+| `JWT_SIGNING_KEY` | backend/django | Optional (`required=False`, no invented default) — resolved via `core.contract.secret_store.get_secret`. Consumed by `core.security.auth.stores.get_token_service()` (Stage 5b, #44): unset/empty fails every `/auth/*` route CLOSED with a 500 `internal_error` (`AuthNotConfiguredError`), never a token signed with an empty key. Never logged. `JWT_ISSUER`/`JWT_ACCESS_TTL_SECONDS`/`JWT_REFRESH_TTL_SECONDS` are the accompanying, non-secret env vars (defaults `"app"`/`900`/`1209600`, matching `backend/fastapi`'s identical fields). |
 
 ## Maintenance
 `core/contract/{errors,pagination,secret_store}.py` are byte-copies (below
