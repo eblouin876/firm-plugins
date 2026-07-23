@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // Used only by the `build` script (see package.json). `typecheck`/`lint`
+  // use tsconfig.json directly so *.test.tsx is still type-checked — it's
+  // just not part of the package's shipped dist/ output. Mirrors
+  // @repo/api-client's tsconfig.build.json.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test/**"]
+}
