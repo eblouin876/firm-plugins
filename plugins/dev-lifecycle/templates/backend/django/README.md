@@ -48,6 +48,7 @@ wire-surface conformance proof" below.
 - Security
   - Security composition (Stage 4 Step 3, #27)
 - Database & migrations
+- Dev run (Docker)
 - Testing
 - Judgment calls
 
@@ -615,6 +616,71 @@ through `Item.objects` (default manager) and the soft-delete scoping
 (`mark_deleted()` + `save()` making a row invisible to `Item.objects` but
 still visible via `Item.all_objects`) were both exercised directly against
 that real database via `manage.py shell`.
+
+**Stage 4 Step 4 (#27) re-verified against real PostgreSQL 16, this time
+end-to-end over HTTP** (not just the ORM directly): `pg_ctlcluster 16 main
+start`, a scratch role/database, `manage.py migrate --no-input` online
+(clean, same schema as the sqlite-hermetic suite implies), then a full
+round-trip through `rest_framework.test.APIClient` against the REAL
+Postgres connection — `POST`/`GET`/`PATCH`/`DELETE /items`, the pagination
+envelope shape, and every documented conformance case (malformed-UUID 404,
+blank-`name` 422, `size=500` 422, `PUT` 405, post-delete 404, soft-delete
+scoping directly via `Item.all_objects` vs. `Item.objects`) — all passed
+against the real database, not sqlite standing in for it. `manage.py
+spectacular --format openapi-json --file <path>` was ALSO re-run under
+`config.settings` (the real-DB settings module, not `config.settings_test`)
+and produced byte-identical output to the hermetic-settings export —
+schema generation never touches the database either way, confirming that
+this step's whole schema-export path is genuinely DB-independent, not
+merely untested against a real one. Cluster stopped and the scratch
+role/database dropped afterward — no DB artifacts, `.venv`, or `uv.lock`
+committed (see this repo's root `.gitignore` plus this block's own, both
+already covering `.venv/`/`*.sqlite3`/`uv.lock`).
+
+## Dev run (Docker)
+
+`Dockerfile` + `docker-compose.yml` (this directory), Stage 4 Step 4 (#27)
+— boot this block for local development, mirroring `backend/fastapi`'s own
+dev-run seam line-for-line (same base image, same uv-via-`COPY --from`
+pattern, same non-root policy, same migrate-then-boot `api` command
+ordering) — see each file's own header comment for the shared rationale.
+Not a production deploy manifest — Stage 9's devops/infrastructure block
+owns that.
+
+`docker-compose.yml` materializes to `apps/api/docker-compose.yml` — the
+SAME slot `backend/fastapi/docker-compose.yml` materializes into (this
+block is an ALTERNATIVE to that one in that slot, never both at once, see
+"Composition contract" above). The monorepo justfile's `dev` recipe
+(`templates/monorepo/justfile`) needed NO changes for this — confirmed by
+direct inspection: that recipe only checks whether `apps/api/
+docker-compose.yml` exists and, if so, runs `docker compose up --build`
+there; it has no FastAPI-specific assumption baked in (the same generic
+check already worked for that block, and works identically for this one).
+
+`gunicorn config.wsgi:application --reload`, not `uvicorn` — this block's
+WSGI entrypoint is the primary one (`pyproject.toml`'s own comment); a
+project that later adds real async/websocket views swaps the Dockerfile's
+CMD to `uvicorn config.asgi:application --reload` instead (`config/
+asgi.py` already exists for that seam). `--reload` + bind-mounted
+`./core`/`./config` (not the FastAPI block's `./app`) mirror that block's
+own live-edit dev posture exactly.
+
+**Verification performed**: `docker compose config` (this directory)
+renders a clean, fully-resolved compose manifest — confirmed directly (see
+this step's PR description for the transcript). **NOT performed: an actual
+image build/boot** — this sandbox has no reachable Docker daemon (`docker
+build`/`docker compose up` both fail immediately with "no such file or
+directory" on `/var/run/docker.sock`, not a proxy-blocked pull), the same
+constraint `backend/fastapi`'s own Step 4 documented (there: registry
+pulls blocked by the sandbox's egress proxy; here: no daemon at all —
+different failure mode, same practical outcome). Assessed by review +
+`docker compose config` instead, matching that block's own precedent for
+this exact gap.
+
+Postgres image pin (`postgres:18-bookworm`) and the uv/Python base image
+pins are cited in `references/compatibility-matrix.md`'s "Containers"
+section for BOTH backend tracks now (Stage 4 Step 4, #27) — no new pin
+values, just the existing FastAPI-block pins now also covering this one.
 
 ## Testing
 
