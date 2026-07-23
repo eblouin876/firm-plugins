@@ -1,11 +1,13 @@
 <!--
 block: backend/django
 needs:
-  - DATABASE_URL (required, postgres:// scheme); SECRET_KEY (required, no default); DEBUG/ALLOWED_HOSTS (optional, secure defaults — see "Composition contract" + docs/fragment.md)
+  - DATABASE_URL (required); SECRET_KEY (required, no default); DEBUG/ALLOWED_HOSTS (optional, secure defaults) — see "Composition contract" + docs/fragment.md
+  - CORS_ALLOWED_ORIGINS / RATE_LIMIT_* / JWT_SIGNING_KEY (all optional, secure defaults) — see "Security composition" + docs/fragment.md
   - port: 8000 (uvicorn/gunicorn default, matching backend/fastapi)
   - Python 3.13.x + uv (no committed uv.lock — see pyproject.toml)
 exposes:
   - the Item model + the DRF contract-emission layer (routes, serializers, ErrorEnvelope exception handler, Page paginator) — see "Conformance"
+  - core/security/ — the vendored security-composition MIDDLEWARE stack — see "Security composition"
   - its co-located doc fragment: docs/fragment.md
 versions-pinned-to: references/compatibility-matrix.md
 last-verified: 2026-07-23
@@ -19,13 +21,17 @@ Postgres via psycopg, built as an **ALTERNATIVE** to `backend/fastapi` in the
 same `apps/api/` materialization slot (a project picks one backend track,
 not both). Lives at `templates/backend/django/` in this repo; scaffolding
 materializes it into a project's `apps/api/`, exactly like the FastAPI block
-does. Stage 4 (#27, epic #22) in two steps: Step 1 shipped the project
+does. Stage 4 (#27, epic #22) in three steps: Step 1 shipped the project
 skeleton, env-driven settings, the `Item` contract-exemplar model + initial
 migration, and the two vendored contract sources (`error-envelope`,
-`pagination`); **Step 2 (this state) is DRF contract-EMISSION** — the
-routes/serializers, the custom `EXCEPTION_HANDLER`, and the pagination
-class that actually render those vendored contracts over HTTP, reproducing
-`backend/fastapi`'s wire shape — see "Conformance" below.
+`pagination`); Step 2 was DRF contract-EMISSION — the routes/serializers,
+the custom `EXCEPTION_HANDLER`, and the pagination class that actually
+render those vendored contracts over HTTP, reproducing `backend/fastapi`'s
+wire shape (see "Conformance" below); **Step 3 (this state) is security
+composition** — vendoring and wiring the six baseline
+`templates/components/security/` catalog components into this track's
+MIDDLEWARE stack, fulfilling the Step 1/2 transport-security-headers
+deferral — see "Security composition" below.
 
 ## Contents
 - Composition contract
@@ -34,6 +40,7 @@ class that actually render those vendored contracts over HTTP, reproducing
 - The Item model
 - Conformance (Step 1 vs. Step 2)
 - Security
+  - Security composition (Stage 4 Step 3, #27)
 - Database & migrations
 - Testing
 - Judgment calls
@@ -136,8 +143,14 @@ core/                    # the Django app (INSTALLED_APPS label: "core")
   contract/                 # vendored contract sources — see "Vendored contract sources"
     errors.py
     pagination.py
-    secret_store.py
-tests/                   # conformance-proof suite — see "Testing"
+    secret_store.py           # ALSO the composition target for Stage 4 Step 3's Secrets seam — see "Security composition"
+  security/                 # Stage 4 Step 3 (#27) — vendored security-composition components, self-contained subpackages
+    security_headers/           # _core.py + django.py — MIDDLEWARE, sets HSTS/nosniff/frame-options/referrer-policy/CSP/Permissions-Policy
+    cors_lockdown/               # _core.py + django.py — settings emitter for django-cors-headers' CorsMiddleware
+    rate_limiting/                 # _core.py + django.py — MIDDLEWARE, token-bucket 429s with Retry-After
+    audit_logging/                   # audit.py (vendored) + middleware.py (NEW glue) — request-id bind + structured JSON audit logging
+    input_validation/                 # validation.py (vendored, unused as of this step) — StrictModel for a future shared/service layer, NOT the DRF request boundary
+tests/                   # conformance-proof + security-composition-proof suite — see "Testing"
 docs/
   fragment.md              # this block's machine-parseable doc fragment (see documentation-standard.md)
 ```
@@ -311,21 +324,100 @@ client never triggers):
 
 ## Security
 
+### Security composition (Stage 4 Step 3, #27)
+
+Four of the six baseline `templates/components/security/` catalog
+components are now vendored under `core/security/` and wired into
+`config/settings.py`'s `MIDDLEWARE`, as self-contained subpackages
+(`_core.py`/`django.py`/`audit.py` as applicable, relative imports, a 4-line
+vendored-from header + `DRIFT:` note where the import style needed
+rewriting) — the same composition pattern `backend/fastapi`'s
+`app/core/security/` uses for the FastAPI track. The other two
+(`secret_store`, `input_validation`) are library code composed at the point
+of use, not middleware — see "Secrets" below and
+`core/security/input_validation/__init__.py`'s docstring respectively.
+`webhook_signature` and `idempotency` (also in the component catalog) are
+**NOT** vendored here at all — payments-shaped concerns with no consumer
+yet; the Stage 11 payments recipe vendors and wires them when there's an
+actual webhook endpoint to protect, mirroring `backend/fastapi`'s own
+"not vendored yet" posture for the same two components.
+
+**MIDDLEWARE order, outermost to innermost (top-to-bottom in
+`config/settings.py`'s `MIDDLEWARE` list):**
+
+1. **`corsheaders.middleware.CorsMiddleware`** — outermost. A genuine
+   divergence from `backend/fastapi`, where CORS sits innermost of its four:
+   `django-cors-headers`' own docs require `CorsMiddleware` to run as early
+   as possible and specifically **before** `CommonMiddleware`, because
+   `CommonMiddleware` can issue a redirect (e.g. `APPEND_SLASH`) that
+   returns a response without ever calling further into the wrapped
+   middleware chain — if `CorsMiddleware` sat inside `CommonMiddleware`,
+   that redirect would never reach `CorsMiddleware`'s own response-phase
+   header injection, silently breaking CORS on exactly the requests that
+   get redirected. Starlette's stack has no equivalent "can synchronously
+   short-circuit before calling downstream" concern baked into an
+   analogous middleware, which is why the FastAPI track's CORS is innermost
+   instead — a genuine Django-vs-Starlette mechanics difference, not an
+   inconsistency between the two tracks.
+2. **`core.security.security_headers.django.SecurityHeadersMiddleware`** —
+   fulfills the Step 1/2 deferral note below. Placed before Django's own
+   `SecurityMiddleware` so it runs LAST in the response phase (Django's
+   `process_response` runs bottom-to-top, the reverse of `MIDDLEWARE`'s
+   order) and gets the final, authoritative word on any overlapping header.
+3. **`core.security.audit_logging.middleware.RequestIDMiddleware`** — NEW
+   glue (not vendored), mirroring `backend/fastapi`'s own audit-bind
+   middleware for this track. Binds a per-request id (inbound
+   `X-Request-ID` if shape-valid, else a fresh `uuid4`) before rate-limiting
+   runs, so every downstream `audit_event()` call — including a future
+   rate-limit-denial audit trail — carries it automatically.
+4. **`core.security.rate_limiting.django.RateLimitMiddleware`** —
+   innermost of the four. Pre-auth (no real authentication exists yet —
+   Stage 5, #28), general per-client-IP ceiling.
+5. Django's own `SecurityMiddleware` / `CommonMiddleware` — innermost of
+   all six; CORS still precedes `CommonMiddleware` per its own hard
+   requirement, security-headers still precedes `SecurityMiddleware` per
+   its own hard requirement, and neither Django middleware has a documented
+   ordering requirement relative to request-id/rate-limiting.
+
+See `config/settings.py`'s own "Security composition" comment block for the
+full mechanics derivation (why Django's list-order semantics and
+Starlette's `add_middleware()`-prepends-then-reverses semantics land the
+same four components in the same relative order despite being opposite
+mechanisms, with CORS as the one documented exception).
+
 **Transport security headers (HSTS, `X-Content-Type-Options: nosniff`,
-SSL-redirect, `Referrer-Policy`) are deferred, deliberately.** Django's own
-`SECURE_HSTS_SECONDS`/`SECURE_CONTENT_TYPE_NOSNIFF`/`SECURE_SSL_REDIRECT`/
-`SECURE_REFERRER_POLICY` settings are left unset in `config/settings.py` on
-purpose — that job belongs to the same `security-headers` component
-backend/fastapi vendors and wires as middleware (Stage 3 Step 3b,
-`app/core/security/security_headers/`), and Step 3 of this stage is where
-this Django track vendors/wires the equivalent. Setting Django's own
-`SECURE_*` values now, ahead of that, would double-stamp the same headers
-from two uncoordinated sources once Step 3 lands. **A production
-materialization of this block MUST wire that component** (or, until it
-exists here, set Django's own `SECURE_*` values itself) — shipping with
-neither leaves every response without HSTS/nosniff/frame-options/
-referrer-policy protection. See `config/settings.py`'s own comment block
-near `REST_FRAMEWORK` for the same note in code.
+`Referrer-Policy`) are now WIRED**, fulfilling the deferral this section
+previously carried: `core.security.security_headers.django.
+SecurityHeadersMiddleware` sets the full header set (HSTS, nosniff,
+frame-options, referrer-policy, CSP, Permissions-Policy) on every response.
+Django's own `SECURE_HSTS_SECONDS`/`SECURE_CONTENT_TYPE_NOSNIFF`/
+`SECURE_REFERRER_POLICY` settings are deliberately left at their off/unset
+values in `config/settings.py` — turning them on too would double-stamp the
+same headers from two uncoordinated sources; the vendored middleware is
+placed before Django's own `SecurityMiddleware` in `MIDDLEWARE` so it wins
+even if a future edit reorders things. `SECURE_SSL_REDIRECT` stays at
+Django's own default (`False`) — an HTTP→HTTPS redirect is a routing/proxy-
+layer concern this header-only component doesn't claim either.
+
+**CORS is deny-by-default.** `CORS_ALLOWED_ORIGINS` (a comma-separated env
+var) composes a `core.security.cors_lockdown.CORSPolicy`, whose constructor
+refuses to build an empty-or-wildcard allowlist — an unconfigured
+environment gets no cross-origin access at all, never an accidental
+allow-all. Never `*` combined with credentials — `CORSPolicy`'s constructor
+makes that configuration impossible to construct in the first place.
+
+**Rate limiting** reads `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND`
+/ `RATE_LIMIT_TRUSTED_HOPS` from env, with the component's own defaults
+(60, 1.0, 0) as the fallback — see `core/security/rate_limiting/_core.py`'s
+`client_ip_key` docstring for what `RATE_LIMIT_TRUSTED_HOPS` actually gates.
+Uses the component's stdlib, per-process `InMemoryBucketStore` — same
+documented multi-worker/multi-replica limitation
+`templates/components/security/rate-limiting/README.md` describes; a
+Redis-backed store is Stage 11 work on both tracks.
+
+**`webhook_signature`/`idempotency` are referenced, not wired** — see
+above; the Stage 11 payments recipe adds them when there's a real webhook
+endpoint.
 
 ## Database & migrations
 
@@ -377,13 +469,43 @@ that real database via `manage.py shell`.
   `test_page_past_the_end_is_200_with_empty_items` cover the rest of the
   now-validated `PageParams` bounds.
 
-Verification for this step + fix round: `manage.py check` (hermetic-sqlite),
+Verification for Step 2 + its fix round: `manage.py check` (hermetic-sqlite),
 `manage.py migrate` clean, the full pytest suite green (26 tests — 17 from
 Step 2 plus 9 added this fix round: 4 in `test_conformance_errors.py`, 5 net
 in `test_conformance_pagination.py`), and `scripts/validate_plugin.py` 0
-warnings — see this step's PR description for the full transcript.
+warnings — see that step's PR description for the full transcript.
 Step 1's own real-PostgreSQL-16 verification (model + migration) is
 unchanged and not repeated here.
+
+- `test_security_composition.py` (Stage 4 Step 3, #27) — the
+  security-composition-proof for the wired MIDDLEWARE stack (see "Security
+  composition" above), all via `APIClient`/`django.test.Client` against real
+  routes, not the vendored components' own unit-level `tests/` (those live
+  in `templates/components/security/*/tests/` and are unchanged by this
+  step): security headers present on a normal `/health` response (nosniff,
+  frame-deny, referrer-policy, CSP, Permissions-Policy) and
+  `Strict-Transport-Security` present only when the request is secure
+  (`secure=True`) and absent otherwise; CORS preflight rejects a disallowed
+  `Origin` (no `Access-Control-Allow-Origin`), allows a configured one, and
+  denies every origin when `CORS_ALLOWED_ORIGINS` is unset (deny-by-default);
+  rate limiting returns `429` with a `Retry-After` header once a small
+  test-configured burst (`RATE_LIMIT_CAPACITY=2`) is exhausted, and a fresh
+  budget is not denied; `X-Request-ID` is bound and reflected — minted as a
+  `uuid4` when absent, reflected verbatim when the inbound header is
+  shape-valid, and replaced (not reflected) when it's malformed (embedded
+  CR/LF) or oversize (>128 chars); `/items` is JSON-only (no browsable-API
+  HTML in the response body). Rate-limiting tests reset the shared
+  module-level `InMemoryBucketStore` singleton
+  (`core.security.rate_limiting.django._default_store`) before running and
+  construct a fresh `APIClient()` after overriding `RATE_LIMIT_*` settings
+  — see the test file's own module docstring for why (the middleware reads
+  settings at `__init__`, not per-request, and each `Client()`/`APIClient()`
+  rebuilds its own middleware chain from current settings at construction).
+
+Verification for this step: `manage.py check` (hermetic-sqlite), `manage.py
+migrate` clean, the full pytest suite green (39 tests — the 26 above plus 13
+new in `test_security_composition.py`), and `scripts/validate_plugin.py` 0
+warnings.
 
 ## Judgment calls
 
@@ -438,3 +560,50 @@ unchanged and not repeated here.
   exist. `all_objects` is that escape hatch, doubling as the "hard-delete
   cleanup job" / "admin view that needs soft-deleted rows" access path
   `ItemQuerySet.with_deleted()` also provides via the scoped manager.
+- **`secret_store`: ONE copy, not two — left in `core/contract/`, not moved
+  or re-vendored under `core/security/`.** Step 1 already vendored
+  `secrets-loading/secret_store.py` verbatim into
+  `core/contract/secret_store.py`, alongside `errors.py`/`pagination.py`, as
+  one of the three "vendored contract sources" sharing that directory's
+  weekly-freshness-audit maintenance path. Step 3 needed `secret_store` too
+  (for the `JWT_SIGNING_KEY` composition seam, "Security composition"
+  above) and had two options: vendor a second copy under
+  `core/security/secrets_loading/` (matching every other security
+  component's subpackage shape) or reuse the Step 1 copy in place. Chose
+  reuse — a second byte-identical copy of the same file would mean the
+  freshness audit tracking two locations for content that's supposed to be
+  identical, a pure maintenance liability with no compensating benefit
+  (unlike the other five components, `secret_store` has no per-track
+  variant to justify a second copy; it's the same framework-neutral file
+  either way). `core/security/`'s own `__init__.py` documents the absence
+  of a `secrets_loading/` subpackage for the same reason, so a future reader
+  doesn't mistake the gap for an oversight.
+- **`input_validation` is vendored but not called from anywhere yet.**
+  Unlike the other three MIDDLEWARE-wired components, `StrictModel`/the
+  hardened field types are shared/service-layer tooling per the component
+  README's own "Django/DRF note" — DRF serializers remain the actual HTTP
+  request-validation layer (`core/serializers.py`, unchanged by this step).
+  This block has no shared/service layer yet (Stage 4's scope is the
+  contract-emission layer + its security composition, not business logic
+  underneath it), so nothing calls into `core/security/input_validation/`
+  as of this step. Vendored now anyway, matching `backend/fastapi`'s own
+  precedent (that track's `input_validation` subpackage is equally unused
+  by its current schemas — see that block's `app/schemas/item.py`
+  docstring) — so a later step adding a real shared/service layer has it
+  available immediately rather than needing a fresh vendoring pass.
+- **Rate-limiting's `RateLimitMiddleware` reads settings at `__init__`, so
+  its security-composition test constructs a fresh `APIClient()` after
+  overriding settings, and resets the shared `InMemoryBucketStore`
+  singleton first.** Django instantiates each `MIDDLEWARE` entry with only
+  `get_response` — no per-request kwarg-passing mechanism — so the
+  component reads `RATE_LIMIT_*` from `django.conf.settings` once, at
+  construction. `django.test.Client.__init__` (and DRF's `APIClient`, which
+  subclasses it) rebuilds a fresh middleware chain on every instantiation,
+  which is what makes a per-test settings override actually take effect —
+  but only if the override happens BEFORE the client is constructed, and
+  only if the module-level default store (per-process, shared across every
+  middleware instance that doesn't get an explicit `store=` kwarg) is reset
+  first, since otherwise an earlier test's requests against the same test
+  client `REMOTE_ADDR` would have already partially drained the bucket. See
+  `tests/test_security_composition.py`'s own module docstring for the full
+  mechanics.
