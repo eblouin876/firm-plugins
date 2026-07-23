@@ -28,6 +28,7 @@ import type {
   LoginRequest,
   PrincipalOut,
   RefreshRequest,
+  RegisterRequest,
   TokenResponse
 } from '../../models';
 
@@ -53,7 +54,99 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   return result;
 };
 
-export type loginAuthLoginPostResponse200 = {
+export type registerAuthRegisterPostResponse201 = {
+  data: PrincipalOut
+  status: 201
+}
+
+export type registerAuthRegisterPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type registerAuthRegisterPostResponseSuccess = (registerAuthRegisterPostResponse201) & {
+  headers: Headers;
+};
+export type registerAuthRegisterPostResponseError = (registerAuthRegisterPostResponse422) & {
+  headers: Headers;
+};
+
+export type registerAuthRegisterPostResponse = (registerAuthRegisterPostResponseSuccess | registerAuthRegisterPostResponseError)
+
+export const getRegisterAuthRegisterPostUrl = () => {
+
+
+
+
+  return `/auth/register`
+}
+
+/**
+ * Delegates straight to `AuthService.register` — raises
+ * `EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized
+ * email, uncaught here (see module docstring).
+ * @summary Register
+ */
+export const registerAuthRegisterPost = async (registerRequest: RegisterRequest, options?: RequestInit): Promise<registerAuthRegisterPostResponse> => {
+
+  return customFetch<registerAuthRegisterPostResponse>(getRegisterAuthRegisterPostUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(registerRequest)
+  }
+);}
+
+
+
+
+
+export const getRegisterAuthRegisterPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerAuthRegisterPost>>, TError,{data: RegisterRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof registerAuthRegisterPost>>, TError,{data: RegisterRequest}, TContext> => {
+
+const mutationKey = ['registerAuthRegisterPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof registerAuthRegisterPost>>, {data: RegisterRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  registerAuthRegisterPost(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RegisterAuthRegisterPostMutationResult = NonNullable<Awaited<ReturnType<typeof registerAuthRegisterPost>>>
+    export type RegisterAuthRegisterPostMutationBody = RegisterRequest
+    export type RegisterAuthRegisterPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Register
+ */
+export const useRegisterAuthRegisterPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerAuthRegisterPost>>, TError,{data: RegisterRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof registerAuthRegisterPost>>,
+        TError,
+        {data: RegisterRequest},
+        TContext
+      > => {
+      return useMutation(getRegisterAuthRegisterPostMutationOptions(options), queryClient);
+    }
+    export type loginAuthLoginPostResponse200 = {
   data: TokenResponse
   status: 200
 }
@@ -81,7 +174,11 @@ export const getLoginAuthLoginPostUrl = () => {
 }
 
 /**
- * @summary Login (stub)
+ * Delegates to `AuthService.login` — raises `InvalidCredentials`
+ * (-> 401 `unauthenticated`) identically for an unknown email or a wrong
+ * password (see that exception's own docstring on the deliberate
+ * user-enumeration defense), uncaught here.
+ * @summary Login
  */
 export const loginAuthLoginPost = async (loginRequest: LoginRequest, options?: RequestInit): Promise<loginAuthLoginPostResponse> => {
 
@@ -130,7 +227,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type LoginAuthLoginPostMutationError = ErrorEnvelope
 
     /**
- * @summary Login (stub)
+ * @summary Login
  */
 export const useLoginAuthLoginPost = <TError = ErrorEnvelope,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof loginAuthLoginPost>>, TError,{data: LoginRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -170,7 +267,15 @@ export const getRefreshAuthRefreshPostUrl = () => {
 }
 
 /**
- * @summary Refresh token (stub)
+ * Delegates to `AuthService.refresh` — THE rotation-with-reuse-
+ * detection state machine (see `_core.py`'s own module docstring and
+ * `AuthService.refresh`'s docstring for the full 6-step state machine).
+ * Raises `InvalidToken` or `TokenReused` (both -> 401 `unauthenticated`,
+ * deliberately indistinguishable at the wire — see `TokenReused`'s own
+ * docstring), uncaught here. A `TokenReused` raise has, as a side
+ * effect, ALREADY revoked the token's entire family in the DB by the
+ * time this handler's caller sees the 401.
+ * @summary Refresh token
  */
 export const refreshAuthRefreshPost = async (refreshRequest: RefreshRequest, options?: RequestInit): Promise<refreshAuthRefreshPostResponse> => {
 
@@ -219,7 +324,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type RefreshAuthRefreshPostMutationError = ErrorEnvelope
 
     /**
- * @summary Refresh token (stub)
+ * @summary Refresh token
  */
 export const useRefreshAuthRefreshPost = <TError = ErrorEnvelope,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof refreshAuthRefreshPost>>, TError,{data: RefreshRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -230,6 +335,99 @@ export const useRefreshAuthRefreshPost = <TError = ErrorEnvelope,
         TContext
       > => {
       return useMutation(getRefreshAuthRefreshPostMutationOptions(options), queryClient);
+    }
+    export type logoutAuthLogoutPostResponse204 = {
+  data: void
+  status: 204
+}
+
+export type logoutAuthLogoutPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type logoutAuthLogoutPostResponseSuccess = (logoutAuthLogoutPostResponse204) & {
+  headers: Headers;
+};
+export type logoutAuthLogoutPostResponseError = (logoutAuthLogoutPostResponse422) & {
+  headers: Headers;
+};
+
+export type logoutAuthLogoutPostResponse = (logoutAuthLogoutPostResponseSuccess | logoutAuthLogoutPostResponseError)
+
+export const getLogoutAuthLogoutPostUrl = () => {
+
+
+
+
+  return `/auth/logout`
+}
+
+/**
+ * Delegates to `AuthService.logout` — best-effort and idempotent by
+ * design (see that method's own docstring): an already-invalid, unknown,
+ * or already-revoked refresh token still returns 204, never an error.
+ * Revokes the entire token family, not just the presented token.
+ * @summary Logout
+ */
+export const logoutAuthLogoutPost = async (refreshRequest: RefreshRequest, options?: RequestInit): Promise<logoutAuthLogoutPostResponse> => {
+
+  return customFetch<logoutAuthLogoutPostResponse>(getLogoutAuthLogoutPostUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(refreshRequest)
+  }
+);}
+
+
+
+
+
+export const getLogoutAuthLogoutPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logoutAuthLogoutPost>>, TError,{data: RefreshRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof logoutAuthLogoutPost>>, TError,{data: RefreshRequest}, TContext> => {
+
+const mutationKey = ['logoutAuthLogoutPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof logoutAuthLogoutPost>>, {data: RefreshRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  logoutAuthLogoutPost(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LogoutAuthLogoutPostMutationResult = NonNullable<Awaited<ReturnType<typeof logoutAuthLogoutPost>>>
+    export type LogoutAuthLogoutPostMutationBody = RefreshRequest
+    export type LogoutAuthLogoutPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Logout
+ */
+export const useLogoutAuthLogoutPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logoutAuthLogoutPost>>, TError,{data: RefreshRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof logoutAuthLogoutPost>>,
+        TError,
+        {data: RefreshRequest},
+        TContext
+      > => {
+      return useMutation(getLogoutAuthLogoutPostMutationOptions(options), queryClient);
     }
     export type meAuthMeGetResponse200 = {
   data: PrincipalOut
@@ -252,7 +450,28 @@ export const getMeAuthMeGetUrl = () => {
 }
 
 /**
- * @summary Current principal (stub)
+ * `get_current_principal` (the vendored component's
+ * `build_get_current_principal`, bound in `app/api/deps.py`) already
+ * verified the bearer access token and resolved it to `AccessClaims`
+ * before this handler body ever runs — a missing/malformed/expired
+ * token never reaches here at all (see that dependency's own docstring;
+ * it raises `InvalidToken` -> 401 `unauthenticated` itself).
+ *
+ * `AccessClaims` carries `sub` (the user id) and `roles`, but not
+ * `email` — this handler does one direct `SqlAlchemyUserStore.get_by_id`
+ * lookup to fill in `PrincipalOut.email`, independent of `AuthService`
+ * (which has no "fetch a profile" method — see `_core.py`'s `UserStore`
+ * Protocol; it's a storage seam for `AuthService`'s own register/login/
+ * refresh flows, not a general user-lookup API this router reaches for).
+ *
+ * The user having been deleted BETWEEN minting the access token and this
+ * request (a real, if narrow, race — access tokens are not individually
+ * revocable, see `Settings.jwt_access_ttl_seconds`'s own docstring) is
+ * treated as `InvalidToken` (401), matching `AuthService.refresh`'s
+ * identical "row valid but the user it points to is gone" handling —
+ * NOT a 404, since the token itself is what's no longer trustworthy, not
+ * a missing resource the caller asked for by id.
+ * @summary Current principal
  */
 export const meAuthMeGet = async ( options?: RequestInit): Promise<meAuthMeGetResponse> => {
 
@@ -323,7 +542,7 @@ export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, 
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
- * @summary Current principal (stub)
+ * @summary Current principal
  */
 
 export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = unknown>(

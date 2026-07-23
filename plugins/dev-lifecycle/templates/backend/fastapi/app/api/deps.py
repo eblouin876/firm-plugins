@@ -12,10 +12,9 @@ future protected route)."""
 
 from __future__ import annotations
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.security.auth import AuthService, build_get_current_principal
 from app.core.security.auth.stores import (
@@ -28,19 +27,33 @@ from app.core.security.auth.stores import (
 
 
 async def get_auth_service(
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
 ) -> AuthService:
     """Per-request `AuthService`, bound to THIS request's `AsyncSession` —
     a fresh pair of store instances every call (they're thin wrappers
     holding only a session reference, so this is cheap), the process-wide
     `PasswordService` singleton (`get_password_service()` — see its own
     docstring on why that one IS cached), and a `TokenService` built fresh
-    from the current `Settings` (`get_token_service()` — raises
+    from `request.app.state.settings` (`get_token_service()` — raises
     `AuthNotConfiguredError`, fail-closed, if `jwt_signing_key` is unset;
     see that function's own docstring). `now=utc_now` is the SAME callable
     `get_token_service()` passes to the `TokenService` it builds — see
-    that function's own module, `utc_now`'s docstring."""
+    that function's own module, `utc_now`'s docstring.
+
+    Reads `request.app.state.settings` — the EXACT `Settings` instance
+    `app/main.py`'s `create_app()` was actually constructed with (see that
+    function's own comment on `app.state.settings`) — deliberately NOT
+    `Depends(get_settings)`, the separate process-wide `lru_cache`d
+    singleton every OTHER piece of this app's security composition
+    (rate limiting, CORS, security headers) reads directly at
+    APP-CONSTRUCTION time, not per-request. A route-level dependency has
+    no other way to see a bespoke `Settings(...)` a caller passed to
+    `create_app(settings=...)` instead of the cached singleton — see
+    `tests/conftest.py`'s `make_client` fixture, which relies on exactly
+    that seam to configure e.g. `jwt_signing_key` per test without
+    mutating process env vars (which would leak across tests)."""
+    settings = request.app.state.settings
     return AuthService(
         users=SqlAlchemyUserStore(db),
         refresh_tokens=SqlAlchemyRefreshTokenStore(db),

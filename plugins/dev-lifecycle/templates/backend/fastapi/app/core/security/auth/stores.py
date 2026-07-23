@@ -41,15 +41,39 @@ def _user_to_record(user: User) -> UserRecord:
     return UserRecord(id=str(user.id), email=user.email, password_hash=user.password_hash, roles=tuple(user.roles))
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalizes a datetime read back from the DB to timezone-AWARE UTC.
+
+    sqlite (this app's hermetic test dialect, `aiosqlite`) has no native
+    timezone-aware datetime type — SQLAlchemy's `DateTime(timezone=True)`
+    columns (`RefreshToken.issued_at`/`expires_at`/`used_at`) round-trip
+    correctly on PostgreSQL (a real `timestamptz` column, always tz-aware
+    coming back), but on sqlite the value comes back NAIVE regardless of
+    what was written. `_core.AuthService.refresh` compares `row.
+    expires_at <= self._now()`, and `self._now()` is always tz-aware (per
+    `TokenService`/`AuthService`'s own documented `now` contract) —
+    comparing an aware and a naive `datetime` raises `TypeError` at that
+    comparison, not a silently-wrong result, so this normalization is
+    required for correctness under sqlite, not just cosmetic. Every
+    datetime this store EVER writes is UTC to begin with (`_core.py`'s
+    `TokenService`/`AuthService` only ever construct `now()` as UTC-aware
+    — see their own docstrings), so re-attaching `timezone.utc` to a value
+    that came back naive is recovering known-lost information, not
+    guessing: sqlite dropped the offset, it never had a different one."""
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
 def _refresh_to_record(row: RefreshToken) -> RefreshRecord:
     return RefreshRecord(
         token_hash=row.token_hash,
         jti=row.jti,
         family_id=row.family_id,
         user_id=str(row.user_id),
-        issued_at=row.issued_at,
-        expires_at=row.expires_at,
-        used_at=row.used_at,
+        issued_at=_as_utc(row.issued_at),
+        expires_at=_as_utc(row.expires_at),
+        used_at=_as_utc(row.used_at),
         revoked=row.revoked,
     )
 

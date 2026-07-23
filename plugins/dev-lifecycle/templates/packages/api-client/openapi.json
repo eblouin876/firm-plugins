@@ -310,12 +310,55 @@
         }
       }
     },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register",
+        "description": "Delegates straight to `AuthService.register` \u2014 raises\n`EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized\nemail, uncaught here (see module docstring).",
+        "operationId": "register_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/login": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Login (stub)",
+        "summary": "Login",
+        "description": "Delegates to `AuthService.login` \u2014 raises `InvalidCredentials`\n(-> 401 `unauthenticated`) identically for an unknown email or a wrong\npassword (see that exception's own docstring on the deliberate\nuser-enumeration defense), uncaught here.",
         "operationId": "login_auth_login_post",
         "requestBody": {
           "content": {
@@ -356,7 +399,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Refresh token (stub)",
+        "summary": "Refresh token",
+        "description": "Delegates to `AuthService.refresh` \u2014 THE rotation-with-reuse-\ndetection state machine (see `_core.py`'s own module docstring and\n`AuthService.refresh`'s docstring for the full 6-step state machine).\nRaises `InvalidToken` or `TokenReused` (both -> 401 `unauthenticated`,\ndeliberately indistinguishable at the wire \u2014 see `TokenReused`'s own\ndocstring), uncaught here. A `TokenReused` raise has, as a side\neffect, ALREADY revoked the token's entire family in the DB by the\ntime this handler's caller sees the 401.",
         "operationId": "refresh_auth_refresh_post",
         "requestBody": {
           "content": {
@@ -392,12 +436,48 @@
         }
       }
     },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "description": "Delegates to `AuthService.logout` \u2014 best-effort and idempotent by\ndesign (see that method's own docstring): an already-invalid, unknown,\nor already-revoked refresh token still returns 204, never an error.\nRevokes the entire token family, not just the presented token.",
+        "operationId": "logout_auth_logout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/me": {
       "get": {
         "tags": [
           "auth"
         ],
-        "summary": "Current principal (stub)",
+        "summary": "Current principal",
+        "description": "`get_current_principal` (the vendored component's\n`build_get_current_principal`, bound in `app/api/deps.py`) already\nverified the bearer access token and resolved it to `AccessClaims`\nbefore this handler body ever runs \u2014 a missing/malformed/expired\ntoken never reaches here at all (see that dependency's own docstring;\nit raises `InvalidToken` -> 401 `unauthenticated` itself).\n\n`AccessClaims` carries `sub` (the user id) and `roles`, but not\n`email` \u2014 this handler does one direct `SqlAlchemyUserStore.get_by_id`\nlookup to fill in `PrincipalOut.email`, independent of `AuthService`\n(which has no \"fetch a profile\" method \u2014 see `_core.py`'s `UserStore`\nProtocol; it's a storage seam for `AuthService`'s own register/login/\nrefresh flows, not a general user-lookup API this router reaches for).\n\nThe user having been deleted BETWEEN minting the access token and this\nrequest (a real, if narrow, race \u2014 access tokens are not individually\nrevocable, see `Settings.jwt_access_ttl_seconds`'s own docstring) is\ntreated as `InvalidToken` (401), matching `AuthService.refresh`'s\nidentical \"row valid but the user it points to is gone\" handling \u2014\nNOT a 404, since the token itself is what's no longer trustworthy, not\na missing resource the caller asked for by id.",
         "operationId": "me_auth_me_get",
         "responses": {
           "200": {
@@ -743,6 +823,27 @@
           "refresh_token"
         ],
         "title": "RefreshRequest"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "RegisterRequest"
       },
       "TokenResponse": {
         "properties": {
