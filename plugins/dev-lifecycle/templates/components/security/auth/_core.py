@@ -626,7 +626,30 @@ class EmailSender(Protocol):
     `send` almost always crosses a network boundary in a real
     implementation. This module ships exactly one implementation
     (`ConsoleEmailSender` below) -- a real one is application/
-    infrastructure code, not part of this framework-neutral core."""
+    infrastructure code, not part of this framework-neutral core.
+
+    **Implementations MUST NOT let delivery latency or delivery failure
+    affect the caller.** `send()` is expected to return promptly and to
+    NEVER raise -- deliver OUT-OF-BAND (e.g. hand the message to a
+    background task/queue and return immediately) and swallow+log any
+    delivery error internally rather than propagating it. Two callers in
+    this module depend on that contract to stay correct, not just fast:
+    `AccountService.request_password_reset`'s known-email branch awaits
+    `send()` and then returns `None` exactly like the unknown-email
+    branch -- if `send()` could raise or could block for a real SMTP
+    round-trip, a delivery failure or a slow relay would turn into either
+    a different HTTP outcome or a different response latency for a known
+    vs. an unknown email, which is precisely the account-enumeration
+    oracle this method's docstring says it must never become. Likewise a
+    failed verification-email `send()` during registration (`AccountService.
+    request_email_verification`, called from a framework adapter's
+    register handler) must never be able to brick a just-created account.
+    `ConsoleEmailSender` (fast, synchronous, and it only ever logs -- it
+    cannot itself fail in a way worth propagating) satisfies this
+    trivially; a real SMTP-backed sender must actively deliver on a
+    background task/thread and catch its own errors -- see this
+    component's FastAPI backend's `SmtpEmailSender` for a reference
+    implementation."""
 
     async def send(self, message: EmailMessage) -> None: ...
 
@@ -1411,8 +1434,22 @@ class AccountService:
         want to show).
 
         **Found:** issues a `"reset"` single-use token (ttl `reset_ttl`,
-        ~1h by default), emails a reset link containing it (fragment-
-        encoded).
+        ~1h by default) and emails a reset link containing it (fragment-
+        encoded). The `EmailSender.send()` call is wrapped in a bare
+        `try/except Exception`: a delivery failure (the sender raising)
+        is caught, an `auth.password.reset_email_failed` audit event is
+        emitted (when `events` is wired) instead of `reset_requested`,
+        and this method still returns `None` -- it NEVER re-raises. This
+        is the core of the anti-enumeration defense, not an incidental
+        robustness nicety: if a known email's `send()` failure were
+        allowed to propagate (and a framework adapter's route left it
+        uncaught, as this component expects -- see `EmailSender`'s own
+        docstring), a known email would 500 while an unknown one still
+        202s, which IS an account-enumeration oracle (an SMTP outage, a
+        bounced/invalid mailbox, a rate-limited relay -- any of these
+        would out a registered address). The token is still issued and
+        persisted before `send()` is attempted, so a failed delivery
+        never silently discards work the caller might expect to retry.
 
         **Not found:** computes a throwaway token
         (`secrets.token_urlsafe(32)`) and hashes it (`hash_token`) --
@@ -1425,11 +1462,15 @@ class AccountService:
         like (unlike `AuthService.login`, there's no slow Argon2 op
         gating either path here, so an exact single-Argon2-op timing
         match isn't the goal -- the CPU-comparable throwaway op is a
-        best-effort match, not a formal guarantee, since network email
-        delivery latency on the found path already dwarfs anything this
-        method could equalize in Python).
+        best-effort match, not a formal guarantee). The found path's own
+        `send()` no longer costs a real SMTP round-trip either, by
+        contract (see `EmailSender`'s docstring: a compliant sender
+        delivers out-of-band and returns promptly) -- so this was never
+        a race against real network latency to begin with, on either
+        path.
 
-        Either way, emits `auth.password.reset_requested` with
+        Either way, emits `auth.password.reset_requested` on a
+        successful (or not-attempted, for the not-found path) send, with
         `actor=user.id` (found) or `actor="user:unknown"` (not found) --
         **never the submitted email itself**, in either branch, so the
         audit trail cannot be grepped for "which email addresses did
@@ -1449,9 +1490,20 @@ class AccountService:
             f"{link}\n\n"
             f"Or enter this code if your client stripped the link: {raw}\n"
         )
-        await self._email.send(EmailMessage(to=user.email, subject="Reset your password", body=body))
-        if self._events is not None:
-            await self._events.emit("auth.password.reset_requested", actor=user.id, outcome="success")
+        # M1 fix: a delivery failure here must NEVER change this method's
+        # outcome (it always returns None either way) or propagate to the
+        # caller -- see this method's own docstring and `EmailSender`'s for
+        # why: letting `send()` raise past this point is the enumeration
+        # oracle (known email -> 500, unknown email -> 202) this whole
+        # method exists to prevent.
+        try:
+            await self._email.send(EmailMessage(to=user.email, subject="Reset your password", body=body))
+        except Exception:
+            if self._events is not None:
+                await self._events.emit("auth.password.reset_email_failed", actor=user.id, outcome="failure")
+        else:
+            if self._events is not None:
+                await self._events.emit("auth.password.reset_requested", actor=user.id, outcome="success")
 
     async def reset_password(self, raw_token: str, new_password: str) -> None:
         """Consumes `raw_token` as a `"reset"` token, hashes
@@ -1462,13 +1514,37 @@ class AccountService:
         family the user has (`RefreshTokenStore.revoke_all_for_user`) --
         killing every existing logged-in session everywhere, since
         whatever was true about the account's security under the OLD
-        password can no longer be assumed once it's been reset. Finally,
-        if a `lockout` policy was wired, clears any failed-login lockout on
+        password can no longer be assumed once it's been reset. If a
+        `lockout` policy was wired, also clears any failed-login lockout on
         the account (see `__init__`'s `lockout` note) so the reset restores
-        access immediately. Emits `auth.password.reset_completed` on
-        success, `auth.password.reset_failed` (actor `"unknown"`) on a
-        bad/expired/reused token, re-raising `InvalidSingleUseToken`
-        unchanged either way."""
+        access immediately.
+
+        **Also marks the account's email verified** (`UserStore.
+        mark_email_verified(user_id, self._now())`), regardless of whether
+        it already was. Rationale: successfully consuming a `"reset"`
+        single-use token proves control of the account's email -- the
+        token was only ever delivered to that inbox (see `request_
+        password_reset`'s own docstring) -- which is exactly the same
+        proof-of-inbox-control `verify_email` establishes via a `"verify"`
+        token; completing a reset therefore satisfies email verification
+        too. This is deliberately the RECOVERY PATH for an account whose
+        original verification email never arrived: `register`'s
+        post-registration `request_email_verification` call can fail to
+        deliver (an SMTP outage, a bounced address at signup time) without
+        the caller being told -- see this component's FastAPI backend's
+        `register` handler, which never lets that failure turn a 201 into
+        a 500 -- so without this, such an account would be permanently
+        stuck behind `AuthService.login`'s `require_verification` gate
+        with no way back in. Ordered AFTER session revocation and the
+        lockout clear above, so a reset invalidates old credentials/
+        sessions, unblocks the new login, AND unblocks it from the
+        verification gate too, all in one call.
+
+        Emits `auth.password.reset_completed` on success (emitted LAST,
+        after every other side effect above has already happened),
+        `auth.password.reset_failed` (actor `"unknown"`) on a bad/expired/
+        reused token, re-raising `InvalidSingleUseToken` unchanged either
+        way."""
         try:
             user_id = await self._tokens.consume(raw_token, "reset")
         except InvalidSingleUseToken:
@@ -1486,5 +1562,10 @@ class AccountService:
         # both invalidates old credentials/sessions AND unblocks the new one.
         if self._lockout is not None:
             await self._lockout.clear(user_id)
+        # A completed reset proves control of the account's email -- see
+        # this method's own docstring on why that also satisfies email
+        # verification, and why that matters as the recovery path for a
+        # registration whose verification email failed to send (FIX 2/3).
+        await self._users.mark_email_verified(user_id, self._now())
         if self._events is not None:
             await self._events.emit("auth.password.reset_completed", actor=user_id, outcome="success")

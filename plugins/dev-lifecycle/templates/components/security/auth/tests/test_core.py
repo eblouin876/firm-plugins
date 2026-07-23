@@ -1059,6 +1059,114 @@ async def test_account_service_emails_never_contain_a_raw_password(
 
 
 # ---------------------------------------------------------------------------
+# Stage 5c adversarial-review fix (M1/M2): email delivery failure must never
+# change request_password_reset's outcome, and reset_password must also
+# verify the email (the recovery path for a registration whose verification
+# email failed to send).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_password_reset_known_email_does_not_raise_when_send_fails(
+    core_mod, auth_service, user_store, single_use_token_service, password_service, refresh_store, clock,
+    raising_email_sender, event_sink,
+):
+    """M1: a delivery failure on the KNOWN-email branch must never turn
+    into an exception -- that would let a caller (an HTTP route with no
+    catch, per this component's contract) return a different status code
+    for a known vs. an unknown email, which IS the account-enumeration
+    oracle this method exists to prevent. The token must still be issued
+    and persisted (the failure is in DELIVERY, not in issuance) so the
+    account isn't silently left without a usable reset token on file."""
+    account = core_mod.AccountService(
+        user_store,
+        single_use_token_service,
+        raising_email_sender,
+        password_service,
+        refresh_store,
+        clock,
+        events=event_sink,
+        frontend_base_url="https://app.example.com",
+    )
+    await auth_service.register("alice@example.com", "old-password-1")
+
+    result = await account.request_password_reset("alice@example.com")
+
+    assert result is None  # did NOT raise, returned exactly like the happy path
+    assert raising_email_sender.attempts == 1  # send() really was attempted
+
+    user = await user_store.get_by_email("alice@example.com")
+    assert user is not None
+
+    # A failure event was emitted instead of the success one.
+    assert ("auth.password.reset_email_failed", {"actor": user.id, "outcome": "failure"}) in event_sink.events
+    assert not any(action == "auth.password.reset_requested" for action, _ in event_sink.events)
+
+
+@pytest.mark.asyncio
+async def test_request_password_reset_known_email_send_failure_still_issues_a_usable_token(
+    core_mod, auth_service, user_store, single_use_token_store, single_use_token_service, password_service,
+    refresh_store, clock, raising_email_sender,
+):
+    """Same failure scenario as above, proven end-to-end: even though the
+    email never "arrived" (the sender raised), the reset token it would
+    have carried was genuinely issued and persisted -- recoverable e.g. by
+    an operator re-sending it, or by the same request being retried
+    against a healthy sender."""
+    account = core_mod.AccountService(
+        user_store,
+        single_use_token_service,
+        raising_email_sender,
+        password_service,
+        refresh_store,
+        clock,
+        frontend_base_url="https://app.example.com",
+    )
+    await auth_service.register("alice@example.com", "old-password-1")
+
+    await account.request_password_reset("alice@example.com")
+
+    assert len(single_use_token_store._by_hash) == 1
+    record = next(iter(single_use_token_store._by_hash.values()))
+    assert record.purpose == "reset"
+    assert record.used_at is None
+
+
+@pytest.mark.asyncio
+async def test_reset_password_marks_email_verified(
+    core_mod, auth_service, account_service, email_sender, user_store,
+):
+    """M2 recovery path: a user registers (unverified -- `verify_email` is
+    never called here, modeling a registration whose verification email
+    failed to send, per FIX 2/3), requests a password reset, and completes
+    it -- the account is now `email_verified=True` even though `verify_
+    email` was never invoked, and can log in under `require_verification=
+    True`."""
+    user = await auth_service.register("alice@example.com", "old-password-1")
+    assert user.email_verified is False
+
+    await account_service.request_password_reset("alice@example.com")
+    raw_token = email_sender.sent[-1].body.split("token=")[1].splitlines()[0]
+    await account_service.reset_password(raw_token, "new-password-2")
+
+    updated = await user_store.get_by_id(user.id)
+    assert updated.email_verified is True
+
+    # Login works even under a require_verification=True AuthService,
+    # despite verify_email having never been called.
+    verifying_auth = core_mod.AuthService(
+        user_store,
+        auth_service._refresh_tokens,
+        auth_service._passwords,
+        auth_service._tokens,
+        auth_service._now,
+        require_verification=True,
+    )
+    pair = await verifying_auth.login("alice@example.com", "new-password-2")
+    assert pair.access
+
+
+# ---------------------------------------------------------------------------
 # Zero-diff proof: refresh reuse-detection is untouched by this stage
 # ---------------------------------------------------------------------------
 

@@ -281,6 +281,29 @@ class FakeEmailSender:
         self.sent.append(message)
 
 
+class RaisingEmailSender:
+    """`EmailSender` whose `send` always raises -- models a failed/
+    misbehaving delivery (SMTP outage, bounced relay, timeout) for the
+    M1 test: `AccountService.request_password_reset`'s known-email branch
+    must swallow this and still return `None`, never let it propagate.
+    Deliberately NOT a subclass/variant of `FakeEmailSender` above (kept
+    as a fully separate, obviously-named fake) so a test using this one
+    can never be mistaken for exercising the happy-path recording
+    behavior."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def send(self, message):
+        self.attempts += 1
+        raise RuntimeError("simulated delivery failure -- SMTP relay unreachable")
+
+
+@pytest.fixture
+def raising_email_sender() -> RaisingEmailSender:
+    return RaisingEmailSender()
+
+
 class FakeAuthEventSink:
     """Recording `AuthEventSink` -- appends every emitted event as an
     `(action, {"actor": ..., "outcome": ..., **extra})` tuple to
