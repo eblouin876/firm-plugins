@@ -1,11 +1,11 @@
 <!--
 block: backend/fastapi
 needs:
-  - DATABASE_URL (required); JWT_SIGNING_KEY (required to use any /auth/* route — see "Auth" below); ENVIRONMENT/DEBUG/CORS_ALLOWED_ORIGINS/RATE_LIMIT_*/SECURITY_HEADERS_*/SECRETS_BACKEND (optional, secure defaults — see "Security composition" + docs/fragment.md)
+  - DATABASE_URL (required); JWT_SIGNING_KEY (required for /auth/*); SMTP_*/EMAIL_FROM/FRONTEND_BASE_URL/AUTH_* (optional, account-lifecycle — see "Auth"); ENVIRONMENT/DEBUG/CORS_ALLOWED_ORIGINS/RATE_LIMIT_*/SECURITY_HEADERS_*/SECRETS_BACKEND (optional, secure defaults — see "Security composition" + docs/fragment.md)
   - port: 8000 (uvicorn default)
   - Python 3.13.x + uv (no committed uv.lock — see pyproject.toml)
 exposes:
-  - routes: GET/POST /items, GET/PATCH/DELETE /items/{id}, GET /health, GET /readyz, POST /auth/register|login|refresh|logout, GET /auth/me
+  - routes: GET/POST /items, GET/PATCH/DELETE /items/{id}, GET /health, GET /readyz, /auth/register|login|refresh|logout|me|verify-email|request-password-reset|reset-password
   - the OpenAPI 3.1 contract (bearer security scheme) packages/api-client generates from
   - security composition: security-headers/request-id-audit/rate-limiting/CORS wired by default
   - its co-located doc fragment: docs/fragment.md
@@ -66,7 +66,9 @@ scope here, marked as a `TODO` comment at its seam (see app/main.py).
   `GET /readyz` (readiness, real `SELECT 1`), `POST /auth/register`,
   `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`,
   `GET /auth/me` — real behavior (Stage 5a, #41) against the vendored auth
-  component's `AuthService`, not a stub — see "Auth" below.
+  component's `AuthService`, not a stub — plus `POST /auth/verify-email`,
+  `POST /auth/request-password-reset`, `POST /auth/reset-password` (Stage
+  5c, #45) against the vendored `AccountService` — see "Auth" below.
 - **The OpenAPI 3.1 contract** `packages/api-client` generates from —
   title, version, the `HTTPBearer` security scheme (auto-registered by
   `app/api/deps.py`'s `get_current_principal` stub dependency). Step 4
@@ -403,9 +405,11 @@ against `app/models/user.py`'s `User` and `app/models/refresh_token.py`'s
 - `POST /auth/register` → `RegisterRequest{email,password}` → 201
   `PrincipalOut`. Duplicate normalized email → 409 `conflict`.
 - `POST /auth/login` → `LoginRequest` → 200 `TokenResponse`. Bad
-  credentials → 401 `unauthenticated` (identical for "no such account" and
-  "wrong password" — see `_core.py`'s `InvalidCredentials` docstring on
-  the user-enumeration defense).
+  credentials → 401 `unauthenticated` (identical for "no such account",
+  "wrong password", "account locked" — see "Account lifecycle" below —
+  and, as of Stage 5c, "account not yet verified" — see `_core.py`'s
+  `InvalidCredentials` docstring on the user-enumeration defense, which
+  now covers all four).
 - `POST /auth/refresh` → `RefreshRequest` → 200 `TokenResponse`, rotating
   the token. Invalid or REUSED → 401 `unauthenticated`, indistinguishable
   at the wire — a reuse event has, as a side effect, already revoked the
@@ -437,6 +441,84 @@ by the generic catch-all `Exception` handler, rendering 500
 `PrincipalOut` stays `{id, email}` only in this stage — no `roles` on the
 wire yet; the RBAC wire surface (`require_roles`, already present in the
 vendored component's `fastapi.py`) is Stage 5d.
+
+### Account lifecycle (Stage 5c, #45): verify-email, password reset, lockout
+
+Adds the vendored `AccountService` (email verification + password reset)
+and `LockoutPolicy` (per-account failed-login lockout) on top of Stage 5a's
+`AuthService`, wired against the SAME underlying stores/session so the two
+services observe each other's state (see `app/api/deps.py:get_auth_service`
+and `get_account_service`'s own docstrings, and `app/core/security/auth/
+stores.py`'s `build_account_service`/`build_lockout_policy`).
+
+- **`register` now sends a verification email as a side effect** —
+  `AccountService.request_email_verification(user)`, right after
+  `AuthService.register` succeeds — and emits an `auth.register` audit
+  event. The response shape is unchanged (still 201 `PrincipalOut`).
+- **`login` now gates on `email_verified`** —
+  `Settings.auth_require_email_verification` defaults to `True` (SECURE
+  DEFAULT): an unverified account cannot log in, rejected with the SAME
+  generic 401 `unauthenticated` every other login failure uses (see
+  `_core.AuthService.login`'s docstring, step 5) — wire-indistinguishable
+  from a wrong password.
+- **`login` now consults a per-account `LockoutPolicy`** —
+  `Settings.auth_lockout_enabled` defaults to `True`; `auth_lockout_
+  max_failures` (default 5) consecutive wrong passwords within `auth_
+  lockout_window_seconds` (default 900s, a rolling window) locks the
+  account for `auth_lockout_duration_seconds` (default 900s). While
+  locked, even the CORRECT password is rejected (`_core.AuthService.
+  login` step 3 — the real password is deliberately never checked against
+  a locked account) — again the same generic 401.
+- `POST /auth/verify-email` → `VerifyEmailRequest{token}` → 204. Bad/
+  expired/already-used/wrong-purpose token → 401 `unauthenticated`,
+  generic (`_core.InvalidSingleUseToken` — see its own docstring on why
+  every rejection reason collapses to one message).
+- `POST /auth/request-password-reset` → `RequestPasswordResetRequest{email}`
+  → **202 ALWAYS**, with a genuinely EMPTY body — byte-identical whether
+  or not `email` has an account (`AccountService.request_password_reset`
+  never raises and never reveals account existence — the anti-
+  user-enumeration defense this endpoint exists for; see `tests/
+  test_auth.py`'s `test_request_password_reset_is_byte_identical_for_
+  known_and_unknown_email`). A reset email/token is only ever actually
+  issued for a known account.
+- `POST /auth/reset-password` → `ResetPasswordRequest{token,new_password}`
+  → 204. Bad/expired/already-used token → 401 `unauthenticated`, same
+  generic shape as `verify-email`. On success: overwrites the password
+  hash, revokes **every** refresh-token family the user has (every
+  device/session logged out, not just the one that requested the reset),
+  and — if lockout is wired — **lifts any active lockout on the account**,
+  so a user who tripped the lockout guessing, then reset their password,
+  can log in with the new password immediately (proven end to end in
+  "Real-PG16 verification" below and `tests/test_auth.py`'s
+  `test_reset_password_lifts_lockout_and_new_password_logs_in_
+  immediately`).
+
+**Email seam.** `app/core/security/auth/stores.py:get_email_sender(
+settings)` returns the vendored `ConsoleEmailSender` (**DEV/TEST-ONLY** —
+logs the message, INCLUDING the raw verify/reset token, to a `logging.
+Logger`; see that class's own docstring) when `Settings.smtp_host` is
+unset, else a hand-rolled `SmtpEmailSender` (stdlib `smtplib` +
+`email.message.EmailMessage`, blocking SMTP bridged off the event loop via
+`anyio.to_thread.run_sync`) built from `SMTP_HOST`/`SMTP_PORT`/
+`SMTP_USERNAME`/`SMTP_PASSWORD`/`EMAIL_FROM`. **Never construct
+`ConsoleEmailSender` in a real deployment** — it exists purely so a
+developer running this block locally (or CI) can see and complete a
+verify/reset flow without any SMTP infrastructure; set `SMTP_HOST` (and
+the rest of the `SMTP_*` vars) in every real environment. `app/api/
+deps.py:get_email_sender` wraps the above as a FastAPI dependency
+(`get_account_service` depends on it) purely so `tests/test_auth.py` can
+override it with an in-memory capturing sender (`app.dependency_overrides[
+get_email_sender] = ...`) and read an issued token deterministically,
+never by parsing `ConsoleEmailSender`'s log output.
+
+Verify/reset links are built as `{frontend_base_url}/verify-email#token=
+<raw>` / `{frontend_base_url}/reset-password#token=<raw>` — the raw token
+lives in the URL **fragment**, deliberately never a query string, so it
+never reaches server/proxy access logs or a `Referer` header (see `_core.
+AccountService`'s own docstring). `auth_verify_ttl_seconds` (default 24h)
+and `auth_reset_ttl_seconds` (default 1h, deliberately shorter — an
+unconsumed reset link is more sensitive to have floating around) bound how
+long each stays valid.
 
 ## Pagination
 
@@ -563,6 +645,120 @@ DB PROOF: whole refresh-token family is revoked=True after reuse detection.
 `family_id` and both are `revoked = True`, confirmed by a direct
 `asyncpg` query against the `refresh_tokens` table — independent of the
 HTTP response, which only proves the *client* saw 401.)
+
+### 0003 verification transcript (Stage 5c, #45)
+
+`0003_account_lifecycle.py` (`app/models/user.py`'s new `email_verified`/
+`verified_at` columns, `app/models/single_use_token.py`'s
+`SingleUseToken`, `app/models/login_attempt.py`'s `LoginAttempt`) —
+offline emission (`alembic upgrade 0002:0003 --sql`, no connection):
+
+```sql
+BEGIN;
+
+-- Running upgrade 0002 -> 0003
+
+ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT false NOT NULL;
+
+ALTER TABLE users ADD COLUMN verified_at TIMESTAMP WITH TIME ZONE;
+
+CREATE TABLE single_use_tokens (
+    id UUID NOT NULL,
+    token_hash VARCHAR(64) NOT NULL,
+    user_id UUID NOT NULL,
+    purpose VARCHAR(32) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_single_use_tokens_user_id_users FOREIGN KEY(user_id) REFERENCES users (id)
+);
+
+CREATE UNIQUE INDEX ix_single_use_tokens_token_hash ON single_use_tokens (token_hash);
+CREATE INDEX ix_single_use_tokens_user_id ON single_use_tokens (user_id);
+
+CREATE TABLE login_attempts (
+    id UUID NOT NULL,
+    account_key VARCHAR(320) NOT NULL,
+    failure_count INTEGER NOT NULL,
+    first_failure_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    last_failure_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    locked_until TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX ix_login_attempts_account_key ON login_attempts (account_key);
+
+UPDATE alembic_version SET version_num='0003' WHERE alembic_version.version_num = '0002';
+
+COMMIT;
+```
+
+Online run against real PostgreSQL 16 (fresh database, `alembic upgrade
+head` — applies 0001, 0002, and 0003 in one run):
+
+```
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001, create items table
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, create auth tables
+INFO  [alembic.runtime.migration] Running upgrade 0002 -> 0003, Stage 5c account lifecycle: verify + lockout tables
+$ alembic current
+0003 (head)
+```
+
+**Integration proof, over real HTTP against that same PG16 database** —
+register → login BEFORE verify (401, generic) → verify-email (204) →
+login AFTER verify (200) → request-password-reset for a KNOWN email (202,
+empty body) → request-password-reset for an UNKNOWN email (202,
+byte-identical empty body) → reset-password (204) → old password login
+(401) → new password login (200) → the PRE-reset refresh token is now
+revoked (401) → 5 wrong passwords trip the lockout → the CORRECT password
+still 401s while locked → a second reset-password LIFTS the lockout → the
+freshly reset password logs in immediately (200):
+
+```
+== register ==
+201 {'id': 'd491481c-72c2-4819-9b96-b3f19005bac3', 'email': 'pg16verify@example.com'}
+== login BEFORE verify (expect 401 generic) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Authentication failed.', 'details': None}}
+== verify-email ==
+204
+== login AFTER verify ==
+200
+== request-password-reset (known email) ==
+202 b''
+== request-password-reset (UNKNOWN email, byte-identical 202) ==
+202 b''
+== reset-password ==
+204
+== old password login (expect 401) ==
+401
+== new password login (expect 200) ==
+200
+== pre-reset refresh token now revoked (expect 401) ==
+401
+== lockout: 5 wrong passwords ==
+== correct password while locked (expect 401) ==
+401
+== reset again to lift lockout ==
+== new password logs in immediately after reset lifts lockout ==
+200
+
+ALL PG16 ASSERTIONS PASSED
+```
+
+Direct-DB proof (a fresh `psql` connection, independent of the HTTP
+client above) after the run: `users.email_verified = true`/`verified_at
+IS NOT NULL` for the account; `single_use_tokens` holds 3 rows (1
+`verify`, 2 `reset`), every one already `used_at IS NOT NULL`; `login_
+attempts` has **0** rows — the second `reset-password`'s `LockoutPolicy.
+clear()` DELETED the row (`SqlAlchemyLockoutStore.clear`), which is the
+lockout-lifted proof at the storage layer, not just "the next login
+happened to succeed"; `refresh_tokens` holds 3 rows total (one per
+successful login across the transcript) with exactly 2 `revoked = true`
+(the two `reset-password` calls each revoked every refresh token that
+existed for the user at that point via `revoke_all_for_user`).
 
 ## Dev run (Docker)
 

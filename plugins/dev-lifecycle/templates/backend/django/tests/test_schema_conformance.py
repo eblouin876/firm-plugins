@@ -343,7 +343,25 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # later stage's own in-flight parity work reuses, same shape as `_KNOWN_
 # DIVERGENCES` staying declared-but-empty would if every entry were
 # resolved.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
+#
+# Stage 5b (#44) -> Stage 5c (#45): backend/fastapi's Stage 5c implemented
+# the account-lifecycle surface -- `POST /auth/verify-email`, `POST
+# /auth/request-password-reset`, `POST /auth/reset-password` (against the
+# vendored `AccountService`: email verification, per-account lockout, and
+# `AuthService.login`'s `require_verification` gate) -- and extended the
+# frozen contract with all three operations. This Django block implements
+# NONE of them yet (`core/urls.py` has no routes for them at all, so they
+# are absent from `django_keys` entirely, not merely present-with-a-wrong-
+# shape the way Stage 5a's stubbed `login`/`refresh`/`me` were -- see the
+# FIX C note above for that distinct case). Implementing them -- and
+# `AuthService`/`LoginView`'s own lockout + verification-gate wiring on
+# this track -- is explicitly the NEXT Django-parity stage's job, not this
+# surgical edit's.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = {
+    ("/auth/verify-email", "post"),
+    ("/auth/request-password-reset", "post"),
+    ("/auth/reset-password", "post"),
+}
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:

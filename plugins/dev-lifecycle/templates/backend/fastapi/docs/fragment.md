@@ -15,7 +15,18 @@ auth (Stage 5a, #41) lives at `/auth/register|login|refresh|logout|me`,
 against the vendored auth component's Argon2id + JWT + refresh-rotation
 `AuthService` — set `JWT_SIGNING_KEY` before using any of them (see
 "Secrets" below; unset fails closed at 500, never signs with an empty
-key). `python -m app.export_openapi` exports that schema without a live
+key). Stage 5c (#45) adds `/auth/verify-email|request-password-reset|
+reset-password` against the vendored `AccountService`, plus a per-account
+`LockoutPolicy` — `login` now REQUIRES a verified email by default
+(`AUTH_REQUIRE_EMAIL_VERIFICATION`, default `true`) and locks an account
+after `AUTH_LOCKOUT_MAX_FAILURES` (default 5) consecutive wrong passwords
+within `AUTH_LOCKOUT_WINDOW_SECONDS` (default 900s); see the block
+README's "Account lifecycle" section for the full endpoint/policy detail.
+Verify/reset emails go through `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/
+`SMTP_PASSWORD`/`EMAIL_FROM` when `SMTP_HOST` is set, else the dev-only
+`ConsoleEmailSender` (logs the message, including the raw token, instead
+of delivering it — never construct it in a real deployment).
+`python -m app.export_openapi` exports that schema without a live
 database — the mechanism `packages/api-client`'s `client-generate` recipe
 uses. Optional config, all with secure defaults:
 `RATE_LIMIT_CAPACITY` (60) / `RATE_LIMIT_REFILL_PER_SECOND` (1.0) /
@@ -69,6 +80,11 @@ Dockerfile/compose run path. Stage 5a (#41) added `User`/`RefreshToken`
 models + Alembic `0002`, real `/auth/*` behavior, and extended the frozen
 contract (`packages/api-client/openapi.json`) + regenerated client — see
 the block README's "OpenAPI export", "Dev run (Docker)", "Auth", and
-"Database & migrations" sections. Verified online against PostgreSQL 16
-(the pinned matrix target is 18.x — re-verify against 18 before treating
-this as a full matrix-compliant proof).
+"Database & migrations" sections. Stage 5c (#45) added `SingleUseToken`/
+`LoginAttempt` models + `User.email_verified`/`verified_at` + Alembic
+`0003`, the vendored `AccountService`/`LockoutPolicy` wiring, the three
+new `/auth/*` routes, and again extended the frozen contract + client —
+see the README's "Account lifecycle" subsection and its "0003 verification
+transcript". Verified online against PostgreSQL 16 (the pinned matrix
+target is 18.x — re-verify against 18 before treating this as a full
+matrix-compliant proof).

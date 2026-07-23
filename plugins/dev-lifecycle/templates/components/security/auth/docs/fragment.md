@@ -47,6 +47,24 @@ concrete `UserStore`/`RefreshTokenStore` implementation, and `app/main.py`'s
 `RefreshTokenStore` implementation and `core/exceptions.py` for the
 DRF-side exception mapping.
 
+**Account lifecycle (Stage 5c, #45):** `AccountService`/`LockoutPolicy`
+(email verification, password reset, per-account lockout — see this
+component's README's "Account lifecycle" section for the full seam list)
+are composed ALONGSIDE `AuthService`, never touching `fastapi.py`/
+`django.py` themselves — a project wires its own `SingleUseTokenStore`/
+`LockoutStore` implementations, an `EmailSender` (a real one; never
+`ConsoleEmailSender` outside dev/test), and an `AccountService` FastAPI/
+Django dependency, alongside `AuthService`'s own. `backend/fastapi` is
+again the reference implementation — see that block's README's "Account
+lifecycle" subsection, `app/core/security/auth/stores.py`'s
+`build_account_service`/`build_lockout_policy`/`get_email_sender`/
+`AuditAuthEventSink`, and `app/api/deps.py`'s `get_account_service`/
+`get_email_sender` (the latter a thin FastAPI-dependency wrapper around
+the former, purely so a test can override it deterministically). Django
+parity for this surface is pending — `backend/django/tests/
+test_schema_conformance.py`'s `_PENDING_PARITY_OPS` tracks the three
+still-unimplemented ops.
+
 ## Maintenance
 `AuthService.refresh`'s reuse-detection state machine is the security-
 critical core of this component — re-run `tests/test_core.py` after any

@@ -11,9 +11,14 @@ exposes:
   - PasswordService (hash, verify, needs_rehash, dummy_verify), TokenService (mint_access, mint_refresh, decode_access, decode_refresh), AuthService (register, login, refresh, logout, resolve_access) -- in _core.py
   - UserStore / RefreshTokenStore (Protocols), UserRecord / RefreshRecord (frozen dataclasses), hash_token(raw) -- the storage seam a framework adapter implements
   - TokenPair, AccessClaims, RefreshClaims -- the claim/result shapes
-  - AuthError hierarchy: InvalidCredentials, InvalidToken, TokenReused, EmailAlreadyExists -- each documents the ErrorCode it maps to
+  - AuthError hierarchy: InvalidCredentials, InvalidToken, TokenReused, EmailAlreadyExists, InvalidSingleUseToken -- each documents the ErrorCode it maps to
   - bearer_scheme, build_get_current_principal, require_roles, AUTH_ERROR_HTTP -- the FastAPI wiring, in fastapi.py (Stage 5a, #41)
   - resolve_principal, require_roles, InsufficientRole, AUTH_ERROR_HTTP -- the Django wiring, in django.py (Stage 5b, #44)
+  - AccountService (request_email_verification, verify_email, request_password_reset, reset_password) -- email verification + password reset, composed ALONGSIDE AuthService, not a subclass -- in _core.py (Stage 5c, #45)
+  - SingleUseTokenService (issue, consume) / SingleUseTokenStore (Protocol) / SingleUseTokenRecord -- the hashed, single-use verify/reset token seam AccountService runs against
+  - LockoutPolicy (is_locked, record_failure, clear) / LockoutStore (Protocol) / AttemptRecord -- per-account failed-login lockout, optionally shared between AuthService.login and AccountService.reset_password
+  - EmailSender (Protocol) / EmailMessage / ConsoleEmailSender -- the email-delivery seam AccountService sends verify/reset links through; ConsoleEmailSender is DEV-ONLY (logs the raw token instead of delivering it)
+  - AuthEventSink (Protocol) -- the optional audit-event seam AuthService.login and every AccountService method emit through
   - its co-located doc fragment: docs/fragment.md
 -->
 
@@ -74,6 +79,7 @@ completely standalone.
 - Tokens: PyJWT HS256, injected clock, and why expiry isn't PyJWT's own check
 - Refresh-token storage: SHA-256 hash, never the raw token
 - The refresh-rotation state machine (the security-critical core)
+- Account lifecycle: email verification, password reset, lockout (Stage 5c, #45)
 - Exception hierarchy → ErrorCode mapping (for the framework adapter)
 - Testing
 - Judgment calls
@@ -120,7 +126,21 @@ completely standalone.
   refresh store's rows are keyed by.
 - `TokenPair`, `AccessClaims`, `RefreshClaims` — the result/claim shapes.
 - `AuthError` and its subclasses `InvalidCredentials`, `InvalidToken`,
-  `TokenReused`, `EmailAlreadyExists` — see the mapping section below.
+  `TokenReused`, `EmailAlreadyExists`, `InvalidSingleUseToken` — see the
+  mapping section below.
+- **Stage 5c (#45)**: `AccountService(users, tokens, email, passwords,
+  refresh_tokens, now, *, events=None, lockout=None, frontend_base_url,
+  verify_ttl=24h, reset_ttl=1h)` — `request_email_verification(user) ->
+  None`, `verify_email(raw_token) -> None`, `request_password_reset(
+  email) -> None` (never raises), `reset_password(raw_token,
+  new_password) -> None`; `SingleUseTokenService(store, now)` —
+  `issue(user_id, purpose, ttl) -> str` (raw token), `consume(raw,
+  purpose) -> str` (user id); `SingleUseTokenStore` (Protocol) /
+  `SingleUseTokenRecord`; `LockoutPolicy(store, *, max_failures,
+  lockout_duration, window, now)` — `is_locked`, `record_failure`,
+  `clear`; `LockoutStore` (Protocol) / `AttemptRecord`; `EmailSender`
+  (Protocol) / `EmailMessage` / `ConsoleEmailSender` (DEV-ONLY); and
+  `AuthEventSink` (Protocol) — see "Account lifecycle" below.
 - **`fastapi.py`**: `bearer_scheme` (an `HTTPBearer(auto_error=False)`
   instance), `build_get_current_principal(get_auth_service) ->
   <dependency>` (a dependency FACTORY — takes the app's own per-request
@@ -244,6 +264,84 @@ The persisted `RefreshRecord`, never the JWT's own claims, is the sole
 source of truth for whether a refresh token is still usable — a
 validly-signed, unexpired JWT whose row says otherwise still loses.
 
+## Account lifecycle: email verification, password reset, lockout (Stage 5c, #45)
+
+`AccountService` is composed ALONGSIDE `AuthService` — constructed and
+used independently, not a subclass, not required to touch `AuthService`
+at all — against the same underlying `UserStore`/`RefreshTokenStore` (and,
+optionally, `LockoutStore`) a project wires both services from. Three new
+seams support it, each with exactly one shipped implementation
+(`ConsoleEmailSender`) or none (`SingleUseTokenStore`/`LockoutStore`/
+`AuthEventSink` are pure `Protocol`s a framework adapter implements):
+
+- **Single-use tokens** (`SingleUseTokenService`). `issue(user_id,
+  purpose, ttl)` mints a `secrets.token_urlsafe(32)` raw token (~256 bits
+  of CSPRNG entropy), persists only its SHA-256 hash (`hash_token` — the
+  SAME fast-hash-not-a-slow-KDF reasoning `RefreshRecord` already
+  documents: a high-entropy, module-generated value, not a low-entropy
+  human-chosen secret), and returns the raw token. `consume(raw,
+  purpose)` looks it up by hash and raises `InvalidSingleUseToken` for
+  ANY of: unknown hash, already-used (`used_at` set — the row is RETAINED
+  on consumption, exactly `RefreshRecord`'s "retain, don't delete"
+  posture, so a second presentation is recognized as reuse), expired, or
+  a `purpose` mismatch (a `"verify"` token presented to a reset flow, or
+  vice versa) — all four collapse to the SAME exception and message,
+  mirroring `InvalidCredentials`'/`TokenReused`'s own "don't leak which
+  specific reason" posture.
+- **Lockout** (`LockoutPolicy`). Pure counting/threshold logic over
+  `LockoutStore`'s dumb persistence: `max_failures` consecutive failures
+  for one `account_key` within a rolling `window` locks it for
+  `lockout_duration` (re-armed on every subsequent failure while still
+  locked). `AuthService.login`'s OPTIONAL `lockout=` parameter (`None` by
+  default — every prior behavior is unchanged unless a project passes
+  one) consults it BEFORE spending a real Argon2id verify on a locked
+  account, and `AccountService.reset_password` — if given the SAME
+  `LockoutPolicy` (or at least one built against the same underlying
+  store) — clears it on a successful reset, so a user who tripped
+  lockout guessing, then reset their password, isn't left blocked for the
+  remaining cooldown despite now holding the correct password. A
+  deliberately-accepted non-atomic read-modify-write relaxation (see
+  `LockoutPolicy`'s own docstring) — at absolute worst it delays exactly
+  when a lock becomes visible by a small, bounded amount; it can NEVER
+  let a wrong password succeed.
+- **Email** (`EmailSender` / `EmailMessage`). `AccountService` builds a
+  plain-text `EmailMessage` (never HTML — no templating/injection
+  surface) with a link containing the raw token in the URL **fragment**
+  (`{frontend_base_url}/verify-email#token=<raw>` /
+  `.../reset-password#token=<raw>`) — deliberately never a query string,
+  since a fragment is never sent to the server and is typically excluded
+  from `Referer` headers and access/proxy logs, keeping a single-use,
+  bearer-credential-equivalent token out of exactly the places a query
+  string routinely ends up. `ConsoleEmailSender` (the one shipped
+  implementation) logs the message, INCLUDING the raw token — **DEV/TEST
+  ONLY**; a project's own environment branch (never anything in this
+  component) is what must ensure it's never constructed in production. A
+  real implementation (SMTP, SES, Postmark, ...) is application/
+  infrastructure code, not part of this framework-neutral core — see
+  `backend/fastapi`'s `app/core/security/auth/stores.py:
+  get_email_sender()` for a reference `SmtpEmailSender`.
+- **`request_password_reset(email)` never raises and never reveals
+  account existence** — the caller (an HTTP route) always returns the
+  SAME response either way (a project's own 202-always convention — see
+  `backend/fastapi`'s `POST /auth/request-password-reset`), extending
+  `InvalidCredentials`'s user-enumeration defense to the "forgot
+  password" flow, historically an even more common enumeration vector
+  than login itself.
+- **`reset_password` revokes EVERY refresh-token family the user has**
+  (`RefreshTokenStore.revoke_all_for_user`, added alongside
+  `revoke_family` specifically for this) — every device/session logged
+  out, not just the one that requested the reset, since whatever was true
+  about the account's security under the OLD password can no longer be
+  assumed once it's been reset.
+- **`AuthEventSink`** (optional on both services, `None` by default) lets
+  a project emit `auth.login`, `auth.lockout.triggered`,
+  `auth.email.verify_requested`/`verified`/`verify_failed`,
+  `auth.password.reset_requested`/`completed`/`failed` without this
+  module importing an audit-logging component directly — a thin adapter
+  forwards `emit(action, *, actor, outcome, **extra)` to whatever a
+  project's own audit sink expects (see `backend/fastapi`'s
+  `AuditAuthEventSink`).
+
 ## Exception hierarchy → ErrorCode mapping (for the framework adapter)
 
 This module raises its OWN exceptions rather than importing
@@ -258,6 +356,7 @@ adapter's exception handler maps each one onto that LOCKED, closed enum
 | `InvalidToken` | `unauthenticated` | 401 |
 | `TokenReused` | `unauthenticated` | 401 (same as `InvalidToken` — see below) |
 | `EmailAlreadyExists` | `conflict` | 409 |
+| `InvalidSingleUseToken` | `unauthenticated` | 401 (same generic shape — see "Account lifecycle" above) |
 
 `TokenReused` and `InvalidToken` deliberately map to the SAME code and
 the same generic message on the wire — a client (attacker or otherwise)
