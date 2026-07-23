@@ -42,7 +42,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy import Uuid as SAUuid
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,18 +51,53 @@ from app.core.db import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKey
 
 class BlogPost(Base, UUIDPrimaryKey, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "blog_posts"
+    # PARTIAL unique index, not a plain `unique=True` column constraint —
+    # `app/api/routers/blog.py`'s `_slug_taken` friendly-error-path check
+    # scopes its lookup through `BlogPost.not_deleted()` (a soft-deleted
+    # post's slug is considered FREE), so the DB-level backstop has to
+    # agree with that scoping or the two disagree: create `foo`, soft-
+    # delete it, create another `foo` — the friendly check says "free",
+    # the INSERT reaches a full-table-unique index anyway, and that
+    # daylights as an unenveloped 500 (`IntegrityError`) instead of a
+    # clean 201. `WHERE deleted_at IS NULL` makes the constraint match
+    # `not_deleted()` exactly: only one LIVE row may hold a given slug at
+    # once; any number of soft-deleted rows may still hold it. Same
+    # `sqlite_where=`/`postgresql_where=` dialect-scoped partial-index
+    # pattern `alembic/versions/0001_create_items_table.py`'s own
+    # docstring documents for `ix_items_deleted_at_null` — unlike that
+    # index (a plain, non-unique one, where a sqlite fallback to a full
+    # index is harmless), this one is UNIQUE, so it must actually be
+    # partial on sqlite too (`sqlite_where=`, not left to
+    # `postgresql_where=`'s no-op-on-sqlite behavior) or the hermetic test
+    # suite would hit the exact bug this index exists to fix. Mirrored
+    # exactly in `alembic/versions/0005_stage13d_blog.py`'s
+    # `op.create_index(...)` — keep both in sync.
+    __table_args__ = (
+        Index(
+            "uq_blog_posts_slug_active",
+            "slug",
+            unique=True,
+            sqlite_where=text("deleted_at IS NULL"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
-    # UNIQUE — the human-readable, URL-safe identifier
-    # (`app/schemas/blog.py`'s `^[a-z0-9-]+$` pattern validates the SHAPE
-    # at the request boundary; this index is the DB-level enforcement of
-    # last resort against a concurrent duplicate-slug write, the same
-    # "friendly-error-path plus DB-enforced backstop" split
-    # `alembic/versions/0002_create_auth_tables.py`'s own docstring
-    # documents for `users.email`). 220 chars — comfortably above
-    # `title`'s own 200-char cap plus room for a numeric
-    # collision-disambiguation suffix (`app/api/routers/blog.py`'s
-    # `_unique_slug`).
-    slug: Mapped[str] = mapped_column(String(220), unique=True, index=True, nullable=False)
+    # The human-readable, URL-safe identifier — NOT `unique=True` here;
+    # see `__table_args__`'s partial `uq_blog_posts_slug_active` index
+    # above for the DB-level uniqueness enforcement (scoped to live rows
+    # only). `app/schemas/blog.py`'s `^[a-z0-9-]+$` pattern validates the
+    # SHAPE at the request boundary; this index is the DB-level
+    # enforcement of last resort against a concurrent duplicate-slug
+    # write, the same "friendly-error-path plus DB-enforced backstop"
+    # split `alembic/versions/0002_create_auth_tables.py`'s own docstring
+    # documents for `users.email`. 220 chars — comfortably above `title`'s
+    # own 200-char cap plus room for a numeric collision-disambiguation
+    # suffix (`app/api/routers/blog.py`'s `_unique_slug`). No separate
+    # `index=True` here — the partial index above already covers the
+    # exact lookup `_slug_taken`/`_unique_slug` run (an equality match
+    # among live rows), so a second, full-table, non-unique index on the
+    # same column would be pure duplication, not a distinct query need.
+    slug: Mapped[str] = mapped_column(String(220), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     # Opaque ProseMirror doc — see module docstring.
     body_json: Mapped[dict] = mapped_column(JSON, nullable=False)

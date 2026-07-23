@@ -13,13 +13,17 @@ this file, matching 0001-0004's own convention).
 left at their DB-level default `ondelete` (RESTRICT) -- see each model's
 own docstring for the "don't silently cascade away authored content"
 rationale, the same posture `0002_create_auth_tables.py` documents for
-`refresh_tokens.user_id`. Indexes: `blog_posts.slug` (UNIQUE -- the
+`refresh_tokens.user_id`. Indexes: `blog_posts.slug` (`uq_blog_posts_
+slug_active`, a PARTIAL UNIQUE index, `WHERE deleted_at IS NULL` -- the
 DB-level backstop behind `app/schemas/blog.py`'s request-boundary slug
-pattern/uniqueness check), `blog_posts.{author_id,status}`,
-`blog_comments.{post_id,author_id,status}` -- the plan's own "indexes on
-slug + post_id + status" requirement, plus the FK columns themselves
-(queried directly by the admin list/filter endpoints, `app/api/routers/
-blog.py`)."""
+pattern/uniqueness check, scoped to match `app/api/routers/blog.py`'s
+`_slug_taken`'s own `not_deleted()`-scoped friendly-error-path check --
+see `app/models/blog_post.py`'s own docstring on why a PLAIN full-table
+unique index would disagree with that check and 500 on a soft-deleted
+slug's reuse), `blog_posts.{author_id,status}`, `blog_comments.
+{post_id,author_id,status}` -- the plan's own "indexes on slug + post_id
++ status" requirement, plus the FK columns themselves (queried directly
+by the admin list/filter endpoints, `app/api/routers/blog.py`)."""
 
 from __future__ import annotations
 
@@ -56,7 +60,21 @@ def upgrade() -> None:
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["author_id"], ["users.id"], name="fk_blog_posts_author_id_users"),
     )
-    op.create_index("ix_blog_posts_slug", "blog_posts", ["slug"], unique=True)
+    # Partial unique index (WHERE deleted_at IS NULL), not a plain
+    # column-level UNIQUE -- matches app/models/blog_post.py's
+    # `__table_args__` exactly; both `sqlite_where=` and
+    # `postgresql_where=` are set (unlike 0001_create_items_table.py's
+    # non-unique `ix_items_deleted_at_null`, this one is UNIQUE, so it
+    # must actually be partial on sqlite too -- see that model's own
+    # docstring).
+    op.create_index(
+        "uq_blog_posts_slug_active",
+        "blog_posts",
+        ["slug"],
+        unique=True,
+        sqlite_where=sa.text("deleted_at IS NULL"),
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.create_index("ix_blog_posts_author_id", "blog_posts", ["author_id"], unique=False)
     op.create_index("ix_blog_posts_status", "blog_posts", ["status"], unique=False)
 
@@ -92,5 +110,5 @@ def downgrade() -> None:
 
     op.drop_index("ix_blog_posts_status", table_name="blog_posts")
     op.drop_index("ix_blog_posts_author_id", table_name="blog_posts")
-    op.drop_index("ix_blog_posts_slug", table_name="blog_posts")
+    op.drop_index("uq_blog_posts_slug_active", table_name="blog_posts")
     op.drop_table("blog_posts")

@@ -243,6 +243,46 @@ def test_create_with_explicit_duplicate_slug_is_a_conflict(auth_client: TestClie
     assert response.json()["error"]["code"] == "conflict"
 
 
+def test_create_with_two_active_duplicate_slugs_is_still_a_conflict(auth_client: TestClient) -> None:
+    """Companion to `test_create_with_explicit_duplicate_slug_is_a_conflict`
+    above, spelled out explicitly alongside the soft-deleted-slug-reuse test
+    below so the two "same slug, different post state" outcomes sit next to
+    each other: TWO ACTIVE posts can never share a slug (409), but ONE
+    active post reusing a SOFT-DELETED post's slug succeeds cleanly (201,
+    see `test_create_reusing_a_soft_deleted_posts_slug_succeeds` below) --
+    the partial-unique-index fix's whole point."""
+    headers = _admin_headers(auth_client)
+    _create_post(auth_client, headers, slug="dup-slug")
+    response = auth_client.post(
+        "/admin/blog/posts",
+        json={"title": "Second", "slug": "dup-slug", "body_json": _SIMPLE_DOC, "body_html": "<p>x</p>"},
+        headers=headers,
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "conflict"
+
+
+def test_create_reusing_a_soft_deleted_posts_slug_succeeds(auth_client: TestClient) -> None:
+    """THE partial-unique-index proof: create `foo`, soft-delete it, then
+    create ANOTHER `foo` -- `_slug_taken`'s `not_deleted()`-scoped friendly
+    check already considered the slug free (that's the intended soft-delete
+    semantics); before the DB-level `uq_blog_posts_slug_active` partial
+    unique index (`app/models/blog_post.py`), the OLD full-table unique
+    index disagreed and this INSERT raised an unenveloped 500
+    (`IntegrityError`). Now the DB constraint matches `not_deleted()`
+    exactly, so this is a clean 201, not a 500 -- and NOT a 409 either
+    (the caller's chosen slug genuinely is available again)."""
+    headers = _admin_headers(auth_client)
+    first = _create_post(auth_client, headers, slug="reusable-slug")
+
+    delete_response = auth_client.delete(f"/admin/blog/posts/{first['id']}", headers=headers)
+    assert delete_response.status_code == 204, delete_response.text
+
+    second = _create_post(auth_client, headers, slug="reusable-slug")
+    assert second["slug"] == "reusable-slug"
+    assert second["id"] != first["id"]
+
+
 def test_create_with_invalid_slug_shape_is_a_422(auth_client: TestClient) -> None:
     headers = _admin_headers(auth_client)
     response = auth_client.post(
@@ -257,6 +297,47 @@ def test_create_with_invalid_slug_shape_is_a_422(auth_client: TestClient) -> Non
     )
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_create_with_body_html_over_the_size_cap_is_a_422(auth_client: TestClient) -> None:
+    """`app/schemas/blog.py`'s `_BODY_HTML_MAX_CHARS` (1,000,000) defense-
+    in-depth cap -- a `body_html` one character over it is rejected at the
+    schema layer (422 `validation_failed`), never reaches the sanitizer or
+    the database."""
+    headers = _admin_headers(auth_client)
+    oversized_html = "<p>" + ("x" * 1_000_000) + "</p>"
+    response = auth_client.post(
+        "/admin/blog/posts",
+        json={"title": "Too Big", "body_json": _SIMPLE_DOC, "body_html": oversized_html},
+        headers=headers,
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_create_with_body_json_over_the_size_cap_is_a_422(auth_client: TestClient) -> None:
+    """`app/schemas/blog.py`'s `_BODY_JSON_MAX_SERIALIZED_CHARS` (1,000,000)
+    defense-in-depth cap, enforced on the SERIALIZED (`json.dumps`) size of
+    `body_json` via `_check_body_json_size`."""
+    headers = _admin_headers(auth_client)
+    oversized_doc = {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x" * 1_100_000}]}],
+    }
+    response = auth_client.post(
+        "/admin/blog/posts",
+        json={"title": "Too Big", "body_json": oversized_doc, "body_html": "<p>x</p>"},
+        headers=headers,
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_create_with_body_html_at_normal_size_still_works(auth_client: TestClient) -> None:
+    headers = _admin_headers(auth_client)
+    normal_html = "<p>" + ("hello world " * 100) + "</p>"
+    created = _create_post(auth_client, headers, title="Normal Size", body_html=normal_html)
+    assert created["body_html"].startswith("<p>hello world")
 
 
 def test_create_and_audit(auth_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
@@ -364,6 +445,33 @@ def test_update_returns_404_for_an_unknown_id(auth_client: TestClient) -> None:
     headers = _admin_headers(auth_client)
     response = auth_client.patch(f"/admin/blog/posts/{_SOME_ID}", json={"title": "x"}, headers=headers)
     assert response.status_code == 404, response.text
+
+
+def test_update_with_body_html_over_the_size_cap_is_a_422(auth_client: TestClient) -> None:
+    headers = _admin_headers(auth_client)
+    created = _create_post(auth_client, headers)
+
+    oversized_html = "<p>" + ("x" * 1_000_000) + "</p>"
+    response = auth_client.patch(
+        f"/admin/blog/posts/{created['id']}", json={"body_html": oversized_html}, headers=headers
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_update_with_body_json_over_the_size_cap_is_a_422(auth_client: TestClient) -> None:
+    headers = _admin_headers(auth_client)
+    created = _create_post(auth_client, headers)
+
+    oversized_doc = {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x" * 1_100_000}]}],
+    }
+    response = auth_client.patch(
+        f"/admin/blog/posts/{created['id']}", json={"body_json": oversized_doc}, headers=headers
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "validation_failed"
 
 
 # ---------------------------------------------------------------------------

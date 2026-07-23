@@ -24,19 +24,48 @@ reloaded into the editor")."""
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # The same shape validated at the request boundary (Field(pattern=...)
 # below) AND used by app/api/routers/blog.py to slugify a title when no
 # slug is supplied — kept here, not duplicated in the router, so the
 # ONE regex both call sites rely on can't drift.
 SLUG_PATTERN = r"^[a-z0-9-]+$"
+
+# Defense-in-depth size caps on the two body columns (`app/models/
+# blog_post.py`'s `body_html`/`body_json`) — this write-path is already
+# admin-gated (`require_admin`) and rate-limited (`require_admin_rate_
+# limit`, `app/api/routers/blog.py`), so an unbounded body isn't an
+# open/anonymous attack surface; these caps are a generous, documented
+# backstop against a compromised/careless admin session (or a buggy
+# editor client) persisting an unbounded payload, not a tight editorial
+# limit. `body_html` (sanitized rich-text render source): 1,000,000 chars
+# (~1 MB) — comfortably above any real blog post's rendered HTML while
+# still bounding storage/response-payload size. `body_json` (the raw
+# ProseMirror doc): same ~1 MB ceiling on its SERIALIZED (`json.dumps`)
+# size, checked in `BlogPostCreate`/`BlogPostUpdate`'s `_check_body_json_size`
+# validator below — a `dict` has no `max_length` of its own the way a
+# `str` does, so the cap is enforced on the JSON-encoded byte count
+# instead, the same quantity `body_html`'s cap bounds.
+_BODY_HTML_MAX_CHARS = 1_000_000
+_BODY_JSON_MAX_SERIALIZED_CHARS = 1_000_000
+
+
+def _check_body_json_size(value: dict[str, Any]) -> dict[str, Any]:
+    serialized_len = len(json.dumps(value))
+    if serialized_len > _BODY_JSON_MAX_SERIALIZED_CHARS:
+        raise ValueError(
+            f"body_json is too large: serialized size {serialized_len} exceeds the "
+            f"{_BODY_JSON_MAX_SERIALIZED_CHARS}-character cap."
+        )
+    return value
 
 
 class BlogPostStatus(StrEnum):
@@ -105,7 +134,9 @@ class BlogPostCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     slug: str | None = Field(default=None, min_length=1, max_length=220, pattern=SLUG_PATTERN)
     body_json: dict[str, Any]
-    body_html: str
+    body_html: str = Field(max_length=_BODY_HTML_MAX_CHARS)
+
+    _check_body_json_size = field_validator("body_json")(_check_body_json_size)
 
 
 class BlogPostUpdate(BaseModel):
@@ -131,7 +162,20 @@ class BlogPostUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     slug: str | None = Field(default=None, min_length=1, max_length=220, pattern=SLUG_PATTERN)
     body_json: dict[str, Any] | None = None
-    body_html: str | None = None
+    body_html: str | None = Field(default=None, max_length=_BODY_HTML_MAX_CHARS)
+
+    @field_validator("body_json")
+    @classmethod
+    def _check_body_json_size(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        # `None` here means "explicitly nulled" (an omitted field never
+        # reaches a validator at all, matching `BlogPostCreate`'s own
+        # `_check_body_json_size`'s docstring elsewhere in this module) —
+        # `_reject_explicit_null` below is what turns that into a 422, so
+        # this validator has nothing to size-check for a `None` value and
+        # just passes it through unchanged.
+        if value is None:
+            return value
+        return _check_body_json_size(value)
 
     @model_validator(mode="after")
     def _reject_explicit_null(self) -> BlogPostUpdate:

@@ -2399,6 +2399,7 @@
           },
           "body_html": {
             "type": "string",
+            "maxLength": 1000000,
             "title": "Body Html"
           }
         },
@@ -2585,7 +2586,8 @@
           "body_html": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 1000000
               },
               {
                 "type": "null"

@@ -521,18 +521,18 @@ class BlogPost(models.Model):
     silently cascading away authored content."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    # UNIQUE — DB-level backstop behind core/serializers.py's request-
-    # boundary slug pattern/uniqueness check (see BlogPost's own FastAPI
-    # docstring for the "friendly-error-path plus DB-enforced backstop"
-    # split this mirrors). Plain CharField, NOT Django's own `SlugField` —
-    # `SlugField`'s built-in `validate_slug` validator accepts
-    # `[-a-zA-Z0-9_]+` (uppercase AND underscore both allowed), a WIDER
-    # charset than this app's own `^[a-z0-9-]+$` policy
-    # (`core/serializers.py`'s `BlogPostCreateSerializer`/
-    # `BlogPostUpdateSerializer`); using `SlugField` here would invite a
-    # second, looser, easy-to-forget validation path to drift from the one
-    # this app actually enforces at the request boundary.
-    slug = models.CharField(max_length=220, unique=True)
+    # NOT `unique=True` — DB-level uniqueness is enforced by the PARTIAL
+    # `uq_blog_posts_slug_active` constraint in `Meta.constraints` below
+    # instead (see that constraint's own comment for why). Plain
+    # CharField, NOT Django's own `SlugField` — `SlugField`'s built-in
+    # `validate_slug` validator accepts `[-a-zA-Z0-9_]+` (uppercase AND
+    # underscore both allowed), a WIDER charset than this app's own
+    # `^[a-z0-9-]+$` policy (`core/serializers.py`'s
+    # `BlogPostCreateSerializer`/`BlogPostUpdateSerializer`); using
+    # `SlugField` here would invite a second, looser, easy-to-forget
+    # validation path to drift from the one this app actually enforces at
+    # the request boundary.
+    slug = models.CharField(max_length=220)
     title = models.CharField(max_length=200)
     body_json = models.JSONField()
     body_html = models.TextField()
@@ -551,6 +551,31 @@ class BlogPost(models.Model):
         db_table = "blog_posts"
         indexes = [
             models.Index(fields=["status"], name="blog_posts_status_idx"),
+        ]
+        constraints = [
+            # PARTIAL unique constraint (WHERE deleted_at IS NULL), not a
+            # plain `unique=True` column constraint on `slug` above —
+            # `core/views.py`'s `_slug_taken` friendly-error-path check
+            # scopes its lookup through `BlogPost.objects`'s own soft-
+            # delete-scoped default manager (a soft-deleted post's slug is
+            # considered FREE), so the DB-level backstop has to agree with
+            # that scoping or the two disagree: create `foo`, soft-delete
+            # it, create another `foo` — the friendly check says "free",
+            # the INSERT reaches a full-table-unique constraint anyway,
+            # and that daylights as an unenveloped 500 (`IntegrityError`)
+            # instead of a clean 201. `condition=Q(deleted_at__isnull=
+            # True)` makes the constraint match the default manager's own
+            # scoping exactly: only one LIVE row may hold a given slug at
+            # once; any number of soft-deleted rows may still hold it.
+            # Mirrored exactly in `core/migrations/0005_stage13d_blog.py`'s
+            # `AddConstraint` — keep both in sync. Byte-identical intent to
+            # `app/models/blog_post.py`'s `uq_blog_posts_slug_active`
+            # partial index on the FastAPI track.
+            models.UniqueConstraint(
+                fields=["slug"],
+                condition=Q(deleted_at__isnull=True),
+                name="uq_blog_posts_slug_active",
+            ),
         ]
 
     def __str__(self) -> str:  # pragma: no cover - trivial

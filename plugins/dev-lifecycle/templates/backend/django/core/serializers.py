@@ -8,6 +8,8 @@ this module only owns the shape."""
 
 from __future__ import annotations
 
+import json
+
 from rest_framework import serializers
 
 from core.contract.errors import ErrorCode
@@ -309,6 +311,43 @@ _COMMENT_STATUS_CHOICES = ["visible", "hidden", "pending"]
 # backends validate a caller-supplied slug against.
 SLUG_PATTERN = r"^[a-z0-9-]+$"
 
+# Defense-in-depth size caps -- byte-identical intent and VALUE to
+# `app/schemas/blog.py`'s `_BODY_HTML_MAX_CHARS`/
+# `_BODY_JSON_MAX_SERIALIZED_CHARS` (see that module's own comment for the
+# full rationale: this write-path is already admin-gated and rate-limited,
+# so this is a generous backstop, not a tight editorial limit). Kept at the
+# SAME 1,000,000-character value on both tracks deliberately -- `body_html`'s
+# cap is `CharField(max_length=...)`, which drf-spectacular renders as a
+# `maxLength` JSON Schema keyword -- exactly the keyword pydantic's own
+# `Field(max_length=...)` renders on the FastAPI side -- so the two MUST
+# match numerically or `tests/test_schema_conformance.py`'s strict wire-shape
+# comparison fails on `maxLength` divergence.
+_BODY_HTML_MAX_CHARS = 1_000_000
+_BODY_JSON_MAX_SERIALIZED_CHARS = 1_000_000
+
+
+def _validate_body_json_size(value: dict) -> dict:
+    """Shared body for `BlogPostCreateSerializer`/`BlogPostUpdateSerializer`'s
+    `validate_body_json` -- byte-identical check to `app/schemas/blog.py`'s
+    `_check_body_json_size`: caps the SERIALIZED (`json.dumps`) size, not
+    Python object identity/depth, the same quantity the FastAPI-side
+    validator bounds. `DictField` has no `max_length` of its own the way
+    `CharField` does, so this is a `validate_<field>` method, not a
+    constructor kwarg -- deliberately NOT schema-visible (FastAPI's own
+    `field_validator` is likewise a runtime-only check with no
+    `Field(max_length=...)` counterpart on `body_json`, so neither side's
+    OpenAPI schema documents a `body_json` size constraint; only
+    `body_html`'s does, via `maxLength`) -- this keeps both tracks'
+    wire-schemas for `body_json` identical (no divergence to reconcile)
+    while still enforcing the SAME runtime cap on both."""
+    serialized_len = len(json.dumps(value))
+    if serialized_len > _BODY_JSON_MAX_SERIALIZED_CHARS:
+        raise serializers.ValidationError(
+            f"body_json is too large: serialized size {serialized_len} exceeds the "
+            f"{_BODY_JSON_MAX_SERIALIZED_CHARS}-character cap."
+        )
+    return value
+
 
 def _reject_unrecognized_fields(serializer: serializers.Serializer) -> None:
     """Shared body for the `validate()` override every blog write
@@ -376,7 +415,10 @@ class BlogPostCreateSerializer(serializers.Serializer):
         regex=SLUG_PATTERN, min_length=1, max_length=220, required=False, allow_null=True, default=None
     )
     body_json = serializers.DictField()
-    body_html = serializers.CharField(allow_blank=True)
+    body_html = serializers.CharField(allow_blank=True, max_length=_BODY_HTML_MAX_CHARS)
+
+    def validate_body_json(self, value: dict) -> dict:
+        return _validate_body_json_size(value)
 
     def validate(self, attrs: dict) -> dict:
         _reject_unrecognized_fields(self)
@@ -406,7 +448,19 @@ class BlogPostUpdateSerializer(serializers.Serializer):
         regex=SLUG_PATTERN, min_length=1, max_length=220, required=False, allow_null=True
     )
     body_json = serializers.DictField(required=False, allow_null=True)
-    body_html = serializers.CharField(allow_blank=True, required=False, allow_null=True)
+    body_html = serializers.CharField(
+        allow_blank=True, required=False, allow_null=True, max_length=_BODY_HTML_MAX_CHARS
+    )
+
+    def validate_body_json(self, value: dict | None) -> dict | None:
+        # `None` here means "explicitly nulled" -- `validate()` below is
+        # what turns that into a 422 (see this class's own docstring), so
+        # there's nothing to size-check for a `None` value; pass it
+        # through unchanged. Byte-identical short-circuit to `app/schemas/
+        # blog.py`'s `BlogPostUpdate._check_body_json_size`.
+        if value is None:
+            return value
+        return _validate_body_json_size(value)
 
     def validate(self, attrs: dict) -> dict:
         _reject_unrecognized_fields(self)

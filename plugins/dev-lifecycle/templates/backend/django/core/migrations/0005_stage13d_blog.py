@@ -3,6 +3,7 @@
 import django.db.models.deletion
 import uuid
 from django.db import migrations, models
+from django.db.models import Q
 
 
 class Migration(migrations.Migration):
@@ -24,7 +25,7 @@ class Migration(migrations.Migration):
                         serialize=False,
                     ),
                 ),
-                ("slug", models.CharField(max_length=220, unique=True)),
+                ("slug", models.CharField(max_length=220)),
                 ("title", models.CharField(max_length=200)),
                 ("body_json", models.JSONField()),
                 ("body_html", models.TextField()),
@@ -112,5 +113,20 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="comment",
             index=models.Index(fields=["status"], name="blog_comments_status_idx"),
+        ),
+        # Partial unique constraint (WHERE deleted_at IS NULL), not a plain
+        # column-level `unique=True` -- matches core/models.py's
+        # `BlogPost.Meta.constraints` exactly; see that constraint's own
+        # comment for why a full-table unique constraint would 500 on a
+        # soft-deleted slug's reuse. Byte-identical intent to
+        # alembic/versions/0005_stage13d_blog.py's `uq_blog_posts_slug_active`
+        # partial index on the FastAPI track.
+        migrations.AddConstraint(
+            model_name="blogpost",
+            constraint=models.UniqueConstraint(
+                condition=Q(deleted_at__isnull=True),
+                fields=("slug",),
+                name="uq_blog_posts_slug_active",
+            ),
         ),
     ]

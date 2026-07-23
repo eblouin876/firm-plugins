@@ -34,5 +34,6 @@ export interface BlogPostCreate {
   title: string;
   slug?: string | null;
   body_json: BlogPostCreateBodyJson;
+  /** @maxLength 1000000 */
   body_html: string;
 }

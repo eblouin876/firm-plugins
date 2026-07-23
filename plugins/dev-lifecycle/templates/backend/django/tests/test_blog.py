@@ -215,6 +215,44 @@ def test_create_with_explicit_duplicate_slug_is_a_conflict(api_client: APIClient
     assert response.json()["error"]["code"] == "conflict"
 
 
+def test_create_with_two_active_duplicate_slugs_is_still_a_conflict(api_client: APIClient) -> None:
+    """Companion to `test_create_with_explicit_duplicate_slug_is_a_conflict`
+    above -- TWO ACTIVE posts can never share a slug (409), but ONE active
+    post reusing a SOFT-DELETED post's slug succeeds cleanly (201, see
+    `test_create_reusing_a_soft_deleted_posts_slug_succeeds` below). Byte-
+    identical scenario to `backend/fastapi`'s test of the same name."""
+    headers = _admin_headers(api_client)
+    _create_post(api_client, headers, slug="dup-slug")
+    response = api_client.post(
+        "/admin/blog/posts",
+        {"title": "Second", "slug": "dup-slug", "body_json": _SIMPLE_DOC, "body_html": "<p>x</p>"},
+        format="json",
+        **headers,
+    )
+    assert response.status_code == 409, response.content
+    assert response.json()["error"]["code"] == "conflict"
+
+
+def test_create_reusing_a_soft_deleted_posts_slug_succeeds(api_client: APIClient) -> None:
+    """THE partial-unique-constraint proof -- byte-identical scenario to
+    `backend/fastapi`'s test of the same name: create `foo`, soft-delete
+    it, then create ANOTHER `foo`. Before the DB-level
+    `uq_blog_posts_slug_active` partial unique constraint (`core/
+    models.py`), the OLD full-table unique constraint on `slug` disagreed
+    with `_slug_taken`'s soft-delete-scoped friendly check and this INSERT
+    raised an unenveloped 500 (`IntegrityError`). Now a clean 201, not a
+    500 -- and not a 409 either."""
+    headers = _admin_headers(api_client)
+    first = _create_post(api_client, headers, slug="reusable-slug")
+
+    delete_response = api_client.delete(f"/admin/blog/posts/{first['id']}", **headers)
+    assert delete_response.status_code == 204, delete_response.content
+
+    second = _create_post(api_client, headers, slug="reusable-slug")
+    assert second["slug"] == "reusable-slug"
+    assert second["id"] != first["id"]
+
+
 def test_create_with_invalid_slug_shape_is_a_422(api_client: APIClient) -> None:
     headers = _admin_headers(api_client)
     response = api_client.post(
@@ -230,6 +268,50 @@ def test_create_with_invalid_slug_shape_is_a_422(api_client: APIClient) -> None:
     )
     assert response.status_code == 422, response.content
     assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_create_with_body_html_over_the_size_cap_is_a_422(api_client: APIClient) -> None:
+    """`core/serializers.py`'s `_BODY_HTML_MAX_CHARS` (1,000,000) defense-
+    in-depth cap -- byte-identical scenario/cap value to `backend/fastapi`'s
+    test of the same name."""
+    headers = _admin_headers(api_client)
+    oversized_html = "<p>" + ("x" * 1_000_000) + "</p>"
+    response = api_client.post(
+        "/admin/blog/posts",
+        {"title": "Too Big", "body_json": _SIMPLE_DOC, "body_html": oversized_html},
+        format="json",
+        **headers,
+    )
+    assert response.status_code == 422, response.content
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_create_with_body_json_over_the_size_cap_is_a_422(api_client: APIClient) -> None:
+    """`core/serializers.py`'s `_BODY_JSON_MAX_SERIALIZED_CHARS`
+    (1,000,000) defense-in-depth cap, enforced on the SERIALIZED
+    (`json.dumps`) size via `validate_body_json`/`_validate_body_json_size`
+    -- byte-identical scenario/cap value to `backend/fastapi`'s test of the
+    same name."""
+    headers = _admin_headers(api_client)
+    oversized_doc = {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x" * 1_100_000}]}],
+    }
+    response = api_client.post(
+        "/admin/blog/posts",
+        {"title": "Too Big", "body_json": oversized_doc, "body_html": "<p>x</p>"},
+        format="json",
+        **headers,
+    )
+    assert response.status_code == 422, response.content
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_create_with_body_html_at_normal_size_still_works(api_client: APIClient) -> None:
+    headers = _admin_headers(api_client)
+    normal_html = "<p>" + ("hello world " * 100) + "</p>"
+    created = _create_post(api_client, headers, title="Normal Size", body_html=normal_html)
+    assert created["body_html"].startswith("<p>hello world")
 
 
 def test_create_rejects_an_unknown_field(api_client: APIClient) -> None:
@@ -366,6 +448,33 @@ def test_update_returns_404_for_an_unknown_id(api_client: APIClient) -> None:
     headers = _admin_headers(api_client)
     response = api_client.patch(f"/admin/blog/posts/{_SOME_ID}", {"title": "x"}, format="json", **headers)
     assert response.status_code == 404, response.content
+
+
+def test_update_with_body_html_over_the_size_cap_is_a_422(api_client: APIClient) -> None:
+    headers = _admin_headers(api_client)
+    created = _create_post(api_client, headers)
+
+    oversized_html = "<p>" + ("x" * 1_000_000) + "</p>"
+    response = api_client.patch(
+        f"/admin/blog/posts/{created['id']}", {"body_html": oversized_html}, format="json", **headers
+    )
+    assert response.status_code == 422, response.content
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_update_with_body_json_over_the_size_cap_is_a_422(api_client: APIClient) -> None:
+    headers = _admin_headers(api_client)
+    created = _create_post(api_client, headers)
+
+    oversized_doc = {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "x" * 1_100_000}]}],
+    }
+    response = api_client.patch(
+        f"/admin/blog/posts/{created['id']}", {"body_json": oversized_doc}, format="json", **headers
+    )
+    assert response.status_code == 422, response.content
+    assert response.json()["error"]["code"] == "validation_failed"
 
 
 # ---------------------------------------------------------------------------
