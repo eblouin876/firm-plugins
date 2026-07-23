@@ -12,9 +12,11 @@ from core.views import (
     HealthCheckView,
     ItemViewSet,
     LoginView,
+    LogoutView,
     MeView,
     ReadinessCheckView,
     RefreshView,
+    RegisterView,
 )
 
 # `trailing_slash=False`: backend/fastapi's contract has no trailing slash
@@ -27,8 +29,10 @@ router.register("items", ItemViewSet, basename="item")
 urlpatterns = [
     path("health", HealthCheckView.as_view(), name="health"),
     path("readyz", ReadinessCheckView.as_view(), name="readyz"),
+    path("auth/register", RegisterView.as_view(), name="auth-register"),
     path("auth/login", LoginView.as_view(), name="auth-login"),
     path("auth/refresh", RefreshView.as_view(), name="auth-refresh"),
+    path("auth/logout", LogoutView.as_view(), name="auth-logout"),
     path("auth/me", MeView.as_view(), name="auth-me"),
     *router.urls,
 ]

@@ -334,13 +334,16 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # `logout`/`me` all excluded below -- and Stage 5b (#44) is where the whole
 # surface (stub replacement AND the 401/409 response declarations that go
 # with real behavior) lands together, not a operation at a time.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = {
-    ("/auth/register", "post"),
-    ("/auth/login", "post"),
-    ("/auth/refresh", "post"),
-    ("/auth/logout", "post"),
-    ("/auth/me", "get"),
-}
+# Stage 5b (#44) landed real behavior for all five `/auth/*` operations
+# (core/views.py's RegisterView/LoginView/RefreshView/LogoutView/MeView)
+# with a wire-shape that matches the frozen contract exactly (proven by
+# the strict comparison above, which now includes every one of them) --
+# EMPTY, not deleted, so this constant (and both stale-guards below, which
+# still apply to any FUTURE pending-parity op) stays the documented seam a
+# later stage's own in-flight parity work reuses, same shape as `_KNOWN_
+# DIVERGENCES` staying declared-but-empty would if every entry were
+# resolved.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
