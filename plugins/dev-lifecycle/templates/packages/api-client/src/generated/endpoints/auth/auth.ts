@@ -103,6 +103,24 @@ export const getRegisterAuthRegisterPostUrl = () => {
  * (the secure default) needs the caller to actually consume the emailed
  * link (`POST /auth/verify-email`) before `AuthService.login` will let
  * this account in; see that dependency's own docstring.
+ *
+ * Adversarial-review fix (M2): `request_email_verification` is wrapped in
+ * `try/except Exception` — the user row is already durably committed by
+ * the time this runs (`AuthService.register` returned successfully), so
+ * a verification-email failure here (SMTP outage, bounced address) must
+ * NEVER turn into a 500: the account already exists, a retry would just
+ * 409 on the duplicate email, `require_verification=True` means the
+ * account can't log in either way, and the wire caller (whoever showed
+ * the registration form) has no way to "undo" or recover a 500 here —
+ * it would brick a just-created account with no path forward. Register
+ * stays 201 regardless of whether the email actually went out; the
+ * failure is only logged/audited (`auth.register.verification_email_
+ * failed`, no PII/token in the event), never surfaced to the caller. The
+ * recovery path for an account whose verification email never arrived is
+ * `POST /auth/request-password-reset` -> `POST /auth/reset-password` —
+ * `AccountService.reset_password` now also marks the email verified (see
+ * `_core.AccountService.reset_password`'s own docstring), so a user who
+ * never got their verification link can still get into their account.
  * @summary Register
  */
 export const registerAuthRegisterPost = async (registerRequest: RegisterRequest, options?: RequestInit): Promise<registerAuthRegisterPostResponse> => {
@@ -201,6 +219,33 @@ export const getLoginAuthLoginPostUrl = () => {
  * (-> 401 `unauthenticated`) identically for an unknown email or a wrong
  * password (see that exception's own docstring on the deliberate
  * user-enumeration defense), uncaught here.
+ *
+ * Stage 5d (#46) web cookie mode: `request.headers.get("X-Auth-Mode")
+ * == "cookie"` switches this call into cookie mode — read directly off
+ * `request.headers`, deliberately NOT a declared `Header(...)`
+ * parameter (see this module's own docstring for why: keeps it out of
+ * the exported OpenAPI schema as a documented parameter). Anything
+ * else (absent header, any other value) is BEARER mode — the exact,
+ * unchanged current behavior; mode is NEVER inferred from User-Agent or
+ * any other signal, matching the locked design. No CSRF check on login
+ * either way: login is credential-authenticated (email+password), and
+ * there is no cookie yet for a CSRF check to protect.
+ *
+ * Cookie mode still returns the SAME `TokenResponse` shape — the wire
+ * contract (`packages/api-client/openapi.json`'s `TokenResponse`
+ * schema) is byte-unchanged — but with `refresh_token=""` in the body
+ * (an empty string still satisfies the schema's required `str` field);
+ * the real refresh JWT travels ONLY in the HttpOnly `refresh_token`
+ * cookie `set_auth_cookies` sets below, alongside a fresh, independent
+ * CSRF cookie (`generate_csrf_token()` — never derived from either
+ * token) the SPA echoes back as `X-CSRF-Token` on every cookie-
+ * authenticated `/auth/refresh`/`/auth/logout` call. `max_age` is this
+ * request's own `jwt_refresh_ttl_seconds`, read off `request.app.state.
+ * settings` — the SAME `Settings` instance this app was actually
+ * constructed with (see `app/api/deps.py:get_auth_service`'s own
+ * docstring on why that's read this way rather than `Depends(
+ * get_settings)`), so neither cookie outlives the refresh token it's
+ * paired with.
  * @summary Login
  */
 export const loginAuthLoginPost = async (loginRequest: LoginRequest, options?: RequestInit): Promise<loginAuthLoginPostResponse> => {
@@ -303,6 +348,33 @@ export const getRefreshAuthRefreshPostUrl = () => {
  * docstring), uncaught here. A `TokenReused` raise has, as a side
  * effect, ALREADY revoked the token's entire family in the DB by the
  * time this handler's caller sees the 401.
+ *
+ * Stage 5d (#46) web cookie mode: DUAL-SOURCE, decided per-request by
+ * `read_refresh_cookie(request)` (whether the `refresh_token` cookie is
+ * actually present on THIS request), never by a header the client
+ * declares — a forged/absent cookie can't claim cookie mode, and a
+ * genuine cookie-bearing browser request can't accidentally fall onto
+ * the bearer path either.
+ *
+ * - **Cookie path** (cookie present): `enforce_csrf(request)` runs
+ *   FIRST — raises `CsrfValidationError` (-> 403 `permission_denied`,
+ *   `AUTH_ERROR_HTTP`) before the cookie's refresh token is ever
+ *   presented to `AuthService.refresh` at all, so a request that fails
+ *   the double-submit check never gets to attempt a rotation. The
+ *   request BODY's `payload.refresh_token` is parsed (still required —
+ *   `RefreshRequest`'s schema is unchanged) but its VALUE is
+ *   deliberately ignored; the cookie's own value is what's rotated.
+ *   On success, BOTH cookies are set again — `set_auth_cookies` with
+ *   the NEWLY minted refresh JWT and a FRESH `generate_csrf_token()`
+ *   (never the old CSRF value) — exactly `login`'s own cookie-setting
+ *   shape, so a stolen, already-rotated refresh cookie (reused after
+ *   this response) is rejected the same way `AuthService.refresh`'s
+ *   reuse-detection already rejects any other reused refresh token
+ *   (401, whole family revoked). The response body is `TokenResponse`
+ *   with `refresh_token=""`, matching `login`'s cookie-mode shape.
+ * - **Bearer path** (no cookie): the exact, unchanged prior behavior —
+ *   `payload.refresh_token` is the real token, no CSRF check, and the
+ *   real new refresh JWT is returned in the body.
  * @summary Refresh token
  */
 export const refreshAuthRefreshPost = async (refreshRequest: RefreshRequest, options?: RequestInit): Promise<refreshAuthRefreshPostResponse> => {
@@ -396,6 +468,24 @@ export const getLogoutAuthLogoutPostUrl = () => {
  * design (see that method's own docstring): an already-invalid, unknown,
  * or already-revoked refresh token still returns 204, never an error.
  * Revokes the entire token family, not just the presented token.
+ *
+ * Stage 5d (#46) web cookie mode: same dual-source shape as `refresh`
+ * above, decided by `read_refresh_cookie(request)`.
+ *
+ * - **Cookie path** (cookie present): JUDGMENT CALL — logout is
+ *   STATE-CHANGING (it revokes the presented token's entire family via
+ *   `AuthService.logout`), so this endpoint enforces the double-submit
+ *   CSRF check on the cookie path too, `enforce_csrf(request)` called
+ *   BEFORE the best-effort logout runs — a cookie-present request with
+ *   a missing/blank/mismatched `X-CSRF-Token` is rejected 403 at that
+ *   gate and `AuthService.logout` is never even called; it does NOT
+ *   reach 204. This does not weaken `AuthService.logout`'s own
+ *   idempotency for the TOKEN itself — a bad/expired/already-revoked
+ *   cookie value, once past the CSRF gate, still 204s exactly as the
+ *   bearer path already does. On success, clears both cookies
+ *   (`clear_auth_cookies`).
+ * - **Bearer path** (no cookie): the exact, unchanged prior behavior —
+ *   the body's `refresh_token`, no CSRF check, 204 either way.
  * @summary Logout
  */
 export const logoutAuthLogoutPost = async (refreshRequest: RefreshRequest, options?: RequestInit): Promise<logoutAuthLogoutPostResponse> => {
