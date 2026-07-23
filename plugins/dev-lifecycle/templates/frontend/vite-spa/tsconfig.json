@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // NOTE (materialized-location path): this app is authored at
+  // templates/frontend/vite-spa/ but scaffolding MATERIALIZES it into
+  // <project>/apps/web/ (the pnpm-workspace `apps/*` glob), so this
+  // "extends" path is written for the materialized location — two levels up
+  // from apps/web/ to the project root — NOT for where this file sits in the
+  // firm-plugins repo. Same convention as @repo/api-client and
+  // @repo/web-shared; don't "fix" it to be firm-plugins-relative.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The base pins Node-executed `module`/`moduleResolution` (NodeNext),
+    // which requires explicit `.js` extensions on relative imports. This app
+    // is bundled by Vite (and imports the extensionless @repo/api-client /
+    // @repo/web-shared builds), so it overrides to `bundler` resolution —
+    // the same override both library packages make.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    // Ambient types: `vite/client` (typing `import.meta.env`, augmented in
+    // src/vite-env.d.ts with this app's VITE_* vars), plus the test toolchain
+    // (vitest globals + jest-dom matchers, node for msw/node in tests).
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom", "node"],
+    // Vite owns the app bundle; tsc here is a pure typechecker (see
+    // package.json's `build`), so it never emits.
+    "noEmit": true
+  },
+  // `src` only — vite.config.ts and vitest.setup.ts are linted via the
+  // eslint config's `allowDefaultProject` rather than typechecked here, the
+  // same split @repo/web-shared uses for its vitest config.
+  "include": ["src"]
+}
