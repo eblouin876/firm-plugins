@@ -27,13 +27,13 @@ interface ApiErrorBoundaryState {
  * that isn't caught closer lands here.
  */
 export class ApiErrorBoundary extends Component<ApiErrorBoundaryProps, ApiErrorBoundaryState> {
-  state: ApiErrorBoundaryState = { error: null };
+  override state: ApiErrorBoundaryState = { error: null };
 
   static getDerivedStateFromError(error: Error): ApiErrorBoundaryState {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
     this.props.onError?.(error, info);
   }
 
@@ -41,7 +41,7 @@ export class ApiErrorBoundary extends Component<ApiErrorBoundaryProps, ApiErrorB
     this.setState({ error: null });
   };
 
-  render(): ReactNode {
+  override render(): ReactNode {
     const { error } = this.state;
     if (error !== null) return this.props.fallback(error, this.reset);
     return this.props.children;

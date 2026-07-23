@@ -193,11 +193,13 @@ describe("AuthProvider — cookie-mode lifecycle", () => {
     renderApp({ onAuthExpired });
 
     await user.click(screen.getByRole("button", { name: "login" }));
-    await waitFor(() => expect(getAccessToken()).toBe(TOKEN_A));
 
-    // ping 401 → refresh → refresh 401 → clear + onAuthExpired.
+    // login → ping 401 → refresh → refresh 401 → clear + onAuthExpired. The
+    // whole cycle can complete before the first assertion runs, so assert only
+    // the terminal state, not the transient logged-in moment.
     await waitFor(() => expect(onAuthExpired).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("authed")).toHaveTextContent("false"));
+    expect(refreshCount).toBe(1);
     expect(getAccessToken()).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import type { ErrorEnvelope } from "@repo/api-client";
@@ -8,10 +9,26 @@ import { applyEnvelopeToForm } from "./applyEnvelopeToForm";
 import { useZodForm } from "./useZodForm";
 import { FieldError } from "./FieldError";
 
+// A real component (not renderHook) so react-hook-form's formState proxy
+// subscribes to `errors` during render and re-renders when they're set.
+const EnvForm = ({ source }: { source: unknown }) => {
+  const { setError, formState } = useForm<{ email: string; password: string }>();
+  const [applied, setApplied] = useState<boolean | null>(null);
+  return (
+    <div>
+      <button onClick={() => setApplied(applyEnvelopeToForm(source, setError))}>apply</button>
+      <div data-testid="applied">{String(applied)}</div>
+      <FieldError error={formState.errors.email} />
+      <div data-testid="root">
+        {(formState.errors as Record<string, { message?: string }>).root?.message ?? ""}
+      </div>
+    </div>
+  );
+};
+
 describe("applyEnvelopeToForm", () => {
   it("maps a 422 validation_failed envelope onto per-field and root errors", async () => {
-    const { result } = renderHook(() => useForm<{ email: string; password: string }>());
-
+    const user = userEvent.setup();
     const apiError = new ApiError(422, {
       error: {
         code: "validation_failed",
@@ -23,22 +40,16 @@ describe("applyEnvelopeToForm", () => {
       },
     } as ErrorEnvelope);
 
-    let applied = false;
-    act(() => {
-      applied = applyEnvelopeToForm(apiError, result.current.setError);
-    });
-    expect(applied).toBe(true);
+    render(<EnvForm source={apiError} />);
+    await user.click(screen.getByRole("button", { name: "apply" }));
 
-    await waitFor(() =>
-      expect(result.current.formState.errors.email?.message).toBe("Email is already taken"),
-    );
-    const rootError = (result.current.formState.errors as Record<string, { message?: string }>)
-      .root;
-    expect(rootError?.message).toBe("Passwords must differ from your email");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Email is already taken");
+    expect(screen.getByTestId("root")).toHaveTextContent("Passwords must differ from your email");
+    expect(screen.getByTestId("applied")).toHaveTextContent("true");
   });
 
   it("accepts a raw ErrorEnvelope (not only an ApiError)", async () => {
-    const { result } = renderHook(() => useForm<{ email: string }>());
+    const user = userEvent.setup();
     const raw: ErrorEnvelope = {
       error: {
         code: "validation_failed",
@@ -47,10 +58,10 @@ describe("applyEnvelopeToForm", () => {
       },
     } as ErrorEnvelope;
 
-    act(() => {
-      applyEnvelopeToForm(raw, result.current.setError);
-    });
-    await waitFor(() => expect(result.current.formState.errors.email?.message).toBe("required"));
+    render(<EnvForm source={raw} />);
+    await user.click(screen.getByRole("button", { name: "apply" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("required");
   });
 
   it("returns false and sets nothing for a non-validation error", () => {
