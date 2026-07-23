@@ -4,6 +4,7 @@
 // generated tags land, rather than deep-importing into src/generated/*.
 export * from "./generated/endpoints/auth/auth.js";
 export * from "./generated/endpoints/admin/admin.js";
+export * from "./generated/endpoints/blog/blog.js";
 export * from "./generated/endpoints/health/health.js";
 export * from "./generated/endpoints/items/items.js";
 export * from "./generated/models/index.js";
