@@ -99,6 +99,30 @@ class FakeUserStore:
         self._by_id[record.id] = record
         return record
 
+    async def mark_email_verified(self, user_id, at):
+        existing = self._by_id[user_id]
+        updated = core.UserRecord(
+            id=existing.id,
+            email=existing.email,
+            password_hash=existing.password_hash,
+            roles=existing.roles,
+            email_verified=True,
+        )
+        self._by_id[user_id] = updated
+        self._by_email[existing.email] = updated
+
+    async def set_password_hash(self, user_id, new_hash):
+        existing = self._by_id[user_id]
+        updated = core.UserRecord(
+            id=existing.id,
+            email=existing.email,
+            password_hash=new_hash,
+            roles=existing.roles,
+            email_verified=existing.email_verified,
+        )
+        self._by_id[user_id] = updated
+        self._by_email[existing.email] = updated
+
 
 class FakeRefreshTokenStore:
     """In-memory `RefreshTokenStore` -- a dict keyed by `token_hash`.
@@ -146,6 +170,20 @@ class FakeRefreshTokenStore:
     def all_records(self):
         return list(self._by_hash.values())
 
+    async def revoke_all_for_user(self, user_id):
+        for token_hash, record in list(self._by_hash.items()):
+            if record.user_id == user_id:
+                self._by_hash[token_hash] = core.RefreshRecord(
+                    token_hash=record.token_hash,
+                    jti=record.jti,
+                    family_id=record.family_id,
+                    user_id=record.user_id,
+                    issued_at=record.issued_at,
+                    expires_at=record.expires_at,
+                    used_at=record.used_at,
+                    revoked=True,
+                )
+
 
 @pytest.fixture
 def user_store() -> FakeUserStore:
@@ -179,3 +217,126 @@ def password_service():
 @pytest.fixture
 def auth_service(user_store, refresh_store, password_service, token_service, clock):
     return core.AuthService(user_store, refresh_store, password_service, token_service, clock)
+
+
+# ---------------------------------------------------------------------------
+# In-memory fakes: single-use tokens, lockout, email, audit events
+# ---------------------------------------------------------------------------
+
+
+class FakeSingleUseTokenStore:
+    """In-memory `SingleUseTokenStore` -- a dict keyed by `token_hash`,
+    mirroring `FakeRefreshTokenStore`'s own shape above."""
+
+    def __init__(self) -> None:
+        self._by_hash: dict[str, "core.SingleUseTokenRecord"] = {}
+
+    async def add(self, record):
+        self._by_hash[record.token_hash] = record
+
+    async def get_by_hash(self, token_hash):
+        return self._by_hash.get(token_hash)
+
+    async def mark_used(self, token_hash, used_at):
+        existing = self._by_hash[token_hash]
+        self._by_hash[token_hash] = core.SingleUseTokenRecord(
+            token_hash=existing.token_hash,
+            user_id=existing.user_id,
+            purpose=existing.purpose,
+            expires_at=existing.expires_at,
+            used_at=used_at,
+            created_at=existing.created_at,
+        )
+
+
+class FakeLockoutStore:
+    """In-memory `LockoutStore` -- a dict keyed by `account_key`. All the
+    counting/threshold/window logic under test lives in `LockoutPolicy`
+    itself; this fake is deliberately dumb persistence, matching that
+    Protocol's own contract."""
+
+    def __init__(self) -> None:
+        self._by_key: dict[str, "core.AttemptRecord"] = {}
+
+    async def get(self, account_key):
+        return self._by_key.get(account_key)
+
+    async def upsert(self, record):
+        self._by_key[record.account_key] = record
+
+    async def clear(self, account_key):
+        self._by_key.pop(account_key, None)
+
+
+class FakeEmailSender:
+    """Recording `EmailSender` -- appends every `EmailMessage` it's asked
+    to send to `self.sent`, so a test can assert what (if anything) was
+    sent, to whom, and whether a raw token ended up in the body -- without
+    any real email infrastructure."""
+
+    def __init__(self) -> None:
+        self.sent: list["core.EmailMessage"] = []
+
+    async def send(self, message):
+        self.sent.append(message)
+
+
+class FakeAuthEventSink:
+    """Recording `AuthEventSink` -- appends every emitted event as an
+    `(action, {"actor": ..., "outcome": ..., **extra})` tuple to
+    `self.events`, so a test can assert exactly which auth events fired
+    and in what order, without any real audit-logging component wired
+    up."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    async def emit(self, action, *, actor, outcome, **extra):
+        self.events.append((action, {"actor": actor, "outcome": outcome, **extra}))
+
+
+@pytest.fixture
+def single_use_token_store() -> FakeSingleUseTokenStore:
+    return FakeSingleUseTokenStore()
+
+
+@pytest.fixture
+def single_use_token_service(single_use_token_store: FakeSingleUseTokenStore, clock: Clock):
+    return core.SingleUseTokenService(single_use_token_store, clock)
+
+
+@pytest.fixture
+def lockout_store() -> FakeLockoutStore:
+    return FakeLockoutStore()
+
+
+@pytest.fixture
+def email_sender() -> FakeEmailSender:
+    return FakeEmailSender()
+
+
+@pytest.fixture
+def event_sink() -> FakeAuthEventSink:
+    return FakeAuthEventSink()
+
+
+@pytest.fixture
+def account_service(
+    user_store: FakeUserStore,
+    single_use_token_service,
+    email_sender: FakeEmailSender,
+    password_service,
+    refresh_store: FakeRefreshTokenStore,
+    clock: Clock,
+    event_sink: FakeAuthEventSink,
+):
+    return core.AccountService(
+        user_store,
+        single_use_token_service,
+        email_sender,
+        password_service,
+        refresh_store,
+        clock,
+        events=event_sink,
+        frontend_base_url="https://app.example.com",
+    )

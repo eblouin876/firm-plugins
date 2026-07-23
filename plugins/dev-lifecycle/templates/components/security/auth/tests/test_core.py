@@ -532,3 +532,507 @@ async def test_resolve_access_rejects_an_expired_access_token(core_mod, auth_ser
     clock.advance(timedelta(minutes=6))
     with pytest.raises(core_mod.InvalidToken):
         await auth_service.resolve_access(pair.access)
+
+
+# ---------------------------------------------------------------------------
+# SingleUseTokenService: issue/consume
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_issue_consume_happy_path(core_mod, single_use_token_service, single_use_token_store):
+    raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=24))
+    user_id = await single_use_token_service.consume(raw, "verify")
+    assert user_id == "user-1"
+
+    # The row is marked used.
+    stored = await single_use_token_store.get_by_hash(core_mod.hash_token(raw))
+    assert stored is not None
+    assert stored.used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_raw_is_not_the_stored_hash(single_use_token_service, single_use_token_store, core_mod):
+    raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=24))
+    stored = await single_use_token_store.get_by_hash(core_mod.hash_token(raw))
+    assert stored is not None
+    assert stored.token_hash != raw
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_reuse_raises_invalid_single_use_token(core_mod, single_use_token_service):
+    raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=24))
+    await single_use_token_service.consume(raw, "verify")
+    with pytest.raises(core_mod.InvalidSingleUseToken):
+        await single_use_token_service.consume(raw, "verify")
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_expired_raises_invalid_single_use_token(core_mod, single_use_token_service, clock):
+    raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=24))
+    clock.advance(timedelta(hours=25))
+    with pytest.raises(core_mod.InvalidSingleUseToken):
+        await single_use_token_service.consume(raw, "verify")
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_wrong_purpose_raises_invalid_single_use_token(core_mod, single_use_token_service):
+    raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=24))
+    with pytest.raises(core_mod.InvalidSingleUseToken):
+        await single_use_token_service.consume(raw, "reset")
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_unknown_raises_invalid_single_use_token(core_mod, single_use_token_service):
+    with pytest.raises(core_mod.InvalidSingleUseToken):
+        await single_use_token_service.consume("not-a-real-token", "verify")
+
+
+@pytest.mark.asyncio
+async def test_single_use_token_failure_modes_are_the_same_exception_type(core_mod, single_use_token_service, clock):
+    """reuse, expired, wrong-purpose, and unknown all raise the SAME
+    exception type -- InvalidSingleUseToken is deliberately generic (see
+    its own docstring)."""
+    reused_raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=1))
+    await single_use_token_service.consume(reused_raw, "verify")
+    with pytest.raises(core_mod.InvalidSingleUseToken) as reuse_exc:
+        await single_use_token_service.consume(reused_raw, "verify")
+
+    expired_raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=1))
+    clock.advance(timedelta(hours=2))
+    with pytest.raises(core_mod.InvalidSingleUseToken) as expired_exc:
+        await single_use_token_service.consume(expired_raw, "verify")
+    clock.advance(-timedelta(hours=2))  # rewind for the rest of this test
+
+    wrong_purpose_raw = await single_use_token_service.issue("user-1", "verify", timedelta(hours=1))
+    with pytest.raises(core_mod.InvalidSingleUseToken) as purpose_exc:
+        await single_use_token_service.consume(wrong_purpose_raw, "reset")
+
+    with pytest.raises(core_mod.InvalidSingleUseToken) as unknown_exc:
+        await single_use_token_service.consume("totally-unknown", "verify")
+
+    assert type(reuse_exc.value) is type(expired_exc.value) is type(purpose_exc.value) is type(unknown_exc.value)
+
+
+# ---------------------------------------------------------------------------
+# LockoutPolicy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lockout_below_threshold_is_not_locked(core_mod, lockout_store, clock):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=5, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    for _ in range(4):
+        just_locked = await policy.record_failure("account-a")
+        assert just_locked is False
+    assert await policy.is_locked("account-a") is False
+
+
+@pytest.mark.asyncio
+async def test_lockout_nth_failure_crosses_threshold_exactly_once(core_mod, lockout_store, clock):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=3, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    assert await policy.record_failure("account-a") is False
+    assert await policy.record_failure("account-a") is False
+    assert await policy.record_failure("account-a") is True  # crosses here
+    assert await policy.record_failure("account-a") is False  # already locked, not a NEW crossing
+    assert await policy.is_locked("account-a") is True
+
+
+@pytest.mark.asyncio
+async def test_lockout_is_locked_false_after_locked_until_passes(core_mod, lockout_store, clock):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=2, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    await policy.record_failure("account-a")
+    await policy.record_failure("account-a")
+    assert await policy.is_locked("account-a") is True
+    clock.advance(timedelta(minutes=16))
+    assert await policy.is_locked("account-a") is False
+
+
+@pytest.mark.asyncio
+async def test_lockout_rolling_window_resets_the_count(core_mod, lockout_store, clock):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=3, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    await policy.record_failure("account-a")
+    await policy.record_failure("account-a")
+    # Past the rolling window since the last failure -- the streak resets.
+    clock.advance(timedelta(minutes=11))
+    just_locked = await policy.record_failure("account-a")
+    assert just_locked is False  # fresh count of 1, not 3 -- did not cross
+    assert await policy.is_locked("account-a") is False
+
+
+@pytest.mark.asyncio
+async def test_lockout_clear_unlocks_the_account(core_mod, lockout_store, clock):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=2, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    await policy.record_failure("account-a")
+    await policy.record_failure("account-a")
+    assert await policy.is_locked("account-a") is True
+    await policy.clear("account-a")
+    assert await policy.is_locked("account-a") is False
+
+
+@pytest.mark.asyncio
+async def test_lockout_is_per_account(core_mod, lockout_store, clock):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=2, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    await policy.record_failure("account-a")
+    await policy.record_failure("account-a")
+    assert await policy.is_locked("account-a") is True
+    assert await policy.is_locked("account-b") is False
+
+
+# ---------------------------------------------------------------------------
+# AuthService.login integration -- lockout, require_verification, events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_login_with_lockout_locks_after_repeated_wrong_passwords(
+    core_mod, user_store, refresh_store, password_service, token_service, lockout_store, clock
+):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=3, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    service = core_mod.AuthService(user_store, refresh_store, password_service, token_service, clock, lockout=policy)
+    await service.register("alice@example.com", "correct-password-1")
+
+    for _ in range(3):
+        with pytest.raises(core_mod.InvalidCredentials):
+            await service.login("alice@example.com", "wrong-password")
+
+    user = await user_store.get_by_email("alice@example.com")
+    assert await policy.is_locked(user.id) is True
+
+    # Even the CORRECT password is rejected -- generically -- while locked.
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "correct-password-1")
+
+    # After the lock expires, the correct password succeeds again.
+    clock.advance(timedelta(minutes=16))
+    pair = await service.login("alice@example.com", "correct-password-1")
+    assert pair.access
+
+
+@pytest.mark.asyncio
+async def test_login_success_clears_the_lockout_counter(
+    core_mod, user_store, refresh_store, password_service, token_service, lockout_store, clock
+):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=3, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    service = core_mod.AuthService(user_store, refresh_store, password_service, token_service, clock, lockout=policy)
+    await service.register("alice@example.com", "correct-password-1")
+
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "wrong-password")
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "wrong-password")
+
+    await service.login("alice@example.com", "correct-password-1")  # success clears the counter
+
+    user = await user_store.get_by_email("alice@example.com")
+    record = await lockout_store.get(user.id)
+    assert record is None
+
+    # Two more wrong guesses after a successful login should NOT already
+    # be at the threshold (the counter was reset by the success above).
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "wrong-password")
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "wrong-password")
+    assert await policy.is_locked(user.id) is False
+
+
+@pytest.mark.asyncio
+async def test_login_require_verification_blocks_unverified_user(
+    core_mod, user_store, refresh_store, password_service, token_service, clock
+):
+    service = core_mod.AuthService(
+        user_store, refresh_store, password_service, token_service, clock, require_verification=True
+    )
+    await service.register("alice@example.com", "correct-password-1")
+
+    # Correct password, but the email was never verified -- generic failure.
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "correct-password-1")
+
+    user = await user_store.get_by_email("alice@example.com")
+    await user_store.mark_email_verified(user.id, clock())
+
+    pair = await service.login("alice@example.com", "correct-password-1")
+    assert pair.access
+
+
+@pytest.mark.asyncio
+async def test_every_failing_login_path_raises_the_same_generic_exception_type(
+    core_mod, user_store, refresh_store, password_service, token_service, lockout_store, clock
+):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=2, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    service = core_mod.AuthService(
+        user_store,
+        refresh_store,
+        password_service,
+        token_service,
+        clock,
+        lockout=policy,
+        require_verification=True,
+    )
+    await service.register("alice@example.com", "correct-password-1")
+    user = await user_store.get_by_email("alice@example.com")
+
+    exceptions = []
+
+    # unknown email
+    try:
+        await service.login("nobody@example.com", "whatever")
+    except core_mod.AuthError as exc:
+        exceptions.append(exc)
+
+    # wrong password
+    try:
+        await service.login("alice@example.com", "wrong-password")
+    except core_mod.AuthError as exc:
+        exceptions.append(exc)
+
+    # unverified email, correct password
+    try:
+        await service.login("alice@example.com", "correct-password-1")
+    except core_mod.AuthError as exc:
+        exceptions.append(exc)
+
+    # cross the lockout threshold
+    try:
+        await service.login("alice@example.com", "wrong-password")
+    except core_mod.AuthError as exc:
+        exceptions.append(exc)
+    assert await policy.is_locked(user.id) is True
+
+    # locked account, correct password
+    try:
+        await service.login("alice@example.com", "correct-password-1")
+    except core_mod.AuthError as exc:
+        exceptions.append(exc)
+
+    assert len(exceptions) == 5
+    assert all(type(exc) is core_mod.InvalidCredentials for exc in exceptions)
+    assert len({str(exc) for exc in exceptions}) == 1  # every message identical too
+
+
+@pytest.mark.asyncio
+async def test_login_events_are_emitted_for_success_failure_denied_and_lockout(
+    core_mod, user_store, refresh_store, password_service, token_service, lockout_store, event_sink, clock
+):
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=2, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    service = core_mod.AuthService(
+        user_store, refresh_store, password_service, token_service, clock, lockout=policy, events=event_sink
+    )
+    await service.register("alice@example.com", "correct-password-1")
+    user = await user_store.get_by_email("alice@example.com")
+
+    # Success.
+    await service.login("alice@example.com", "correct-password-1")
+    assert ("auth.login", {"actor": user.id, "outcome": "success"}) in event_sink.events
+
+    # Wrong password -> failure (first), then crosses the threshold -> lockout.triggered + failure.
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "wrong-password")
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "wrong-password")
+
+    failure_events = [e for e in event_sink.events if e == ("auth.login", {"actor": user.id, "outcome": "failure"})]
+    assert len(failure_events) == 2
+    assert ("auth.lockout.triggered", {"actor": user.id, "outcome": "denied"}) in event_sink.events
+
+    # Locked -> denied.
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("alice@example.com", "correct-password-1")
+    assert ("auth.login", {"actor": user.id, "outcome": "denied"}) in event_sink.events
+
+    # Unknown email -> failure, actor "anonymous".
+    with pytest.raises(core_mod.InvalidCredentials):
+        await service.login("nobody@example.com", "whatever")
+    assert ("auth.login", {"actor": "anonymous", "outcome": "failure"}) in event_sink.events
+
+
+# ---------------------------------------------------------------------------
+# AccountService: email verification + password reset
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_account_service_request_email_verification_sends_the_token(
+    core_mod, auth_service, account_service, email_sender, single_use_token_store
+):
+    user = await auth_service.register("alice@example.com", "hunter2-plus-extra")
+
+    await account_service.request_email_verification(user)
+
+    assert len(email_sender.sent) == 1
+    message = email_sender.sent[0]
+    assert message.to == "alice@example.com"
+    assert "verify-email#token=" in message.body
+
+    # A "verify" token was actually persisted, hashed.
+    stored = single_use_token_store._by_hash
+    assert len(stored) == 1
+    record = next(iter(stored.values()))
+    assert record.purpose == "verify"
+    assert record.user_id == user.id
+    assert record.token_hash != message.body  # not the raw body
+
+
+@pytest.mark.asyncio
+async def test_account_service_verify_email_flips_email_verified(core_mod, auth_service, account_service, email_sender, user_store):
+    user = await auth_service.register("alice@example.com", "hunter2-plus-extra")
+    assert user.email_verified is False
+
+    await account_service.request_email_verification(user)
+    raw_link_body = email_sender.sent[0].body
+    raw_token = raw_link_body.split("token=")[1].splitlines()[0]
+
+    result = await account_service.verify_email(raw_token)
+    assert result is None  # API-facing method returns nothing, never the token
+
+    updated = await user_store.get_by_id(user.id)
+    assert updated.email_verified is True
+
+
+@pytest.mark.asyncio
+async def test_account_service_verify_email_bad_token_raises(core_mod, account_service):
+    with pytest.raises(core_mod.InvalidSingleUseToken):
+        await account_service.verify_email("not-a-real-token")
+
+
+@pytest.mark.asyncio
+async def test_account_service_request_password_reset_known_email_sends_token(
+    core_mod, auth_service, account_service, email_sender, single_use_token_store
+):
+    await auth_service.register("alice@example.com", "old-password-1")
+
+    result = await account_service.request_password_reset("alice@example.com")
+    assert result is None  # never reveals anything to the caller
+
+    assert len(email_sender.sent) == 1
+    message = email_sender.sent[0]
+    assert message.to == "alice@example.com"
+    assert "reset-password#token=" in message.body
+    assert "old-password-1" not in message.body  # never the password
+
+    stored = single_use_token_store._by_hash
+    assert len(stored) == 1
+    record = next(iter(stored.values()))
+    assert record.purpose == "reset"
+
+
+@pytest.mark.asyncio
+async def test_account_service_request_password_reset_unknown_email_sends_nothing(
+    core_mod, account_service, email_sender, single_use_token_store, event_sink
+):
+    # Must not raise, must not send an email, must not persist a token --
+    # but the not-found path still runs its comparable-cost throwaway hash
+    # without erroring.
+    result = await account_service.request_password_reset("nobody@example.com")
+    assert result is None
+
+    assert email_sender.sent == []
+    assert single_use_token_store._by_hash == {}
+    assert ("auth.password.reset_requested", {"actor": "user:unknown", "outcome": "success"}) in event_sink.events
+    # Never the submitted email as the actor.
+    for _action, payload in event_sink.events:
+        assert payload["actor"] != "nobody@example.com"
+
+
+@pytest.mark.asyncio
+async def test_account_service_reset_password_changes_hash_and_revokes_sessions(
+    core_mod, auth_service, account_service, email_sender, user_store, refresh_store
+):
+    await auth_service.register("alice@example.com", "old-password-1")
+    pair = await auth_service.login("alice@example.com", "old-password-1")  # an active session
+
+    await account_service.request_password_reset("alice@example.com")
+    raw_token = email_sender.sent[0].body.split("token=")[1].splitlines()[0]
+
+    result = await account_service.reset_password(raw_token, "new-password-2")
+    assert result is None
+
+    # Old password no longer verifies; new one does.
+    with pytest.raises(core_mod.InvalidCredentials):
+        await auth_service.login("alice@example.com", "old-password-1")
+    new_pair = await auth_service.login("alice@example.com", "new-password-2")
+    assert new_pair.access
+
+    # The pre-reset session's refresh token is revoked (revoke_all_for_user).
+    old_row = await refresh_store.get_by_hash(core_mod.hash_token(pair.refresh))
+    assert old_row is not None
+    assert old_row.revoked is True
+
+
+@pytest.mark.asyncio
+async def test_account_service_reset_password_bad_token_raises_and_does_not_touch_the_account(
+    core_mod, auth_service, account_service, user_store
+):
+    await auth_service.register("alice@example.com", "old-password-1")
+    with pytest.raises(core_mod.InvalidSingleUseToken):
+        await account_service.reset_password("not-a-real-token", "new-password-2")
+
+    # The password is untouched.
+    pair = await auth_service.login("alice@example.com", "old-password-1")
+    assert pair.access
+
+
+@pytest.mark.asyncio
+async def test_account_service_emails_never_contain_a_raw_password(
+    core_mod, auth_service, account_service, email_sender
+):
+    await auth_service.register("alice@example.com", "super-secret-password-1")
+    user = await auth_service.register("bob@example.com", "another-secret-password-2")
+    await account_service.request_email_verification(user)
+    await account_service.request_password_reset("alice@example.com")
+
+    for message in email_sender.sent:
+        assert "super-secret-password-1" not in message.body
+        assert "another-secret-password-2" not in message.body
+
+
+# ---------------------------------------------------------------------------
+# Zero-diff proof: refresh reuse-detection is untouched by this stage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_reuse_detection_still_works_with_a_lockout_wired_auth_service(
+    core_mod, user_store, refresh_store, password_service, token_service, lockout_store, clock
+):
+    """The refresh/reuse state machine is exercised through an AuthService
+    that ALSO has a LockoutPolicy wired -- proving the two features are
+    fully independent and neither interferes with the other."""
+    policy = core_mod.LockoutPolicy(
+        lockout_store, max_failures=5, lockout_duration=timedelta(minutes=15), window=timedelta(minutes=10), now=clock
+    )
+    service = core_mod.AuthService(user_store, refresh_store, password_service, token_service, clock, lockout=policy)
+    await service.register("alice@example.com", "hunter2-plus-extra")
+    pair = await service.login("alice@example.com", "hunter2-plus-extra")
+
+    rotated_pair = await service.refresh(pair.refresh)
+
+    with pytest.raises(core_mod.TokenReused):
+        await service.refresh(pair.refresh)
+
+    original_row = await refresh_store.get_by_hash(core_mod.hash_token(pair.refresh))
+    rotated_row = await refresh_store.get_by_hash(core_mod.hash_token(rotated_pair.refresh))
+    assert original_row.revoked is True
+    assert rotated_row.revoked is True
