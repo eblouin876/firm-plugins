@@ -14,6 +14,8 @@ exposes:
   - AuthError hierarchy: InvalidCredentials, InvalidToken, TokenReused, EmailAlreadyExists, InvalidSingleUseToken -- each documents the ErrorCode it maps to
   - bearer_scheme, build_get_current_principal, require_roles, AUTH_ERROR_HTTP -- the FastAPI wiring, in fastapi.py (Stage 5a, #41)
   - resolve_principal, require_roles, InsufficientRole, AUTH_ERROR_HTTP -- the Django wiring, in django.py (Stage 5b, #44)
+  - CsrfValidationError, REFRESH_COOKIE_NAME, CSRF_COOKIE_NAME, generate_csrf_token, verify_double_submit, build_refresh_cookie_kwargs, build_csrf_cookie_kwargs, clear_refresh_cookie_kwargs, clear_csrf_cookie_kwargs -- the framework-neutral double-submit-cookie CSRF transport, in _cookies.py (Stage 5d, #46)
+  - set_auth_cookies, clear_auth_cookies, read_refresh_cookie, enforce_csrf -- thin cookie/CSRF glue over _cookies.py, in BOTH fastapi.py and django.py (Stage 5d, #46); django.py's stays rest_framework-free like the rest of that file
   - AccountService (request_email_verification, verify_email, request_password_reset, reset_password) -- email verification + password reset, composed ALONGSIDE AuthService, not a subclass -- in _core.py (Stage 5c, #45)
   - SingleUseTokenService (issue, consume) / SingleUseTokenStore (Protocol) / SingleUseTokenRecord -- the hashed, single-use verify/reset token seam AccountService runs against
   - LockoutPolicy (is_locked, record_failure, clear) / LockoutStore (Protocol) / AttemptRecord -- per-account failed-login lockout, optionally shared between AuthService.login and AccountService.reset_password
@@ -44,34 +46,41 @@ Lives at `templates/components/security/auth/` in this repo; a Stage 5a
 This is a **catalog component** (`template-author`'s partial-contract
 kind), not an app-layer template block.
 
-**This component ships `_core.py` + `fastapi.py` + `django.py`.**
-`fastapi.py` (Stage 5a, #41) is pure framework glue over `_core.py` — the
-`HTTPBearer` scheme, a `build_get_current_principal` dependency FACTORY
-(takes the app's own `get_auth_service` provider, since this component has
-no DB session/settings of its own to build one from), `require_roles`, and
-the `AUTH_ERROR_HTTP` exception -> `(status, ErrorCode string)` table —
-with **zero `app.*` import**, matching `_core.py`'s own "zero FastAPI/
-Django/SQLAlchemy import" posture in reverse (see `fastapi.py`'s own
-module docstring). `django.py` (Stage 5b, #44) is the same idea for
-Django/DRF — `resolve_principal(request, auth_service)` (an awaited
-helper, not a `Depends()`-style factory, since Django/DRF has no
-equivalent auto-invoked injection point), `require_roles(request,
-auth_service, *roles)`, `InsufficientRole`, and the identically-shaped
-`AUTH_ERROR_HTTP` table — with the same **zero project import** posture
-(no `core.*`/`app.*`, and deliberately no `rest_framework` import either,
-so a plain-Django project without DRF can use it too; see `django.py`'s
-own module docstring). Vendoring these files is still NOT the whole wiring
-job: `UserStore`/`RefreshTokenStore` implementations against a real ORM,
-`AuthService` construction with real secrets/TTLs at app startup, real
-route handlers, and an app-level exception handler for the `AuthError`
-base class are all APP code (they import the app's own models/settings),
-never part of this vendored component — see `backend/fastapi`'s
-`app/core/security/auth/stores.py` + `app/main.py`'s `_auth_error_handler`
-for the FastAPI reference implementation, and `backend/django`'s
-`core/security/auth/stores.py` for the Django equivalent. Zero FastAPI,
-Django, or SQLAlchemy import exists anywhere in `_core.py` — verified by
-this component's own `tests/`, which import and exercise `_core.py`
-completely standalone.
+**This component ships `_core.py` + `_cookies.py` + `fastapi.py` +
+`django.py`.** `fastapi.py` (Stage 5a, #41) is pure framework glue over
+`_core.py` — the `HTTPBearer` scheme, a `build_get_current_principal`
+dependency FACTORY (takes the app's own `get_auth_service` provider, since
+this component has no DB session/settings of its own to build one from),
+`require_roles`, and the `AUTH_ERROR_HTTP` exception -> `(status,
+ErrorCode string)` table — with **zero `app.*` import**, matching
+`_core.py`'s own "zero FastAPI/Django/SQLAlchemy import" posture in
+reverse (see `fastapi.py`'s own module docstring). `django.py` (Stage 5b,
+#44) is the same idea for Django/DRF — `resolve_principal(request,
+auth_service)` (an awaited helper, not a `Depends()`-style factory, since
+Django/DRF has no equivalent auto-invoked injection point),
+`require_roles(request, auth_service, *roles)`, `InsufficientRole`, and
+the identically-shaped `AUTH_ERROR_HTTP` table — with the same **zero
+project import** posture (no `core.*`/`app.*`, and deliberately no
+`rest_framework` import either, so a plain-Django project without DRF can
+use it too; see `django.py`'s own module docstring). `_cookies.py` (Stage
+5d, #46) is a SECOND framework-neutral file alongside `_core.py` — the
+double-submit-cookie CSRF transport (`CsrfValidationError`,
+`generate_csrf_token`, `verify_double_submit`, and the pure cookie-kwarg
+builders) neither `fastapi.py` nor `django.py` had before this stage; both
+adapters now carry thin glue over it (`set_auth_cookies`,
+`clear_auth_cookies`, `read_refresh_cookie`, `enforce_csrf`) — see
+"Cookie/CSRF transport" below. Vendoring these files is still NOT the
+whole wiring job: `UserStore`/`RefreshTokenStore` implementations against
+a real ORM, `AuthService` construction with real secrets/TTLs at app
+startup, real route handlers, and an app-level exception handler for the
+`AuthError` base class are all APP code (they import the app's own
+models/settings), never part of this vendored component — see
+`backend/fastapi`'s `app/core/security/auth/stores.py` + `app/main.py`'s
+`_auth_error_handler` for the FastAPI reference implementation, and
+`backend/django`'s `core/security/auth/stores.py` for the Django
+equivalent. Zero FastAPI, Django, or SQLAlchemy import exists anywhere in
+`_core.py` or `_cookies.py` — verified by this component's own `tests/`,
+which import and exercise both completely standalone.
 
 ## Contents
 - Composition contract
@@ -80,6 +89,7 @@ completely standalone.
 - Refresh-token storage: SHA-256 hash, never the raw token
 - The refresh-rotation state machine (the security-critical core)
 - Account lifecycle: email verification, password reset, lockout (Stage 5c, #45)
+- Cookie/CSRF transport: double-submit cookies (Stage 5d, #46)
 - Exception hierarchy → ErrorCode mapping (for the framework adapter)
 - Testing
 - Judgment calls
@@ -149,9 +159,10 @@ completely standalone.
   <dependency>` (role-gated dependency factory; RBAC's wire surface is
   Stage 5d — this just enforces `AccessClaims.roles` membership),
   `InsufficientRole` (a component-level exception mapping to the existing
-  `permission_denied`/403 — no new `ErrorCode` invented), and
-  `AUTH_ERROR_HTTP` (the exception-type -> `(status, ErrorCode string)`
-  table an app's own exception handler consults).
+  `permission_denied`/403 — no new `ErrorCode` invented), `AUTH_ERROR_HTTP`
+  (the exception-type -> `(status, ErrorCode string)` table an app's own
+  exception handler consults), and (Stage 5d, #46) thin cookie/CSRF glue
+  over `_cookies.py` — see below.
 - **`django.py`**: `resolve_principal(request, auth_service) ->
   AccessClaims` (an awaited helper, not a dependency factory — see
   `django.py`'s own module docstring on why Django/DRF has no `Depends()`
@@ -160,8 +171,24 @@ completely standalone.
   membership in one awaited call), `InsufficientRole` (the same
   `permission_denied`/403 mapping as `fastapi.py`'s own, kept as a
   separate class per adapter so each file still reads standalone when
-  vendored alone), and `AUTH_ERROR_HTTP` (identically shaped to
-  `fastapi.py`'s own table).
+  vendored alone), `AUTH_ERROR_HTTP` (identically shaped to `fastapi.py`'s
+  own table), and (Stage 5d, #46) the SAME DRF-free cookie/CSRF glue
+  surface as `fastapi.py`'s own — see below.
+- **Stage 5d (#46), `_cookies.py`** (framework-neutral, stdlib-only —
+  `hmac`/`secrets` only): `CsrfValidationError` (maps to the EXISTING
+  `permission_denied`/403 — no new `ErrorCode`), `REFRESH_COOKIE_NAME`
+  (`"refresh_token"`) / `CSRF_COOKIE_NAME` (`"csrf_token"`),
+  `generate_csrf_token() -> str`, `verify_double_submit(*, csrf_cookie,
+  csrf_header) -> None` (the double-submit check, constant-time via
+  `hmac.compare_digest`), and the pure cookie-kwarg builders
+  `build_refresh_cookie_kwargs(value, max_age) -> dict` /
+  `build_csrf_cookie_kwargs(value, max_age) -> dict` /
+  `clear_refresh_cookie_kwargs() -> dict` / `clear_csrf_cookie_kwargs() ->
+  dict`. Both `fastapi.py` and `django.py` add thin glue over it:
+  `set_auth_cookies(response, *, refresh_value, csrf_value, max_age) ->
+  None`, `clear_auth_cookies(response) -> None`, `read_refresh_cookie(
+  request) -> str | None`, `enforce_csrf(request) -> None` — identical
+  signatures across both adapters; see "Cookie/CSRF transport" below.
 - Its co-located doc fragment: `docs/fragment.md`.
 
 ## Password hashing: Argon2id + the timing-defense `dummy_verify()`
@@ -342,6 +369,77 @@ seams support it, each with exactly one shipped implementation
   project's own audit sink expects (see `backend/fastapi`'s
   `AuditAuthEventSink`).
 
+## Cookie/CSRF transport: double-submit cookies (Stage 5d, #46)
+
+`_core.py`'s `AuthService`/`TokenService` mint JWTs but have no opinion on
+HOW they travel between client and server — bearer-token auth (an
+`Authorization` header a client must deliberately attach on every
+request) is the path `fastapi.py`/`django.py` already wired in Stage
+5a/5b. `_cookies.py` adds a SECOND, opt-in transport for a project that
+instead wants the refresh token (and CSRF token) to travel as cookies —
+purely additive, and it does NOT touch `_core.py`, the bearer-token path,
+or either adapter's existing `AUTH_ERROR_HTTP` entries.
+
+**Why cookies need a CSRF defense that bearer tokens don't.** A cookie is
+attached by the browser AUTOMATICALLY to every matching-origin request —
+including one a malicious cross-site page triggers without the victim's
+knowledge (classic CSRF). A bearer token in an `Authorization` header has
+no such automatic attachment; JavaScript on a different origin cannot read
+this app's `Authorization` header value to forge one. That is why CSRF
+defense belongs ONLY on the cookie path.
+
+**The double-submit-cookie pattern.** On login/refresh, the server sets
+TWO cookies: the refresh token (`HttpOnly`, unreadable to JS) and a CSRF
+token (`_cookies.generate_csrf_token()` — a `secrets.token_urlsafe(32)`
+value, independent of the JWTs, never persisted server-side) that is
+deliberately NOT `HttpOnly`, so the SPA can read it via `document.cookie`
+and echo it back as an `X-CSRF-Token` request header on every
+state-changing request. `_cookies.verify_double_submit(*, csrf_cookie,
+csrf_header)` is the server-side check: it raises `CsrfValidationError`
+unless the header is present and non-empty, the cookie is present, AND
+`hmac.compare_digest(csrf_header, csrf_cookie)` is `True` — a
+CONSTANT-TIME comparison, never `==` (see that function's own docstring
+for the timing-side-channel reasoning). All four failure modes (missing
+header, blank header, missing cookie, mismatch) collapse to the SAME
+generic exception and message — mirroring `InvalidCredentials`/
+`InvalidToken`/`InvalidSingleUseToken`'s own "don't leak which specific
+reason" posture elsewhere in this component.
+
+A forged cross-site request can make the browser ATTACH the CSRF cookie
+(cookies go out regardless of origin) but the attacker's page cannot READ
+its value (same-origin `document.cookie` restriction) to also forge the
+matching header — so a forged request always arrives with the cookie
+present and the header missing or wrong, which `verify_double_submit`
+rejects.
+
+**Cookie flags, and why each one.** The four pure builders
+(`build_refresh_cookie_kwargs`, `build_csrf_cookie_kwargs`,
+`clear_refresh_cookie_kwargs`, `clear_csrf_cookie_kwargs`) all return the
+SAME framework-neutral flag set except `httponly` and `value`/`max_age`:
+
+| Flag | Value | Why |
+| --- | --- | --- |
+| `path` | `/auth` | The cookie is attached ONLY to `/auth/*` requests (login/refresh/logout) — never item/health/admin routes, shrinking both the leak surface and which routes even need the CSRF check. |
+| `secure` | `True` | Never transmitted over plain HTTP — a refresh/CSRF token sent in plaintext is as good as published. |
+| `samesite` | `"lax"` | Withheld on cross-site sub-resource/POST requests (the CSRF vector) while still attached on a top-level cross-site navigation (an emailed link), so `AccountService`'s verify/reset-link flows keep working. `Strict` would break those links; `None` would re-open the exact cross-site-send exposure `Lax` exists to close. Composes with `verify_double_submit` as DEFENSE IN DEPTH, not a substitute — an older browser or edge case that lets a `SameSite`-blocked cookie through anyway still fails the double-submit check, since the attacker's page still can't forge the matching header. |
+| `httponly` | `True` (refresh) / `False` (CSRF) | The refresh cookie is invisible to JS (including XSS-injected JS) — the single most sensitive credential this component mints. The CSRF cookie MUST be readable — the SPA has to echo it back as a header; that's the entire double-submit mechanism. |
+
+`max_age` is passed through on the two `build_*` functions (typically the
+refresh token's own TTL in seconds); the two `clear_*` functions hardcode
+`max_age=0`, which expires the cookie immediately (`Max-Age=0` is the
+standard RFC 6265 "delete this cookie now" mechanism) — used by
+`clear_auth_cookies` on logout.
+
+**Adapter glue (`set_auth_cookies`/`clear_auth_cookies`/
+`read_refresh_cookie`/`enforce_csrf`)** is IDENTICAL in shape across
+`fastapi.py` and `django.py` — each maps `_cookies.py`'s framework-neutral
+dicts/reads onto its own `Response.set_cookie(...)`/`Request.cookies` (or
+Django's `request.COOKIES`) — never called by anything in this component
+itself; a later stage's route/view handlers call them. `enforce_csrf`
+must be called ONLY from the cookie-authenticated path, never from the
+bearer-token path (`build_get_current_principal`/`resolve_principal`),
+which has no CSRF exposure to begin with.
+
 ## Exception hierarchy → ErrorCode mapping (for the framework adapter)
 
 This module raises its OWN exceptions rather than importing
@@ -350,13 +448,14 @@ importable with zero framework/app-layer dependencies. A framework
 adapter's exception handler maps each one onto that LOCKED, closed enum
 (which this component does NOT extend):
 
-| `_core.py` exception | Maps to `ErrorCode` | HTTP status |
+| Exception | Maps to `ErrorCode` | HTTP status |
 | --- | --- | --- |
 | `InvalidCredentials` | `unauthenticated` | 401 |
 | `InvalidToken` | `unauthenticated` | 401 |
 | `TokenReused` | `unauthenticated` | 401 (same as `InvalidToken` — see below) |
 | `EmailAlreadyExists` | `conflict` | 409 |
 | `InvalidSingleUseToken` | `unauthenticated` | 401 (same generic shape — see "Account lifecycle" above) |
+| `CsrfValidationError` (`_cookies.py`, Stage 5d) | `permission_denied` | 403 (see "Cookie/CSRF transport" above — a valid cookie but a failed double-submit check is an authorization, not authentication, failure) |
 
 `TokenReused` and `InvalidToken` deliberately map to the SAME code and
 the same generic message on the wire — a client (attacker or otherwise)
@@ -399,9 +498,33 @@ family token fails, idempotent, a garbage/unknown/access token doesn't
 raise); and `AuthService.resolve_access` (valid returns claims with
 roles, invalid/wrong-type/expired all raise `InvalidToken`).
 
-Run:
+`tests/test_cookies.py` (28 tests, Stage 5d, #46) covers `_cookies.py`
+exhaustively: `verify_double_submit` (a valid matching pair passes;
+missing header, blank header, missing cookie, blank cookie, mismatch, and
+both-missing each raise `CsrfValidationError`; every failure mode raises
+the IDENTICAL exception message, not just type; two equal-length-but-
+different strings are rejected — not just a length check; a spy on
+`hmac.compare_digest` confirms it, not `==`, is what's actually called;
+and confirms the short-circuit means `compare_digest` is never invoked at
+all when the header or cookie is simply missing); `generate_csrf_token`
+(URL-safe, high-entropy, no collisions across calls); the four cookie-
+kwarg builders' EXACT flags (refresh: `httponly=True`; CSRF:
+`httponly=False`; both: `path=/auth`, `secure=True`, `samesite=lax`;
+clear variants: `max_age=0`, `value=""`); `max_age` passed through
+unchanged; the cookie-name constants; `CsrfValidationError` IS an
+`_core.AuthError` subclass; and — loaded against both real framework
+adapters — `fastapi.py`'s and `django.py`'s `AUTH_ERROR_HTTP` tables both
+map `CsrfValidationError` to `(403, "permission_denied")`, identically.
+Also a static-source regression check that `django.py` contains no
+`rest_framework` import statement.
+
+Run (now needs the real `fastapi` package too, since `tests/conftest.py`
+loads `fastapi.py`/`django.py` — see that file's own docstring; `django.py`
+itself needs no `django` package import, so no `django` pin is required
+here):
 ```
-uv run --python 3.13 --with pyjwt==2.13.0 --with argon2-cffi==25.1.0 --with pytest --with pytest-asyncio -- \
+uv run --python 3.13 --with pyjwt==2.13.0 --with argon2-cffi==25.1.0 --with fastapi \
+  --with pytest --with pytest-asyncio -- \
   pytest templates/components/security/auth/tests/ -q
 ```
 (async tests use explicit `@pytest.mark.asyncio` markers — pytest-asyncio's
@@ -466,3 +589,38 @@ ini configuration needed, matching this catalog's `db-session` component.)
   could register as a distinct account even though most mail providers
   deliver it to the same inbox as the canonical form — a real account-
   confusion/duplicate-account footgun, not just a cosmetic one.
+- **Cookie/CSRF transport shipped as a SEPARATE file (`_cookies.py`), not
+  folded into `_core.py` (Stage 5d, #46).** `_core.py`'s reviewed
+  refresh-rotation state machine is this component's security-critical
+  core and was deliberately kept ZERO-diff by this stage — cookie/CSRF is
+  pure TRANSPORT (how a token travels), completely orthogonal to
+  `AuthService`'s token-lifecycle logic (what a token IS and when it's
+  valid). A second framework-neutral file, imported by both adapters
+  exactly the way each already imports `_core.py`, keeps that separation
+  explicit in the file layout itself rather than merely in prose — and
+  means a project that never adopts the cookie path can skip vendoring
+  `_cookies.py` entirely with zero effect on `_core.py`/the bearer-token
+  path.
+- **`CsrfValidationError` maps to `permission_denied` (403), not
+  `unauthenticated` (401).** A double-submit failure happens on a request
+  that already carries a facially valid cookie-borne credential — what's
+  missing is proof THIS request was authorized by whoever holds that
+  cookie, not proof of identity itself. That is an authorization
+  distinction, matching `error-envelope/errors.py`'s own
+  `PermissionDeniedError` docstring ("authenticated, but not authorized
+  for this action") more precisely than `UnauthenticatedError`'s ("no
+  valid credentials presented at all") would.
+- **The double-submit check alone raises on ANY of missing header, blank
+  header, missing cookie, or mismatch — never distinguishing which.**
+  Same "don't leak which specific reason" posture `InvalidCredentials`/
+  `InvalidToken`/`InvalidSingleUseToken` already establish elsewhere in
+  this component — telling a probing attacker exactly which half of the
+  double-submit pair was wrong narrows what they'd try next for no
+  defensive benefit.
+- **`generate_csrf_token`/`verify_double_submit` never touch `_core.py`'s
+  `TokenService`/JWTs at all.** The CSRF token is intentionally NOT a JWT,
+  not signed, and not persisted server-side — its entire security
+  property rests on "can the requester's page read this cookie back out
+  of the browser," which has nothing to do with JWT signature
+  verification. Reusing `TokenService` for it would suggest a coupling
+  that doesn't exist and isn't needed.
