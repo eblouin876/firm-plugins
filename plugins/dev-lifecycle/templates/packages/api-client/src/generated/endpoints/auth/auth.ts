@@ -59,6 +59,11 @@ export type registerAuthRegisterPostResponse201 = {
   status: 201
 }
 
+export type registerAuthRegisterPostResponse409 = {
+  data: ErrorEnvelope
+  status: 409
+}
+
 export type registerAuthRegisterPostResponse422 = {
   data: ErrorEnvelope
   status: 422
@@ -67,7 +72,7 @@ export type registerAuthRegisterPostResponse422 = {
 export type registerAuthRegisterPostResponseSuccess = (registerAuthRegisterPostResponse201) & {
   headers: Headers;
 };
-export type registerAuthRegisterPostResponseError = (registerAuthRegisterPostResponse422) & {
+export type registerAuthRegisterPostResponseError = (registerAuthRegisterPostResponse409 | registerAuthRegisterPostResponse422) & {
   headers: Headers;
 };
 
@@ -151,6 +156,11 @@ export const useRegisterAuthRegisterPost = <TError = ErrorEnvelope,
   status: 200
 }
 
+export type loginAuthLoginPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
 export type loginAuthLoginPostResponse422 = {
   data: ErrorEnvelope
   status: 422
@@ -159,7 +169,7 @@ export type loginAuthLoginPostResponse422 = {
 export type loginAuthLoginPostResponseSuccess = (loginAuthLoginPostResponse200) & {
   headers: Headers;
 };
-export type loginAuthLoginPostResponseError = (loginAuthLoginPostResponse422) & {
+export type loginAuthLoginPostResponseError = (loginAuthLoginPostResponse401 | loginAuthLoginPostResponse422) & {
   headers: Headers;
 };
 
@@ -244,6 +254,11 @@ export const useLoginAuthLoginPost = <TError = ErrorEnvelope,
   status: 200
 }
 
+export type refreshAuthRefreshPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
 export type refreshAuthRefreshPostResponse422 = {
   data: ErrorEnvelope
   status: 422
@@ -252,7 +267,7 @@ export type refreshAuthRefreshPostResponse422 = {
 export type refreshAuthRefreshPostResponseSuccess = (refreshAuthRefreshPostResponse200) & {
   headers: Headers;
 };
-export type refreshAuthRefreshPostResponseError = (refreshAuthRefreshPostResponse422) & {
+export type refreshAuthRefreshPostResponseError = (refreshAuthRefreshPostResponse401 | refreshAuthRefreshPostResponse422) & {
   headers: Headers;
 };
 
@@ -434,12 +449,19 @@ export const useLogoutAuthLogoutPost = <TError = ErrorEnvelope,
   status: 200
 }
 
+export type meAuthMeGetResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
 export type meAuthMeGetResponseSuccess = (meAuthMeGetResponse200) & {
   headers: Headers;
 };
-;
+export type meAuthMeGetResponseError = (meAuthMeGetResponse401) & {
+  headers: Headers;
+};
 
-export type meAuthMeGetResponse = (meAuthMeGetResponseSuccess)
+export type meAuthMeGetResponse = (meAuthMeGetResponseSuccess | meAuthMeGetResponseError)
 
 export const getMeAuthMeGetUrl = () => {
 
@@ -495,7 +517,7 @@ export const getMeAuthMeGetQueryKey = () => {
     }
 
 
-export const getMeAuthMeGetQueryOptions = <TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof meAuthMeGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+export const getMeAuthMeGetQueryOptions = <TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = ErrorEnvelope>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof meAuthMeGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -514,10 +536,10 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type MeAuthMeGetQueryResult = NonNullable<Awaited<ReturnType<typeof meAuthMeGet>>>
-export type MeAuthMeGetQueryError = unknown
+export type MeAuthMeGetQueryError = ErrorEnvelope
 
 
-export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = unknown>(
+export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = ErrorEnvelope>(
   options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof meAuthMeGet>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof meAuthMeGet>>,
@@ -527,7 +549,7 @@ export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, 
       >, request?: SecondParameter<typeof customFetch>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = unknown>(
+export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = ErrorEnvelope>(
   options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof meAuthMeGet>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof meAuthMeGet>>,
@@ -537,7 +559,7 @@ export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, 
       >, request?: SecondParameter<typeof customFetch>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = unknown>(
+export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = ErrorEnvelope>(
   options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof meAuthMeGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
@@ -545,7 +567,7 @@ export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, 
  * @summary Current principal
  */
 
-export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = unknown>(
+export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, TError = ErrorEnvelope>(
   options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof meAuthMeGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {

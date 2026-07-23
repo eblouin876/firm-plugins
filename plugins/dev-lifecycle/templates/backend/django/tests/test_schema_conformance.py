@@ -319,21 +319,27 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # track (`core/views.py`'s `LoginView`/`RefreshView`/`MeView`) -- is
 # explicitly Stage 5b's job (#44), NOT this surgical edit's.
 #
-# `login`/`refresh`/`me` are deliberately NOT listed below: verified by
-# hand (comparing this test's own `_wire_surface()` output for those three
-# ops between `_django_schema()` and `_frozen_contract_schema()`) that
-# their SCHEMA shape -- request body, documented response statuses, each
-# response body -- already matches the frozen contract exactly, even
-# though the runtime behavior behind them is still a stub; this test only
-# proves schema/wire-shape identity, never runtime behavior, so those
-# three need no exclusion to pass. Only genuinely-ABSENT operations
-# (`register`, `logout` — present in the frozen contract's `paths`, absent
-# from Django's entirely) need to be excluded from the key-set equality
-# check below, or that check fails on set membership alone before ever
-# reaching a per-op shape comparison.
+# UPDATE (whole-PR review, Stage 5a, FIX C): `login`/`refresh`/`me` were
+# previously NOT listed here -- their SCHEMA shape matched the frozen
+# contract exactly even with a stub implementation behind them, since this
+# is a wire-SHAPE proof, not a runtime-behavior one. That stopped being true
+# the moment the frozen contract started documenting real 401 responses for
+# those three operations (`app/api/routers/auth.py`'s `responses=
+# _UNAUTHENTICATED_RESPONSE`, regenerated into `packages/api-client/
+# openapi.json`): this Django block's still-stubbed views document no such
+# 401 (they only ever return their stub's fixed status), so the documented-
+# response-STATUS-set comparison would now diverge on all three. Rather than
+# have this gate flag that gap as a NEW regression, the ENTIRE `/auth/*`
+# surface is now pending Django parity -- `register`/`login`/`refresh`/
+# `logout`/`me` all excluded below -- and Stage 5b (#44) is where the whole
+# surface (stub replacement AND the 401/409 response declarations that go
+# with real behavior) lands together, not a operation at a time.
 _PENDING_PARITY_OPS: set[tuple[str, str]] = {
     ("/auth/register", "post"),
+    ("/auth/login", "post"),
+    ("/auth/refresh", "post"),
     ("/auth/logout", "post"),
+    ("/auth/me", "get"),
 }
 
 
@@ -351,32 +357,48 @@ def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
     frozen_surface = _wire_surface(_frozen_contract_schema())
 
     django_keys = set(django_surface)
-    # `_PENDING_PARITY_OPS` (Stage 5a -> Stage 5b, #44): operations the
-    # frozen contract documents that this Django block does not implement
-    # at all yet -- excluded here so the key-set equality check below
-    # doesn't fail on their mere ABSENCE; genuinely NEW divergences (any
-    # other key-set mismatch) still fail loudly. See that constant's own
+    # `_PENDING_PARITY_OPS` (Stage 5a -> Stage 5b, #44): auth operations the
+    # frozen contract documents that this Django block doesn't yet match --
+    # excluded from BOTH sides here so the key-set equality check below
+    # doesn't fail on their exclusion; genuinely NEW divergences (any other
+    # key-set mismatch) still fail loudly. See that constant's own
     # module-level comment for exactly which ops and why.
+    #
+    # UPDATE (Stage 5a FIX C): previously every pending op was ABSENT from
+    # `django_keys` entirely, so subtracting `_PENDING_PARITY_OPS` from only
+    # the frozen side was enough to make the two sets equal again.
+    # `login`/`refresh`/`me` break that assumption -- they're pending full
+    # PARITY (see the per-op loop's comment below) but their routes DO
+    # exist in `django_keys` (Stage 3's stub views) -- so this now excludes
+    # `_PENDING_PARITY_OPS` from `django_keys` too, keeping this a pure
+    # "same set of operations, modulo the ones under active parity work"
+    # check either way.
     frozen_keys_all = set(frozen_surface)
     frozen_keys = frozen_keys_all - _PENDING_PARITY_OPS
-    assert django_keys == frozen_keys, (
+    django_keys_for_set_check = django_keys - _PENDING_PARITY_OPS
+    assert django_keys_for_set_check == frozen_keys, (
         f"documented (path, method) operations differ:\n"
-        f"  only in Django's schema: {sorted(django_keys - frozen_keys)}\n"
-        f"  only in the frozen contract: {sorted(frozen_keys - django_keys)}"
+        f"  only in Django's schema: {sorted(django_keys_for_set_check - frozen_keys)}\n"
+        f"  only in the frozen contract: {sorted(frozen_keys - django_keys_for_set_check)}"
     )
 
     mismatches = []
     known_divergences_hit: set[tuple[tuple[str, str], str]] = set()
     for key in sorted(django_keys):
         if key in _PENDING_PARITY_OPS:
-            # Defensive/explicit, not currently reachable: every op listed
-            # in `_PENDING_PARITY_OPS` today is ABSENT from `django_keys`
-            # entirely (see that constant's own comment), so this branch
-            # never actually fires yet -- kept so a future op that lands
-            # PARTIALLY (present in Django, wrong shape, still pending
-            # full parity) is also skipped here rather than failing this
-            # gate, per instruction: pending ops are excluded from the
-            # per-op comparison loop too, not just the key-set check above.
+            # NOW REACHABLE (Stage 5a FIX C): `login`/`refresh`/`me` ARE
+            # present in `django_keys` (Stage 3's stub views already
+            # registered those three routes -- only `register`/`logout`
+            # are genuinely absent) but pending FULL parity -- the frozen
+            # contract now documents 401 responses for all three
+            # (`app/api/routers/auth.py`'s `responses=
+            # _UNAUTHENTICATED_RESPONSE`) that Django's still-stubbed views
+            # don't declare. Exactly the "present in Django, wrong shape,
+            # still pending full parity" case this branch's comment already
+            # anticipated -- skipped here rather than failing this gate;
+            # per-op parity for the whole `/auth/*` surface is Stage 5b's
+            # (#44) job. See `already_implemented_in_django`'s own updated
+            # comment below for the matching change to that stale-guard.
             continue
 
         django_op = django_surface[key]
@@ -435,8 +457,9 @@ def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
     # 1. It no longer exists in the frozen contract at all (the operation
     #    was renamed/removed upstream) -- the exclusion is masking nothing;
     #    DELETE the entry.
-    # 2. It's now IMPLEMENTED in Django (`#44` landed it) -- leaving it
-    #    listed would keep excluding it from the real comparison above
+    # 2. It's now FULLY implemented in Django, with a wire-shape that
+    #    matches the frozen contract exactly (`#44` landed it) -- leaving
+    #    it listed would keep excluding it from the real comparison above
     #    forever, silently masking a future regression on that exact op;
     #    REMOVE the entry so it rejoins the strict, real comparison.
     missing_from_frozen = _PENDING_PARITY_OPS - frozen_keys_all
@@ -444,11 +467,26 @@ def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
         f"_PENDING_PARITY_OPS entries no longer exist in the frozen contract -- "
         f"remove these stale entries: {missing_from_frozen}"
     )
-    already_implemented_in_django = _PENDING_PARITY_OPS & django_keys
+    # UPDATE (Stage 5a FIX C): mere PRESENCE in `django_keys` is no longer
+    # the right staleness signal on its own -- `login`/`refresh`/`me` are
+    # already present (Stage 3's stub routes) but do NOT yet match the
+    # frozen contract's shape (see the per-op loop's updated comment
+    # above), so being present-but-wrong-shaped must NOT trip this guard;
+    # only an op whose wire-shape (request AND every documented response
+    # body) is now IDENTICAL to the frozen contract counts as "fully
+    # implemented" and therefore stale to keep listed.
+    def _matches_frozen_contract_exactly(key: tuple[str, str]) -> bool:
+        django_op = django_surface[key]
+        frozen_op = frozen_surface[key]
+        return django_op["request"] == frozen_op["request"] and django_op["responses"] == frozen_op["responses"]
+
+    already_implemented_in_django = {
+        key for key in (_PENDING_PARITY_OPS & django_keys) if _matches_frozen_contract_exactly(key)
+    }
     assert not already_implemented_in_django, (
-        f"_PENDING_PARITY_OPS entries are already present in Django's own schema -- "
-        f"Stage 5b (#44) landed some parity; remove these entries now that they're "
-        f"covered by the real, strict comparison above: {already_implemented_in_django}"
+        f"_PENDING_PARITY_OPS entries now match the frozen contract's shape exactly -- "
+        f"Stage 5b (#44) landed full parity for these ops; remove these entries now "
+        f"that they're covered by the real, strict comparison above: {already_implemented_in_django}"
     )
 
 

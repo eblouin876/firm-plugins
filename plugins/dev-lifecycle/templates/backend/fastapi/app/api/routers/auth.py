@@ -33,11 +33,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_auth_service, get_current_principal
 from app.core.db import get_db
+from app.core.errors import ErrorEnvelope
 from app.core.security.auth import AccessClaims, AuthService, InvalidToken
 from app.core.security.auth.stores import SqlAlchemyUserStore
 from app.schemas.auth import LoginRequest, PrincipalOut, RefreshRequest, RegisterRequest, TokenResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# FIX C (whole-PR review, Stage 5a, contract completeness): documents the
+# ErrorEnvelope-shaped error responses these routes actually send at
+# runtime (via app/main.py's `_auth_error_handler`/`_app_error_handler`),
+# same pattern as `app/api/routers/items.py`'s own `_NOT_FOUND_RESPONSE` --
+# a `responses={...}` dict of `{status: {"model": ErrorEnvelope,
+# "description": ...}}` merged into each route decorator below. Before this
+# fix, the exported/frozen OpenAPI contract (`packages/api-client/
+# openapi.json`) only documented success + 422 for every /auth/* route --
+# the runtime 401/409 responses were entirely undeclared, so a generated
+# client had no typed knowledge of them. `POST /auth/logout` is
+# deliberately NOT given one of these: it's 204 and idempotent by design
+# (see that handler's own docstring) and never raises an error a client
+# needs to handle.
+_UNAUTHENTICATED_RESPONSE = {
+    401: {"model": ErrorEnvelope, "description": "Invalid credentials, or an invalid/expired/revoked token."}
+}
+_CONFLICT_RESPONSE = {409: {"model": ErrorEnvelope, "description": "An account with this email already exists."}}
 
 
 @router.post(
@@ -45,6 +64,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     response_model=PrincipalOut,
     status_code=status.HTTP_201_CREATED,
     summary="Register",
+    responses=_CONFLICT_RESPONSE,
 )
 async def register(
     payload: RegisterRequest,
@@ -57,7 +77,7 @@ async def register(
     return PrincipalOut(id=uuid.UUID(user.id), email=user.email)
 
 
-@router.post("/login", response_model=TokenResponse, summary="Login")
+@router.post("/login", response_model=TokenResponse, summary="Login", responses=_UNAUTHENTICATED_RESPONSE)
 async def login(
     payload: LoginRequest,
     auth_service: AuthService = Depends(get_auth_service),
@@ -70,7 +90,7 @@ async def login(
     return TokenResponse(access_token=pair.access, refresh_token=pair.refresh)
 
 
-@router.post("/refresh", response_model=TokenResponse, summary="Refresh token")
+@router.post("/refresh", response_model=TokenResponse, summary="Refresh token", responses=_UNAUTHENTICATED_RESPONSE)
 async def refresh(
     payload: RefreshRequest,
     auth_service: AuthService = Depends(get_auth_service),
@@ -99,7 +119,7 @@ async def logout(
     await auth_service.logout(payload.refresh_token)
 
 
-@router.get("/me", response_model=PrincipalOut, summary="Current principal")
+@router.get("/me", response_model=PrincipalOut, summary="Current principal", responses=_UNAUTHENTICATED_RESPONSE)
 async def me(
     claims: AccessClaims = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),

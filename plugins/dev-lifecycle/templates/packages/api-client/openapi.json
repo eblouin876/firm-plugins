@@ -339,6 +339,16 @@
               }
             }
           },
+          "409": {
+            "description": "An account with this email already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -381,6 +391,16 @@
               }
             }
           },
+          "401": {
+            "description": "Invalid credentials, or an invalid/expired/revoked token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -419,6 +439,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials, or an invalid/expired/revoked token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -486,6 +516,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PrincipalOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials, or an invalid/expired/revoked token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
