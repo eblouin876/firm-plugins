@@ -44,8 +44,15 @@ user-management UI at `app/(app)/users` — list/search/paginate via
 `app/(app)/blog` — a TipTap WYSIWYG editor (`components/editor/
 BlogEditor.tsx`), posts list/create/edit with the publish/unpublish/delete
 workflow, and a lightweight comment Hide/Delete view — driving the merged
-13d backend endpoints through `@repo/api-client`. `moderation` remains a
-placeholder page; its real content lands in Stage 13c.
+13d backend endpoints through `@repo/api-client`. **What Stage 13c added:** a
+real moderation queue at `app/(app)/moderation` — a status-/target-type-
+filterable, paginated flag table (`GET /admin/flags`,
+`?status=`/`?target_type=`/`?page=`/`?size=`, defaulting to the `open`
+filter) with per-flag Resolve/Dismiss actions
+(`components/moderation/ResolveFlagDialog.tsx`/`DismissFlagDialog.tsx`),
+driving the merged 13c backend endpoints through `@repo/api-client`. No stub
+pages remain — `components/ComingSoon.tsx` (its own docstring predicted
+this) has been removed.
 
 ## Contents
 - Composition contract
@@ -99,10 +106,10 @@ check shows.
   tree, the admin nav chrome, and one proven admin-gated call.
 - **Isn't:** a home for portable auth/query/forms logic (still
   `@repo/web-shared`, unchanged) or API-calling code (still
-  `@repo/api-client`'s mutator, unchanged). Moderation isn't built yet — it
-  stays a stub page until Stage 13c lands. User management shipped in Stage
-  13b, blog posts + the TipTap editor shipped in Stage 13d (see "Routing +
-  screens" below).
+  `@repo/api-client`'s mutator, unchanged). User management shipped in Stage
+  13b, blog posts + the TipTap editor shipped in Stage 13d, and the
+  moderation queue shipped in Stage 13c (see "Routing + screens" below) —
+  every nav link now lands on real UI.
 
 ## Provider wiring
 Byte-for-byte the same as `templates/frontend/nextjs/app/providers.tsx`:
@@ -157,10 +164,27 @@ once at module scope, then mounts a per-mount `QueryClient` +
   slug/title, oversize body) surfaces the server's own message via
   `applyEnvelopeToForm`/a banner rather than crashing or silently no-op'ing
   — see `components/blog/blogErrors.ts`'s `describeBlogError`.
-- `app/(app)/moderation` — a stub page (`components/ComingSoon.tsx`) that
-  resolves the nav link and proves the route tree builds. Admin-gated purely
-  by inheriting the layout — no gate logic of its own. Real content lands in
-  Stage 13c.
+- `app/(app)/moderation` — the moderation queue (Stage 13c): a status-
+  /target-type-filterable, paginated flag table (`GET /admin/flags`,
+  `?status=`/`?target_type=`/`?page=`/`?size=`, defaulting to the `open`
+  filter — the queue's working view) with per-flag Resolve
+  (`components/moderation/ResolveFlagDialog.tsx`, `POST .../resolve
+  {action, note}`) and Dismiss (`components/moderation/
+  DismissFlagDialog.tsx`, `POST .../dismiss {note}`) actions, offered only
+  for `open` flags — resolved/dismissed flags show their
+  `resolved_by_id`/`resolved_at`/`resolution_note` read-only instead. The
+  resolve dialog's action selector (`none`/`hide_content`/`delete_content`/
+  `ban_author`) is filtered by the flag's `target_type`: a `user` target
+  only offers `none`/`ban_author` (the backend 422s
+  `hide_content`/`delete_content` against a `user` target — see
+  `app/api/routers/moderation.py`'s `resolve_admin_flag` dispatch) — UX
+  guidance only, the backend remains the authoritative gate. Every mutation
+  invalidates the list query (`getListAdminFlagsAdminFlagsGetQueryKey`); a
+  409 (the flag isn't `open` anymore, or the ban-author self-protection
+  guard) or 422 (an invalid action for the target's `target_type`) surfaces
+  the server's own message in the dialog rather than crashing or silently
+  no-op'ing — see `components/moderation/moderationErrors.ts`'s
+  `describeModerationError`.
 
 **The `/admin/ping` acceptance call.** `app/(app)/dashboard/page.tsx` fires a
 live `useQuery` against the generated `adminPingAdminPingGet` hook and
@@ -241,6 +265,14 @@ past first render), submits the form, and asserts the captured `POST
 "doc"` — TipTap's own `editor.getJSON()` shape) AND `body_html` (a string —
 `editor.getHTML()`), plus a 409 duplicate-slug test.
 
+`src/test/moderation.test.tsx` (Stage 13c) covers the moderation queue the
+same way: MSW-stubbed `GET /admin/flags` renders a page of flags across
+target types and statuses and asserts the default `open` filter, a real
+`POST .../resolve` action (e.g. `ban_author` on a `comment` flag) fires the
+exact `{action}` body and refetches the list, and a stubbed 409 (the ban-
+author self-protection guard) surfaces the server's own message in the
+dialog without crashing or triggering a refetch.
+
 ## Materialized-location paths
 Same convention as `templates/frontend/nextjs/`: `tsconfig.json`'s `extends`
 and `eslint.config.mjs`'s import of the root config are written as
@@ -248,13 +280,14 @@ and `eslint.config.mjs`'s import of the root config are written as
 two levels below the project root). Don't "fix" them to be
 firm-plugins-relative.
 
-## For later stages (13c)
-- **Nav link targets / stub routes** Stage 13a created: `/dashboard`,
-  `/users`, `/moderation`, `/blog` — all under `app/(app)/`, all admin-gated
-  by inheriting `app/(app)/layout.tsx`. `/users` got its real UI in Stage
-  13b, `/blog` got its real UI (posts CRUD + the TipTap editor) in Stage
-  13d (see "Routing + screens" above); `/moderation` is still a stub. A
-  later stage replaces a stub page's body with real UI; it does not need to
+## For later stages
+- **Nav link targets** Stage 13a created: `/dashboard`, `/users`,
+  `/moderation`, `/blog` — all under `app/(app)/`, all admin-gated by
+  inheriting `app/(app)/layout.tsx`. `/users` got its real UI in Stage 13b,
+  `/blog` got its real UI (posts CRUD + the TipTap editor) in Stage 13d, and
+  `/moderation` got its real UI (the flag queue) in Stage 13c (see "Routing
+  + screens" above) — no stub pages remain. A later stage adding a new
+  screen just adds a new gated route under `app/(app)/`; it does not need to
   touch the gate, nav, or layout.
 - **App identity**: package name `admin`, materializes to `apps/admin`, dev
   port **3001** (`next dev -p 3001` in `package.json`) and production port
