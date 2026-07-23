@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "mobile",
+    "slug": "mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "//scheme": "Deep-link / URL scheme Expo Router requires. Rename to your app's real scheme before shipping.",
+    "scheme": "mobile",
+    "ios": {
+      "supportsTablet": true,
+      "//bundleIdentifier": "Replace with your real reverse-DNS bundle id before an iOS build.",
+      "bundleIdentifier": "com.example.mobile"
+    },
+    "android": {
+      "//package": "Replace with your real reverse-DNS package name before an Android build.",
+      "package": "com.example.mobile",
+      "edgeToEdgeEnabled": true
+    },
+    "//plugins": "expo-router is required for file-based routing; expo-secure-store needs no config plugin.",
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
