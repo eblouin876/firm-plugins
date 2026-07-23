@@ -20,4 +20,7 @@ export * from './principalOut';
 export * from './readinessStatus';
 export * from './refreshRequest';
 export * from './registerRequest';
+export * from './requestPasswordResetRequest';
+export * from './resetPasswordRequest';
 export * from './tokenResponse';
+export * from './verifyEmailRequest';

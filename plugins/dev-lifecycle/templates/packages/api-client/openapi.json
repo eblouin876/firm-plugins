@@ -316,7 +316,7 @@
           "auth"
         ],
         "summary": "Register",
-        "description": "Delegates straight to `AuthService.register` \u2014 raises\n`EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized\nemail, uncaught here (see module docstring).",
+        "description": "Delegates straight to `AuthService.register` \u2014 raises\n`EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized\nemail, uncaught here (see module docstring).\n\nStage 5c (#45): on success, additionally (a) sends a verification email\n(`AccountService.request_email_verification(user)` \u2014 the freshly\ncreated `UserRecord` `AuthService.register` just returned, so no extra\nlookup is needed) and (b) emits an `auth.register` audit event. Neither\nchanges this endpoint's response shape (still 201 `PrincipalOut`) \u2014 a\nproject whose `Settings.auth_require_email_verification` is `True`\n(the secure default) needs the caller to actually consume the emailed\nlink (`POST /auth/verify-email`) before `AuthService.login` will let\nthis account in; see that dependency's own docstring.",
         "operationId": "register_auth_register_post",
         "requestBody": {
           "content": {
@@ -536,6 +536,136 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/auth/verify-email": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify email",
+        "description": "Delegates to `AccountService.verify_email` \u2014 raises\n`InvalidSingleUseToken` (-> 401 `unauthenticated`, generic and\nwire-identical to every other single-use-token rejection reason \u2014 see\nthat exception's own docstring) for an unknown/expired/already-used/\nwrong-purpose token, uncaught here (see module docstring). On success,\nmarks the token's owning user's email verified \u2014 see `AuthService.\nlogin`'s `require_verification` gate (`app/api/deps.py:\nget_auth_service`) for why that matters: with `Settings.\nauth_require_email_verification=True` (the default), login for this\naccount was refused (generically, as `InvalidCredentials`) until this\nendpoint succeeds.",
+        "operationId": "verify_email_auth_verify_email_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "The verify/reset link is invalid, expired, or has already been used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/request-password-reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request password reset",
+        "description": "Delegates to `AccountService.request_password_reset` \u2014 that method\nNEVER raises and never reveals whether `payload.email` has an account\n(see its own docstring on the anti-user-enumeration defense this\nmirrors from `AuthService.login`'s own `InvalidCredentials`), so this\nhandler ALWAYS returns 202 with a genuinely EMPTY body (`Response(...,\ncontent=b\"\")`, not FastAPI's default JSON-encoded `null` a bare\n`return None` with no `response_model` would send instead \u2014 a\nbyte-identical, content-free response is the strongest form of \"this\nendpoint reveals nothing\" for a known email and an unknown one alike),\nnever a 404/409 that would leak account existence. A `422` (declared\nabove) is the one response shape this endpoint CAN still send, for a\nrequest body that fails `RequestPasswordResetRequest`'s own schema\nvalidation (e.g. an empty `email` string) before this handler body ever\nruns.",
+        "operationId": "request_password_reset_auth_request_password_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestPasswordResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/reset-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reset password",
+        "description": "Delegates to `AccountService.reset_password` \u2014 raises\n`InvalidSingleUseToken` (-> 401 `unauthenticated`, generic \u2014 see\n`verify_email`'s docstring above for the identical rationale) for an\nunknown/expired/already-used/wrong-purpose reset token, uncaught here.\nOn success, revokes EVERY refresh-token family the user has (every\ndevice/session is logged out, not just the one that requested the\nreset \u2014 see `AccountService.reset_password`'s own docstring) and, if a\nlockout policy is wired, lifts any failed-login lockout on the\naccount \u2014 the same shared-session `LockoutPolicy` `app/api/deps.py:\nget_auth_service`'s `AuthService.login` recorded against, so the reset\naccount can log in with its new password immediately.",
+        "operationId": "reset_password_auth_reset_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "The verify/reset link is invalid, expired, or has already been used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -885,6 +1015,42 @@
         ],
         "title": "RegisterRequest"
       },
+      "RequestPasswordResetRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "RequestPasswordResetRequest"
+      },
+      "ResetPasswordRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Token"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "New Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "ResetPasswordRequest"
+      },
       "TokenResponse": {
         "properties": {
           "access_token": {
@@ -908,6 +1074,21 @@
           "refresh_token"
         ],
         "title": "TokenResponse"
+      },
+      "VerifyEmailRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "VerifyEmailRequest"
       }
     },
     "securitySchemes": {

@@ -29,7 +29,10 @@ import type {
   PrincipalOut,
   RefreshRequest,
   RegisterRequest,
-  TokenResponse
+  RequestPasswordResetRequest,
+  ResetPasswordRequest,
+  TokenResponse,
+  VerifyEmailRequest
 } from '../../models';
 
 import { customFetch } from '../../../mutator';
@@ -90,6 +93,16 @@ export const getRegisterAuthRegisterPostUrl = () => {
  * Delegates straight to `AuthService.register` — raises
  * `EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized
  * email, uncaught here (see module docstring).
+ *
+ * Stage 5c (#45): on success, additionally (a) sends a verification email
+ * (`AccountService.request_email_verification(user)` — the freshly
+ * created `UserRecord` `AuthService.register` just returned, so no extra
+ * lookup is needed) and (b) emits an `auth.register` audit event. Neither
+ * changes this endpoint's response shape (still 201 `PrincipalOut`) — a
+ * project whose `Settings.auth_require_email_verification` is `True`
+ * (the secure default) needs the caller to actually consume the emailed
+ * link (`POST /auth/verify-email`) before `AuthService.login` will let
+ * this account in; see that dependency's own docstring.
  * @summary Register
  */
 export const registerAuthRegisterPost = async (registerRequest: RegisterRequest, options?: RequestInit): Promise<registerAuthRegisterPostResponse> => {
@@ -584,3 +597,316 @@ export function useMeAuthMeGet<TData = Awaited<ReturnType<typeof meAuthMeGet>>, 
 
 
 
+export type verifyEmailAuthVerifyEmailPostResponse204 = {
+  data: void
+  status: 204
+}
+
+export type verifyEmailAuthVerifyEmailPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type verifyEmailAuthVerifyEmailPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type verifyEmailAuthVerifyEmailPostResponseSuccess = (verifyEmailAuthVerifyEmailPostResponse204) & {
+  headers: Headers;
+};
+export type verifyEmailAuthVerifyEmailPostResponseError = (verifyEmailAuthVerifyEmailPostResponse401 | verifyEmailAuthVerifyEmailPostResponse422) & {
+  headers: Headers;
+};
+
+export type verifyEmailAuthVerifyEmailPostResponse = (verifyEmailAuthVerifyEmailPostResponseSuccess | verifyEmailAuthVerifyEmailPostResponseError)
+
+export const getVerifyEmailAuthVerifyEmailPostUrl = () => {
+
+
+
+
+  return `/auth/verify-email`
+}
+
+/**
+ * Delegates to `AccountService.verify_email` — raises
+ * `InvalidSingleUseToken` (-> 401 `unauthenticated`, generic and
+ * wire-identical to every other single-use-token rejection reason — see
+ * that exception's own docstring) for an unknown/expired/already-used/
+ * wrong-purpose token, uncaught here (see module docstring). On success,
+ * marks the token's owning user's email verified — see `AuthService.
+ * login`'s `require_verification` gate (`app/api/deps.py:
+ * get_auth_service`) for why that matters: with `Settings.
+ * auth_require_email_verification=True` (the default), login for this
+ * account was refused (generically, as `InvalidCredentials`) until this
+ * endpoint succeeds.
+ * @summary Verify email
+ */
+export const verifyEmailAuthVerifyEmailPost = async (verifyEmailRequest: VerifyEmailRequest, options?: RequestInit): Promise<verifyEmailAuthVerifyEmailPostResponse> => {
+
+  return customFetch<verifyEmailAuthVerifyEmailPostResponse>(getVerifyEmailAuthVerifyEmailPostUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(verifyEmailRequest)
+  }
+);}
+
+
+
+
+
+export const getVerifyEmailAuthVerifyEmailPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyEmailAuthVerifyEmailPost>>, TError,{data: VerifyEmailRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof verifyEmailAuthVerifyEmailPost>>, TError,{data: VerifyEmailRequest}, TContext> => {
+
+const mutationKey = ['verifyEmailAuthVerifyEmailPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof verifyEmailAuthVerifyEmailPost>>, {data: VerifyEmailRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  verifyEmailAuthVerifyEmailPost(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type VerifyEmailAuthVerifyEmailPostMutationResult = NonNullable<Awaited<ReturnType<typeof verifyEmailAuthVerifyEmailPost>>>
+    export type VerifyEmailAuthVerifyEmailPostMutationBody = VerifyEmailRequest
+    export type VerifyEmailAuthVerifyEmailPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Verify email
+ */
+export const useVerifyEmailAuthVerifyEmailPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyEmailAuthVerifyEmailPost>>, TError,{data: VerifyEmailRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof verifyEmailAuthVerifyEmailPost>>,
+        TError,
+        {data: VerifyEmailRequest},
+        TContext
+      > => {
+      return useMutation(getVerifyEmailAuthVerifyEmailPostMutationOptions(options), queryClient);
+    }
+    export type requestPasswordResetAuthRequestPasswordResetPostResponse202 = {
+  data: unknown
+  status: 202
+}
+
+export type requestPasswordResetAuthRequestPasswordResetPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type requestPasswordResetAuthRequestPasswordResetPostResponseSuccess = (requestPasswordResetAuthRequestPasswordResetPostResponse202) & {
+  headers: Headers;
+};
+export type requestPasswordResetAuthRequestPasswordResetPostResponseError = (requestPasswordResetAuthRequestPasswordResetPostResponse422) & {
+  headers: Headers;
+};
+
+export type requestPasswordResetAuthRequestPasswordResetPostResponse = (requestPasswordResetAuthRequestPasswordResetPostResponseSuccess | requestPasswordResetAuthRequestPasswordResetPostResponseError)
+
+export const getRequestPasswordResetAuthRequestPasswordResetPostUrl = () => {
+
+
+
+
+  return `/auth/request-password-reset`
+}
+
+/**
+ * Delegates to `AccountService.request_password_reset` — that method
+ * NEVER raises and never reveals whether `payload.email` has an account
+ * (see its own docstring on the anti-user-enumeration defense this
+ * mirrors from `AuthService.login`'s own `InvalidCredentials`), so this
+ * handler ALWAYS returns 202 with a genuinely EMPTY body (`Response(...,
+ * content=b"")`, not FastAPI's default JSON-encoded `null` a bare
+ * `return None` with no `response_model` would send instead — a
+ * byte-identical, content-free response is the strongest form of "this
+ * endpoint reveals nothing" for a known email and an unknown one alike),
+ * never a 404/409 that would leak account existence. A `422` (declared
+ * above) is the one response shape this endpoint CAN still send, for a
+ * request body that fails `RequestPasswordResetRequest`'s own schema
+ * validation (e.g. an empty `email` string) before this handler body ever
+ * runs.
+ * @summary Request password reset
+ */
+export const requestPasswordResetAuthRequestPasswordResetPost = async (requestPasswordResetRequest: RequestPasswordResetRequest, options?: RequestInit): Promise<requestPasswordResetAuthRequestPasswordResetPostResponse> => {
+
+  return customFetch<requestPasswordResetAuthRequestPasswordResetPostResponse>(getRequestPasswordResetAuthRequestPasswordResetPostUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(requestPasswordResetRequest)
+  }
+);}
+
+
+
+
+
+export const getRequestPasswordResetAuthRequestPasswordResetPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestPasswordResetAuthRequestPasswordResetPost>>, TError,{data: RequestPasswordResetRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof requestPasswordResetAuthRequestPasswordResetPost>>, TError,{data: RequestPasswordResetRequest}, TContext> => {
+
+const mutationKey = ['requestPasswordResetAuthRequestPasswordResetPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof requestPasswordResetAuthRequestPasswordResetPost>>, {data: RequestPasswordResetRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  requestPasswordResetAuthRequestPasswordResetPost(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RequestPasswordResetAuthRequestPasswordResetPostMutationResult = NonNullable<Awaited<ReturnType<typeof requestPasswordResetAuthRequestPasswordResetPost>>>
+    export type RequestPasswordResetAuthRequestPasswordResetPostMutationBody = RequestPasswordResetRequest
+    export type RequestPasswordResetAuthRequestPasswordResetPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Request password reset
+ */
+export const useRequestPasswordResetAuthRequestPasswordResetPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestPasswordResetAuthRequestPasswordResetPost>>, TError,{data: RequestPasswordResetRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof requestPasswordResetAuthRequestPasswordResetPost>>,
+        TError,
+        {data: RequestPasswordResetRequest},
+        TContext
+      > => {
+      return useMutation(getRequestPasswordResetAuthRequestPasswordResetPostMutationOptions(options), queryClient);
+    }
+    export type resetPasswordAuthResetPasswordPostResponse204 = {
+  data: void
+  status: 204
+}
+
+export type resetPasswordAuthResetPasswordPostResponse401 = {
+  data: ErrorEnvelope
+  status: 401
+}
+
+export type resetPasswordAuthResetPasswordPostResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type resetPasswordAuthResetPasswordPostResponseSuccess = (resetPasswordAuthResetPasswordPostResponse204) & {
+  headers: Headers;
+};
+export type resetPasswordAuthResetPasswordPostResponseError = (resetPasswordAuthResetPasswordPostResponse401 | resetPasswordAuthResetPasswordPostResponse422) & {
+  headers: Headers;
+};
+
+export type resetPasswordAuthResetPasswordPostResponse = (resetPasswordAuthResetPasswordPostResponseSuccess | resetPasswordAuthResetPasswordPostResponseError)
+
+export const getResetPasswordAuthResetPasswordPostUrl = () => {
+
+
+
+
+  return `/auth/reset-password`
+}
+
+/**
+ * Delegates to `AccountService.reset_password` — raises
+ * `InvalidSingleUseToken` (-> 401 `unauthenticated`, generic — see
+ * `verify_email`'s docstring above for the identical rationale) for an
+ * unknown/expired/already-used/wrong-purpose reset token, uncaught here.
+ * On success, revokes EVERY refresh-token family the user has (every
+ * device/session is logged out, not just the one that requested the
+ * reset — see `AccountService.reset_password`'s own docstring) and, if a
+ * lockout policy is wired, lifts any failed-login lockout on the
+ * account — the same shared-session `LockoutPolicy` `app/api/deps.py:
+ * get_auth_service`'s `AuthService.login` recorded against, so the reset
+ * account can log in with its new password immediately.
+ * @summary Reset password
+ */
+export const resetPasswordAuthResetPasswordPost = async (resetPasswordRequest: ResetPasswordRequest, options?: RequestInit): Promise<resetPasswordAuthResetPasswordPostResponse> => {
+
+  return customFetch<resetPasswordAuthResetPasswordPostResponse>(getResetPasswordAuthResetPasswordPostUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(resetPasswordRequest)
+  }
+);}
+
+
+
+
+
+export const getResetPasswordAuthResetPasswordPostMutationOptions = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resetPasswordAuthResetPasswordPost>>, TError,{data: ResetPasswordRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof resetPasswordAuthResetPasswordPost>>, TError,{data: ResetPasswordRequest}, TContext> => {
+
+const mutationKey = ['resetPasswordAuthResetPasswordPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof resetPasswordAuthResetPasswordPost>>, {data: ResetPasswordRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  resetPasswordAuthResetPasswordPost(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ResetPasswordAuthResetPasswordPostMutationResult = NonNullable<Awaited<ReturnType<typeof resetPasswordAuthResetPasswordPost>>>
+    export type ResetPasswordAuthResetPasswordPostMutationBody = ResetPasswordRequest
+    export type ResetPasswordAuthResetPasswordPostMutationError = ErrorEnvelope
+
+    /**
+ * @summary Reset password
+ */
+export const useResetPasswordAuthResetPasswordPost = <TError = ErrorEnvelope,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resetPasswordAuthResetPasswordPost>>, TError,{data: ResetPasswordRequest}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof resetPasswordAuthResetPasswordPost>>,
+        TError,
+        {data: ResetPasswordRequest},
+        TContext
+      > => {
+      return useMutation(getResetPasswordAuthResetPasswordPostMutationOptions(options), queryClient);
+    }
