@@ -36,7 +36,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 - **From consumers** — any app importing this package supplies its own `react` and `@tanstack/react-query` instances (peer dependencies — see "Dep vs peerDep").
 
 **EXPOSES**
-- **Workspace package** `@repo/api-client` — import hooks/types from its root export (`index.ts`), not by deep-importing `src/generated/*` (those paths are `client-generate` output and reshuffle across regenerations).
+- **Workspace package** `@repo/api-client` — import hooks/types from its root export (`index.ts`), not by deep-importing `src/generated/*` (those paths are `client-generate` output and reshuffle across regenerations). The root export re-exports every generated tag — `auth` (login/refresh/logout/`useMeAuthMeGet`), `admin` (`useAdminPingAdminPingGet`), `health`, and `items` — so a consumer (the web SPA, the Expo app) gets the auth hooks from the package root without reaching into `src/generated/endpoints/*`. Add an `export *` line here whenever a new tag lands, mirroring the existing ones.
 - **Its generated contract** — the hooks, request/response types, and models mirror `openapi.json`, a committed export of the live backend's actual OpenAPI schema (Stage 3 on — see "Stage 3: the live schema" below).
 
 ## What it is / isn't

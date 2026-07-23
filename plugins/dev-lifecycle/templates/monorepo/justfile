@@ -14,6 +14,12 @@
 
 set shell := ["bash", "-uc"]
 
+# Source location of the mobile/expo block inside the dev-lifecycle plugin.
+# `add-mobile` copies from here into apps/mobile/. CLAUDE_PLUGIN_ROOT is set by
+# Claude Code when a plugin agent runs the recipe; empty otherwise (the recipe
+# fails loudly in that case rather than copying from a bogus path).
+mobile-block := env_var_or_default("CLAUDE_PLUGIN_ROOT", "") / "templates/mobile/expo"
+
 # List available targets.
 default:
     @just --list
@@ -72,6 +78,38 @@ build:
 client-generate:
     cd apps/api && uv run --no-dev python -m app.export_openapi ../../packages/api-client/openapi.json
     pnpm --filter @repo/api-client run generate
+
+# Scaffold the Expo mobile app into apps/mobile/ from the plugin's mobile/expo
+# block. IDEMPOTENT: a clean no-op if apps/mobile/ already exists (never
+# clobbers an app that's diverged from the template). The block bakes in
+# BEARER-mode @repo/api-client config at its entry (app/_layout.tsx —
+# `configureApiClient({ baseUrl })` with cookieMode omitted; cookie mode is
+# never enabled on native), and its package.json already defines
+# test/lint/typecheck/build scripts, so once it's a workspace member the
+# standard `just test|lint|typecheck|build` targets pick it up through
+# `pnpm -r --if-present` — no per-target wiring needed here. Runs
+# `pnpm install` afterward so the workspace registers the new package.
+add-mobile:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -d apps/mobile ]; then
+        echo "apps/mobile/ already exists — add-mobile is a no-op (idempotent)." >&2
+        exit 0
+    fi
+    src="{{mobile-block}}"
+    if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ] || [ ! -d "$src" ]; then
+        echo "cannot locate the mobile/expo block at '$src'." >&2
+        echo "Set CLAUDE_PLUGIN_ROOT to the dev-lifecycle plugin root and retry." >&2
+        exit 1
+    fi
+    mkdir -p apps/mobile
+    # Copy the whole block (app/, src/, docs/fragment.md, config, .env.example).
+    cp -R "$src/." apps/mobile/
+    echo "Scaffolded apps/mobile/ from the mobile/expo block."
+    # Register the new workspace package (apps/* is already globbed).
+    pnpm install
+    echo "Next: set EXPO_PUBLIC_API_BASE_URL in apps/mobile/.env (see .env.example),"
+    echo "then run 'just docs-generate' to fold its doc fragment into the root README."
 
 # Deploy the project to an environment (default: dev). Delegates to the
 # aws-fargate infra block's deploy script (OIDC assume -> ECR push ->

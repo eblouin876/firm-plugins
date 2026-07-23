@@ -1,6 +1,6 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07"
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07; Stage 8 Mobile expo-router/expo-secure-store/react-native-screens/react-native-safe-area-context rows, 2026-07"
 last-verified: 2026-07-23
 provenance: manual
 sources:
@@ -24,6 +24,9 @@ sources:
   - https://vite.dev/blog/announcing-vite8
   - https://nextjs.org/docs/app/guides/upgrading/version-16
   - https://expo.dev/changelog/sdk-57
+  - https://docs.expo.dev/router/introduction/
+  - https://docs.expo.dev/versions/latest/sdk/securestore/
+  - https://www.npmjs.com/package/expo (bundledNativeModules.json, expo@57.0.7)
   - https://www.postgresql.org/about/news/postgresql-184-1710-1614-1518-and-1423-released-3297/
   - https://github.com/hashicorp/terraform/releases
   - https://registry.terraform.io/providers/hashicorp/aws/latest
@@ -109,8 +112,12 @@ Re-verify against official release notes/registries before bumping any line — 
 ## Mobile
 | Dep | Pinned line | Why this line |
 | --- | --- | --- |
-| Expo SDK | **57** | Current stable (released Jun 30 2026), ships React Native 0.86 as a small, non-breaking upgrade over SDK 56. **Judgment call:** teams wanting one more field-tested cycle can stay on SDK 56 (React Native 0.85) — both are acceptable; don't mix SDK versions within one app. |
-| React Native | **0.86** (via Expo SDK 57) | Pinned indirectly through the Expo SDK — don't hand-pin a bare React Native version inside an Expo-managed app. |
+| Expo SDK | **57** (`expo` **~57.0.7**) | Current stable (released Jun 30 2026), ships React Native 0.86 as a small, non-breaking upgrade over SDK 56. **Judgment call:** teams wanting one more field-tested cycle can stay on SDK 56 (React Native 0.85) — both are acceptable; don't mix SDK versions within one app. **Second judgment call (minimumReleaseAge):** `expo@57.0.8` is the true latest patch (published Jul 22 2026 16:21 UTC) but falls inside the workspace's 1-day `minimumReleaseAge` window at this pin's `last-verified` (Jul 23); `57.0.7` (Jul 17) clears it — pin that, the same tactic the `@tanstack/react-query` row documents. Re-check next quarter; `57.0.8+` will have aged out on its own by then. |
+| React Native | **0.86** (0.86.0, via Expo SDK 57) | Pinned indirectly through the Expo SDK — don't hand-pin a bare React Native version inside an Expo-managed app. `npx expo install` resolves it from `expo@57.0.7`'s `bundledNativeModules.json`; the four rows below are resolved the same way (SDK-governed, not hand-picked), which is why they carry Expo-SDK-shaped versions (`~57.0.x`) even though they're separately-published packages. React 19.2.3 / react-dom 19.2.3 come with RN 0.86 the same way (consistent with the Frontend/web React 19.x pin). |
+| expo-router | **~57.0.7** (via Expo SDK 57) | The SDK-57 first-party, file-based navigation library (`app/` route directory, route groups). Resolved by `npx expo install expo-router` from `expo@57.0.7`'s `bundledNativeModules.json` — SDK-governed, do not hand-pick a bare version. Consumed by `templates/mobile/expo` (Stage 8 #31) for its `(auth)`/`(app)` route groups + the root-layout auth gate. Its peers `react-native-screens` / `react-native-safe-area-context` (below) are required and pinned the same way. |
+| expo-secure-store | **~57.0.1** (via Expo SDK 57) | OS-backed secret store (iOS Keychain / Android Keystore) — where the mobile app keeps its **refresh token** in bearer mode (never AsyncStorage; see `references/wiring/auth-end-to-end.md` and `references/security/secure-baseline.md`). Resolved by `npx expo install expo-secure-store` from the SDK-57 manifest. Consumed by `templates/mobile/expo`'s auth-context `secureStore` seam (Stage 8 #31). |
+| react-native-screens | **4.25.2** (via Expo SDK 57) | Native navigation-container primitive `expo-router` requires. SDK-governed exact pin from `expo@57.0.7`'s `bundledNativeModules.json` (this one resolves to an exact version, not a `~` range) — installed via `npx expo install` alongside `expo-router`, never bumped independently of the SDK. |
+| react-native-safe-area-context | **~5.7.0** (via Expo SDK 57) | Safe-area inset provider `expo-router` requires (its root layout wraps the app in `SafeAreaProvider`). SDK-governed pin from the SDK-57 manifest, installed via `npx expo install` alongside `expo-router`; don't hand-pin. |
 
 ## Kit-wide lint & format tooling
 | Dep | Pinned line | Why this line |
