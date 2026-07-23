@@ -1,16 +1,16 @@
 <!--
 block: backend/fastapi
 needs:
-  - DATABASE_URL (required); ENVIRONMENT/DEBUG/CORS_ALLOWED_ORIGINS/RATE_LIMIT_*/SECURITY_HEADERS_*/JWT_SIGNING_KEY/SECRETS_BACKEND (optional, secure defaults — see "Security composition" + docs/fragment.md)
+  - DATABASE_URL (required); JWT_SIGNING_KEY (required to use any /auth/* route — see "Auth" below); ENVIRONMENT/DEBUG/CORS_ALLOWED_ORIGINS/RATE_LIMIT_*/SECURITY_HEADERS_*/SECRETS_BACKEND (optional, secure defaults — see "Security composition" + docs/fragment.md)
   - port: 8000 (uvicorn default)
   - Python 3.13.x + uv (no committed uv.lock — see pyproject.toml)
 exposes:
-  - routes: GET/POST /items, GET/PATCH/DELETE /items/{id}, GET /health, GET /readyz, POST /auth/login|refresh (stub), GET /auth/me (stub)
+  - routes: GET/POST /items, GET/PATCH/DELETE /items/{id}, GET /health, GET /readyz, POST /auth/register|login|refresh|logout, GET /auth/me
   - the OpenAPI 3.1 contract (bearer security scheme) packages/api-client generates from
   - security composition: security-headers/request-id-audit/rate-limiting/CORS wired by default
   - its co-located doc fragment: docs/fragment.md
 versions-pinned-to: references/compatibility-matrix.md
-last-verified: 2026-07-22
+last-verified: 2026-07-23
 provenance: manual
 -->
 
@@ -34,7 +34,7 @@ scope here, marked as a `TODO` comment at its seam (see app/main.py).
 - Security composition
 - App layout
 - Error contract
-- Auth stubs (Stage 5 seam)
+- Auth (Stage 5a, #41)
 - Pagination
 - Database & migrations
 - Testing
@@ -63,9 +63,10 @@ scope here, marked as a `TODO` comment at its seam (see app/main.py).
 **EXPOSES**
 - **Routes**: `GET/POST /items`, `GET/PATCH/DELETE /items/{id}` (full CRUD
   over the `Item` contract exemplar), `GET /health` (liveness, no DB),
-  `GET /readyz` (readiness, real `SELECT 1`), `POST /auth/login`,
-  `POST /auth/refresh`, `GET /auth/me` (all three: defined contract, stub
-  501 body — see "Auth stubs" below).
+  `GET /readyz` (readiness, real `SELECT 1`), `POST /auth/register`,
+  `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`,
+  `GET /auth/me` — real behavior (Stage 5a, #41) against the vendored auth
+  component's `AuthService`, not a stub — see "Auth" below.
 - **The OpenAPI 3.1 contract** `packages/api-client` generates from —
   title, version, the `HTTPBearer` security scheme (auto-registered by
   `app/api/deps.py`'s `get_current_principal` stub dependency). Step 4
@@ -104,6 +105,17 @@ subpackage under `app/core/security/`:
 | `app/core/security/secret_store/secret_store.py` | `secrets-loading/secret_store.py` | `templates/components/security/secrets-loading/README.md` |
 | `app/core/security/audit_logging/audit.py` | `audit-logging/audit.py` | `templates/components/security/audit-logging/README.md` |
 | `app/core/security/input_validation/validation.py` | `input-validation/validation.py` | `templates/components/security/input-validation/README.md` |
+| `app/core/security/auth/{_core,fastapi}.py` | `security/auth/{_core,fastapi}.py` | `templates/components/security/auth/README.md` |
+
+**Auth (Stage 5a, #41)** vendors the same way — `_core.py`/`fastapi.py`
+byte-copied (below each file's header note) into `app/core/security/auth/`,
+plus an `__init__.py` re-export seam matching `security_headers/`'s. Unlike
+the six baseline components above, this one also has app-specific glue
+living in the SAME directory: `app/core/security/auth/stores.py`
+(SQLAlchemy-backed `UserStore`/`RefreshTokenStore` implementations, the
+`PasswordService`/`TokenService` construction) is **not** vendored — it
+imports `app.models`/`app.core.config`, so the weekly freshness audit does
+not touch it; see that file's own docstring.
 
 `webhook-signature` and `idempotency` (also in the component catalog, under
 `templates/components/security/`) are **deliberately not vendored** here —
@@ -233,12 +245,15 @@ own rate-limit key via a forged header).
 `AppSettings`, wire a field's `default_factory` to `secret_store.
 get_secret(...)`). This block's one concrete example:
 `Settings.jwt_signing_key`, resolved via `get_secret("JWT_SIGNING_KEY",
-required=False)` — `required=False` and no invented fallback value,
-deliberately: nothing in this app consumes the key yet (Stage 5, #28, wires
-real JWT issuance), so making it required would break every existing test
-and the plain dev boot, neither of which sets `JWT_SIGNING_KEY` today, and
-hard-coding a placeholder "secret" value is exactly what this seam exists
-to avoid. `SECRETS_BACKEND=aws-secrets-manager` (consulted directly by
+required=False)`. Still `required=False` at the `Settings()` construction
+seam — a missing `JWT_SIGNING_KEY` must not fail app boot/import, since
+most of this app's routes/tests never touch auth at all — but Stage 5a
+(#41) now genuinely CONSUMES this field: `app/core/security/auth/
+stores.py`'s `get_token_service()` is the fail-CLOSED check, refusing to
+construct a `TokenService` (and therefore refusing every `/auth/*` route
+that needs one) when `jwt_signing_key` is `None`, surfacing as a 500
+`internal_error` envelope rather than ever signing/verifying a token with
+an empty key. `SECRETS_BACKEND=aws-secrets-manager` (consulted directly by
 `secret_store.py` from process env, independent of `Settings`) opts into
 the AWS Secrets Manager fallback layer for this and any future
 `get_secret()` call in this app — see `secrets-loading/README.md`'s
@@ -265,11 +280,11 @@ recipe has an actual endpoint that needs them.
 app/
   main.py              # create_app() factory: routers, exception handlers, OpenAPI/bearer config
   api/
-    deps.py             # get_current_principal — the Stage 5 auth seam
+    deps.py             # get_auth_service (per-request AuthService) + get_current_principal
     routers/
       health.py          # /health (liveness), /readyz (readiness)
       items.py            # full CRUD, the contract exemplar
-      auth.py              # /auth/login, /auth/refresh, /auth/me — stub 501s
+      auth.py              # /auth/register|login|refresh|logout|me — real (Stage 5a, #41)
   core/
     config.py            # this project's Settings(AppSettings) + get_settings()
     settings.py           # vendored AppSettings (see table above)
@@ -289,14 +304,17 @@ app/
       secret_store/                  # vendored secret_store.py, __init__.py re-exports
       audit_logging/                 # vendored audit.py + NEW middleware.py (RequestIDMiddleware)
       input_validation/              # vendored validation.py, __init__.py re-exports
+      auth/                          # vendored _core.py + fastapi.py, __init__.py re-exports; NEW stores.py (app code, not vendored)
   models/
-    __init__.py            # aggregator: imports every model (Item today) so nothing is missed by migrations/tests
+    __init__.py            # aggregator: imports every model (Item, User, RefreshToken) so nothing is missed by migrations/tests
     item.py               # the Item ORM model (contract exemplar)
+    user.py                 # the User ORM model (Stage 5a, #41)
+    refresh_token.py          # the RefreshToken ORM model (Stage 5a, #41)
   schemas/
     item.py                # ItemCreate/ItemUpdate/ItemOut
     health.py                # HealthStatus/ReadinessStatus
-    auth.py                    # LoginRequest/RefreshRequest/TokenResponse/PrincipalOut
-alembic/                  # async env.py, one initial migration (items table)
+    auth.py                    # RegisterRequest/LoginRequest/RefreshRequest/TokenResponse/PrincipalOut
+alembic/                  # async env.py; 0001 (items), 0002 (users + refresh_tokens, Stage 5a #41)
 tests/                   # hermetic integration tests (see "Testing")
 docs/
   fragment.md              # this block's machine-parseable doc fragment (see documentation-standard.md)
@@ -368,18 +386,57 @@ those routes can actually 404. This fixup runs identically whether the
 schema is served live at `/openapi.json` or exported via this script — both
 paths call the same `app.openapi()`.
 
-## Auth stubs (Stage 5 seam)
+## Auth (Stage 5a, #41)
 
-`/auth/login`, `/auth/refresh`, `/auth/me` are gate-1 "define+stub":
-request/response schemas (`app/schemas/auth.py`) and the `HTTPBearer`
-security scheme (`app/api/deps.py`'s `get_current_principal`, used as a
-dependency on `/auth/me`) are real and locked into the OpenAPI contract
-now. Every handler body raises a plain `HTTPException(501)` — deliberately
-**not** the `ErrorEnvelope` (`ErrorCode` is a closed, versioned enum with
-no `not_implemented` member; adding one is a contract change out of scope
-for this step — see `app/api/routers/auth.py`'s module docstring). Stage 5
-(#28) replaces the bodies with real credential verification, JWT issuance,
-and principal resolution.
+Real, end-to-end register/login/refresh/logout/me, wired against
+`templates/components/security/auth/`'s framework-neutral `AuthService`
+(Argon2id password hashing, HS256 JWT access/refresh tokens, refresh-token
+rotation with reuse detection) — see that component's own `_core.py` for
+the full state machine and `README.md` for the security rationale. This
+block's job is purely the wiring: SQLAlchemy-backed `UserStore`/
+`RefreshTokenStore` implementations (`app/core/security/auth/stores.py`,
+against `app/models/user.py`'s `User` and `app/models/refresh_token.py`'s
+`RefreshToken`), the per-request `AuthService` provider
+(`app/api/deps.py:get_auth_service`), and the real route handlers
+(`app/api/routers/auth.py`).
+
+- `POST /auth/register` → `RegisterRequest{email,password}` → 201
+  `PrincipalOut`. Duplicate normalized email → 409 `conflict`.
+- `POST /auth/login` → `LoginRequest` → 200 `TokenResponse`. Bad
+  credentials → 401 `unauthenticated` (identical for "no such account" and
+  "wrong password" — see `_core.py`'s `InvalidCredentials` docstring on
+  the user-enumeration defense).
+- `POST /auth/refresh` → `RefreshRequest` → 200 `TokenResponse`, rotating
+  the token. Invalid or REUSED → 401 `unauthenticated`, indistinguishable
+  at the wire — a reuse event has, as a side effect, already revoked the
+  entire token family in the DB by the time the 401 is returned (see
+  `_core.py`'s `AuthService.refresh` docstring for the 6-step state
+  machine, and `tests/test_auth.py`'s
+  `test_refresh_token_reuse_is_detected_and_kills_the_whole_family` for
+  the HTTP-level proof).
+- `POST /auth/logout` → `RefreshRequest` → 204. Best-effort and idempotent
+  — an already-invalid/unknown/revoked token still returns 204.
+- `GET /auth/me` → bearer token via `get_current_principal` → 200
+  `PrincipalOut`. Missing/invalid/expired/wrong-type (a refresh token
+  presented here) → 401 `unauthenticated`.
+
+Every `_core.AuthError` subclass raised by any handler is left uncaught in
+`app/api/routers/auth.py` — `app/main.py`'s `create_app()` registers a
+handler for the `AuthError` base class (catches every subclass via MRO
+walk, including the vendored component's `InsufficientRole`) that renders
+this app's `ErrorEnvelope` using the component's own `AUTH_ERROR_HTTP`
+string-keyed status/code table (`app/core/security/auth/fastapi.py`) —
+see `_auth_error_handler`'s own docstring in `app/main.py`.
+
+**Fail-closed on missing config.** `app/core/security/auth/stores.py`'s
+`get_token_service()` refuses to construct a `TokenService` — and
+therefore refuses every `/auth/*` route — when `Settings.jwt_signing_key`
+is unset, raising `AuthNotConfiguredError` (a plain `RuntimeError`, caught
+by the generic catch-all `Exception` handler, rendering 500
+`internal_error`) rather than ever signing/verifying with an empty key.
+`PrincipalOut` stays `{id, email}` only in this stage — no `roles` on the
+wire yet; the RBAC wire surface (`require_roles`, already present in the
+vendored component's `fastapi.py`) is Stage 5d.
 
 ## Pagination
 
@@ -398,9 +455,12 @@ value.
 `Settings` (the same object `app/main.py`'s lifespan uses — one source of
 truth for both), and supports both online (`alembic upgrade head`, a real
 asyncpg connection) and offline (`alembic upgrade head --sql`, no
-connection, just emitted SQL) modes. One migration exists today
-(`0001_create_items_table.py`), hand-written to match `app/models/item.py`
-column-for-column rather than `--autogenerate`d.
+connection, just emitted SQL) modes. Two migrations exist today:
+`0001_create_items_table.py` (`app/models/item.py`'s `Item`) and
+`0002_create_auth_tables.py` (Stage 5a, #41 — `app/models/user.py`'s
+`User` and `app/models/refresh_token.py`'s `RefreshToken`), both
+hand-written to match their models column-for-column rather than
+`--autogenerate`d.
 
 **Verified against real PostgreSQL 16** (the sandbox's available
 cluster) — `alembic upgrade head` ran online over `asyncpg`, and a
@@ -411,6 +471,98 @@ sandbox only had a startable 16 cluster available. Nothing in this block's
 schema or migration uses an 18-only feature, but a genuine 18 run has not
 been performed — re-verify against 18 before treating this as a full
 matrix-compliant proof.
+
+### 0002 verification transcript (Stage 5a, #41)
+
+Offline emission (`alembic upgrade 0001:0002 --sql`, no connection —
+proves the migration is emittable without a live DB):
+
+```sql
+BEGIN;
+
+-- Running upgrade 0001 -> 0002
+
+CREATE TABLE users (
+    id UUID NOT NULL,
+    email VARCHAR(320) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    roles JSON NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX ix_users_email ON users (email);
+
+CREATE TABLE refresh_tokens (
+    id UUID NOT NULL,
+    token_hash VARCHAR(64) NOT NULL,
+    jti VARCHAR(32) NOT NULL,
+    family_id VARCHAR(32) NOT NULL,
+    user_id UUID NOT NULL,
+    issued_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used_at TIMESTAMP WITH TIME ZONE,
+    revoked BOOLEAN NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_refresh_tokens_user_id_users FOREIGN KEY(user_id) REFERENCES users (id)
+);
+
+CREATE UNIQUE INDEX ix_refresh_tokens_token_hash ON refresh_tokens (token_hash);
+CREATE INDEX ix_refresh_tokens_family_id ON refresh_tokens (family_id);
+CREATE INDEX ix_refresh_tokens_user_id ON refresh_tokens (user_id);
+
+UPDATE alembic_version SET version_num='0002' WHERE alembic_version.version_num = '0001';
+
+COMMIT;
+```
+
+Online run against real PostgreSQL 16 (`alembic upgrade head` from a fresh
+database — applies both 0001 and 0002 in one run):
+
+```
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001, create items table
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, create auth tables
+$ alembic current
+0002 (head)
+```
+
+**Integration proof, over real HTTP against that same PG16 database** —
+register → login → refresh (rotation) → replay the already-used refresh
+token (reuse detection) → the rotated, never-reused tip is *also* rejected
+afterward (whole-family revocation, not just the one reused token),
+followed by a direct query of `refresh_tokens` proving `revoked = true` on
+every row in the family:
+
+```
+== register ==
+201 {'id': '44bb16da-9fc1-464a-af4b-5af1794fd455', 'email': 'pgverify@example.com'}
+== login ==
+200
+== refresh (rotation 1) ==
+200
+== REPLAY the already-used original refresh token (reuse detection) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Refresh token reuse detected -- the token family has been revoked.', 'details': None}}
+== the rotated (never-reused) tip is ALSO now dead (whole family revoked) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Refresh token has been revoked.', 'details': None}}
+== users row ==
+{'id': UUID('44bb16da-9fc1-464a-af4b-5af1794fd455'), 'email': 'pgverify@example.com'}
+== refresh_tokens rows for this user ==
+{'token_hash': 'cb4c47ba...', 'family_id': '3c03c9f29bee425bb5ffcfde0d8d2535', 'used_at': datetime(2026, 7, 23, 3, 22, 20, 586899, tzinfo=timezone.utc), 'revoked': True}
+{'token_hash': '65de810c...', 'family_id': '3c03c9f29bee425bb5ffcfde0d8d2535', 'used_at': None, 'revoked': True}
+
+DB PROOF: whole refresh-token family is revoked=True after reuse detection.
+```
+
+(Token hashes truncated above for readability; both rows share one
+`family_id` and both are `revoked = True`, confirmed by a direct
+`asyncpg` query against the `refresh_tokens` table — independent of the
+HTTP response, which only proves the *client* saw 401.)
 
 ## Dev run (Docker)
 
@@ -438,11 +590,27 @@ deployment.
 Hermetic integration tests (`tests/`, aiosqlite + `StaticPool`) exercise
 the composed app end to end — app boot, `/health`/`/readyz`, item CRUD
 round-trip, the `Page` envelope, the 422 remap (both a missing required
-field and an `extra="forbid"` rejection), the enveloped 404, the bearer
-scheme's presence in `/openapi.json`, and all three auth stubs' 501s. This
-block does **not** duplicate each vendored component's own unit tests
-(`error-envelope/tests/`, `repository/tests/`, ...) inside `app/` — see
-"Judgment calls" for why.
+field and an `extra="forbid"` rejection), the enveloped 404, and the
+bearer scheme's presence in `/openapi.json`. This block does **not**
+duplicate each vendored component's own unit tests (`error-envelope/
+tests/`, `repository/tests/`, ...) inside `app/` — see "Judgment calls"
+for why.
+
+`tests/test_auth.py` (Stage 5a, #41) exercises the real auth surface
+against the hermetic client: register → login → me happy path (including
+email normalization); duplicate register → 409; bad login → 401
+(unknown email and wrong password, both indistinguishable); refresh
+rotation; **refresh-token reuse detection, at the HTTP level, proving the
+whole family is killed** (`test_refresh_token_reuse_is_detected_and_kills_the_whole_family`
+— the crown-jewel test, see "Auth" above); logout → 204 then refresh →
+401; logout idempotency; `/me` without/with-a-garbage/with-a-wrong-type
+bearer token → 401; the fail-closed `AuthNotConfiguredError` path (no
+`JWT_SIGNING_KEY` → 500, never signs with an empty key); and the bearer
+scheme's continued presence in `/openapi.json`. Uses `make_client`
+(bespoke `Settings(jwt_signing_key=...)`) rather than the plain `client`
+fixture, since the latter's app is built from the process-wide
+`get_settings()` singleton, which never has `JWT_SIGNING_KEY` set in the
+test process's environment.
 
 `tests/test_security_composition.py` (Stage 3 Step 3b, #26) proves the
 security-composition wiring in `app/main.py`'s `create_app()` against real
@@ -466,7 +634,7 @@ surface). Uses the `make_client` factory fixture (`tests/conftest.py`) to
 build a bespoke `Settings()` per test rather than mutating process env
 vars or sleeping in real time for the rate-limit burst.
 
-Run: `uv run --python 3.13 --with fastapi --with 'sqlalchemy[asyncio]==2.0.*' --with aiosqlite --with 'pydantic==2.13.*' --with pydantic-settings --with alembic --with httpx --with pytest --with pytest-asyncio -- pytest tests -q`
+Run: `uv run --python 3.13 --with fastapi --with 'sqlalchemy[asyncio]==2.0.*' --with aiosqlite --with 'pydantic==2.13.*' --with pydantic-settings --with alembic --with httpx --with pytest --with pytest-asyncio --with 'pyjwt==2.13.*' --with 'argon2-cffi==25.1.*' -- pytest tests -q`
 
 Or, once materialized into a project: `uv sync --all-groups && uv run pytest`.
 
@@ -500,10 +668,46 @@ Or, once materialized into a project: `uv sync --all-groups && uv run pytest`.
   touched files (documented via each one's `DRIFT:` header line) but close
   that seam entirely; see "Vendored components" above for the resulting
   invariant every future vendored subpackage in this app follows.
-- **Auth stubs return a plain `HTTPException(501)`, not an
-  `ErrorEnvelope`.** See "Auth stubs" above — `ErrorCode` is locked, and
-  adding a member for a temporary stub is a bigger contract decision than
-  Step 2 should make unilaterally.
+- **`GET /auth/me` does one extra direct `SqlAlchemyUserStore.get_by_id`
+  lookup rather than adding a "fetch profile" method to `AuthService`.**
+  `_core.AccessClaims` (what `get_current_principal` resolves a bearer
+  token to) deliberately carries only `sub`/`roles`/`jti`/timestamps, not
+  `email` — see that component's own `UserStore` Protocol docstring on why
+  it's a storage seam for register/login/refresh, not a general lookup
+  API. Adding a profile-fetch method to the LOCKED `_core.py` for one
+  route's convenience was rejected in favor of this router doing its own
+  narrow, explicit lookup.
+- **`SqlAlchemyRefreshTokenStore.add`/`mark_used`/`revoke_family` each
+  explicitly `commit()`, not just `flush()`.** `_core.py`'s own
+  `RefreshTokenStore` Protocol docstring requires this durability
+  ("Implementations MUST make add/mark_used/revoke_family durable
+  (committed) before returning... so a concurrent second presentation of
+  the just-rotated token sees the updated `used_at`") — under the default
+  READ COMMITTED isolation, a `flush()` alone is invisible to a
+  concurrently-racing second request until an actual `commit()`, which
+  would defeat reuse detection under a genuine race. This intentionally
+  commits mid-request, ahead of `get_db()`'s own end-of-request commit — a
+  second `commit()` on an already-clean session is a harmless no-op.
+- **`app.state.settings` is a new per-app-instance seam, not
+  `Depends(get_settings)`.** `app/api/deps.py:get_auth_service` needs the
+  EXACT `Settings` a given `create_app()` call was built with (its
+  `jwt_signing_key` in particular) — not the separate, process-wide
+  `lru_cache`d `get_settings()` singleton every OTHER piece of security
+  composition (rate limiting, CORS, security headers) reads directly at
+  app-construction time. `tests/conftest.py`'s `make_client` fixture
+  relies on exactly this seam to configure a bespoke `jwt_signing_key` per
+  test without mutating process env vars, which would leak across tests.
+- **sqlite's `DateTime(timezone=True)` round-trips as timezone-NAIVE, not
+  aware — normalized back to UTC-aware at the store boundary
+  (`app/core/security/auth/stores.py`'s `_as_utc`).** PostgreSQL's
+  `timestamptz` always comes back tz-aware; sqlite (this app's hermetic
+  test dialect) has no native timezone-aware datetime type and silently
+  drops the offset on read. `_core.AuthService.refresh` compares
+  `row.expires_at <= self._now()`, and `self._now()` is always tz-aware —
+  comparing aware and naive raises `TypeError` under sqlite without this
+  normalization (a real, hermetic-test-breaking bug discovered while
+  implementing Stage 5a, fixed at the store layer, not in the locked
+  `_core.py`).
 - **A third, broader `Exception` handler was added beyond the two Step 2
   explicitly asks for.** `error-envelope/errors.py`'s own module docstring
   describes an unhandled bug as something "the framework's generic 500
@@ -557,15 +761,17 @@ Or, once materialized into a project: `uv sync --all-groups && uv run pytest`.
   since CORS would reject them before rate-limiting ever saw them.
 - **`jwt_signing_key` is `required=False` with no fallback value, not
   `required=True` with no default (`AppSettings`' own usual "no default
-  means required" convention).** Making it required would fail `Settings()`
-  construction — now happening at app-construction/import time, see above —
-  for every existing test and the plain dev boot, none of which set
-  `JWT_SIGNING_KEY` today (Stage 5, #28, is what will actually consume this
-  field). A hard-coded insecure-but-non-empty fallback was considered and
-  rejected: this issue's own instructions say "don't invent secrets," and a
-  fabricated default value is exactly that, even labeled "dev-only" — the
-  risk of it silently surviving into a real deployment isn't worth avoiding
-  an `Optional[str]` return type here.
+  means required" convention) — even now that Stage 5a (#41) genuinely
+  consumes it.** Making it required would fail `Settings()` construction —
+  happening at app-construction/import time, see above — for every test
+  and dev boot that never touches auth (most of them), none of which set
+  `JWT_SIGNING_KEY`. A hard-coded insecure-but-non-empty fallback was
+  considered and rejected: this issue's own instructions say "don't invent
+  secrets," and a fabricated default value is exactly that, even labeled
+  "dev-only" — the risk of it silently surviving into a real deployment
+  isn't worth avoiding an `Optional[str]` return type here. The actual
+  fail-CLOSED enforcement lives one layer up instead, at the point auth is
+  actually used — see "Auth" above's "Fail-closed on missing config."
 - **`X-Request-ID`, if client-supplied, is trusted and reflected (bounded to
   a short, printable-ASCII, no-control-character shape) rather than always
   minted fresh.** This is deliberately a DIFFERENT trust posture than

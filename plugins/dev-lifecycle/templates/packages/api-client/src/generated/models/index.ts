@@ -19,4 +19,5 @@ export * from './pageItemOut';
 export * from './principalOut';
 export * from './readinessStatus';
 export * from './refreshRequest';
+export * from './registerRequest';
 export * from './tokenResponse';

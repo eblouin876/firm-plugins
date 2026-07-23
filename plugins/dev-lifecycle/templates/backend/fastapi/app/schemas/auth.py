@@ -1,14 +1,15 @@
-"""Request/response schemas for the Stage 5 (#28) auth surface. Defined now
-so the OpenAPI contract and the bearer security scheme are locked in Step 2
-even though every route in app/api/routers/auth.py currently returns a
-stub 501 — a real implementation slots in later without a schema/contract
-change for a client already coded against these shapes.
+"""Request/response schemas for the auth surface (`app/api/routers/auth.py`).
+Stage 3 Step 2 locked the OpenAPI contract and bearer security scheme in
+before any handler had a real body; Stage 5a (#41) is the implementation
+that actually reads/writes these shapes end to end (register/login/refresh/
+logout/me), against the vendored auth component's `AuthService`.
 
 STRICT (`extra="forbid"`) like every other wire schema in this catalog.
-`TokenResponse`/`PrincipalOut`'s fields are a reasonable, conventional
-guess at the eventual shape (access/refresh JWT pair; a minimal principal)
-— Stage 5 is free to refine them, but a client generated against this
-contract today is not left with nothing to bind to."""
+`RegisterRequest` is new in Stage 5a — `POST /auth/register` didn't exist
+before. `PrincipalOut` stays `{id, email}` only — no `roles` on the wire in
+this stage; RBAC's wire surface is Stage 5d, deliberately out of scope
+here even though `_core.AccessClaims`/`UserRecord` already carry roles
+internally."""
 
 from __future__ import annotations
 
@@ -18,8 +19,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # `email: str`, not `EmailStr` — EmailStr requires the `email-validator`
 # extra (`pydantic[email]`), which is not in this block's pinned dependency
-# set (see pyproject.toml). Stage 5 (#28), which actually implements this
-# surface, can add that extra then if real email validation is wanted.
+# set (see pyproject.toml). Real email FORMAT validation isn't added in
+# Stage 5a either — `_core.AuthService`'s own normalization (lowercase +
+# strip, see its `_normalize_email`) is the only shaping applied; a
+# malformed-but-non-empty string is accepted as an email today. A future
+# stage can add the `pydantic[email]` extra + switch to `EmailStr` if real
+# format validation is wanted.
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=1)
 
 
 class LoginRequest(BaseModel):

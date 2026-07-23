@@ -1,47 +1,66 @@
-"""Shared FastAPI dependencies. `get_current_principal` is the Step 3 /
-Stage 5 (#28) seam: it declares the bearer security scheme in OpenAPI (via
-`fastapi.security.HTTPBearer` used as a dependency) and gives every future
-protected route one name to depend on, but does not implement any real
-token verification yet — see its own docstring for exactly what it does
-today and why.
-"""
+"""Shared FastAPI dependencies. `get_auth_service` is the Stage 5a (#41)
+per-request `AuthService` provider — binds this request's DB session
+(`get_db`) into fresh `SqlAlchemyUserStore`/`SqlAlchemyRefreshTokenStore`
+instances, plus the process-wide `PasswordService` singleton and a
+`Settings`-derived `TokenService`, into one `AuthService`. `get_current_
+principal` is the vendored auth component's `build_get_current_principal(
+get_auth_service)`, bound once at import time — declares the `HTTPBearer`
+security scheme in OpenAPI (via the component's `bearer_scheme`) and
+resolves a request's bearer token into `_core.AccessClaims` for any route
+that depends on it (`app/api/routers/auth.py`'s `GET /auth/me`, and any
+future protected route)."""
 
 from __future__ import annotations
 
-from fastapi import Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.exceptions import HTTPException
-from starlette import status
+from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# `auto_error=False`: a missing Authorization header should reach this
-# dependency's own body (which raises the documented stub response) rather
-# than HTTPBearer's own default 403 — keeping ONE documented failure mode
-# for "auth isn't implemented yet" instead of two different shapes
-# depending on whether a header was even sent.
-bearer_scheme = HTTPBearer(auto_error=False)
+from app.core.db import get_db
+from app.core.security.auth import AuthService, build_get_current_principal
+from app.core.security.auth.stores import (
+    SqlAlchemyRefreshTokenStore,
+    SqlAlchemyUserStore,
+    get_password_service,
+    get_token_service,
+    utc_now,
+)
 
 
-async def get_current_principal(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> None:
-    """STUB dependency — real principal resolution (JWT verification,
-    session/user lookup) is implemented in Stage 5 (#28). Using
-    `HTTPBearer()` as a dependency is what registers the `HTTPBearer`
-    security scheme in the app's generated OpenAPI (`components.
-    securitySchemes`) the first time any route depends on this — no manual
-    OpenAPI patching needed in app/main.py.
+async def get_auth_service(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> AuthService:
+    """Per-request `AuthService`, bound to THIS request's `AsyncSession` —
+    a fresh pair of store instances every call (they're thin wrappers
+    holding only a session reference, so this is cheap), the process-wide
+    `PasswordService` singleton (`get_password_service()` — see its own
+    docstring on why that one IS cached), and a `TokenService` built fresh
+    from `request.app.state.settings` (`get_token_service()` — raises
+    `AuthNotConfiguredError`, fail-closed, if `jwt_signing_key` is unset;
+    see that function's own docstring). `now=utc_now` is the SAME callable
+    `get_token_service()` passes to the `TokenService` it builds — see
+    that function's own module, `utc_now`'s docstring.
 
-    Unconditionally raises a plain `HTTPException(501)` (bypassing the
-    `ErrorEnvelope`/`AppError` hierarchy in app/core/errors.py — see
-    app/api/routers/auth.py's module docstring for why: `not_implemented`
-    is not a member of the LOCKED `ErrorCode` set, and adding one is a
-    contract change out of scope for Step 2). Any real protected route
-    wired to this dependency in the meantime fails closed (denies) rather
-    than silently allowing access, matching
-    references/security/secure-baseline.md's "Audit logging" fail-closed
-    posture — it just fails closed with a 501, not yet a 401/403, because
-    the check itself doesn't exist yet."""
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Authentication is not yet implemented (Stage 5, #28).",
+    Reads `request.app.state.settings` — the EXACT `Settings` instance
+    `app/main.py`'s `create_app()` was actually constructed with (see that
+    function's own comment on `app.state.settings`) — deliberately NOT
+    `Depends(get_settings)`, the separate process-wide `lru_cache`d
+    singleton every OTHER piece of this app's security composition
+    (rate limiting, CORS, security headers) reads directly at
+    APP-CONSTRUCTION time, not per-request. A route-level dependency has
+    no other way to see a bespoke `Settings(...)` a caller passed to
+    `create_app(settings=...)` instead of the cached singleton — see
+    `tests/conftest.py`'s `make_client` fixture, which relies on exactly
+    that seam to configure e.g. `jwt_signing_key` per test without
+    mutating process env vars (which would leak across tests)."""
+    settings = request.app.state.settings
+    return AuthService(
+        users=SqlAlchemyUserStore(db),
+        refresh_tokens=SqlAlchemyRefreshTokenStore(db),
+        passwords=get_password_service(),
+        tokens=get_token_service(settings),
+        now=utc_now,
     )
+
+
+get_current_principal = build_get_current_principal(get_auth_service)

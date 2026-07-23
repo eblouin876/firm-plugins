@@ -88,6 +88,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import configure_engine
 from app.core.errors import AppError, ErrorBody, ErrorCode, ErrorDetail, ErrorEnvelope
 from app.core.security.audit_logging import RequestIDMiddleware
+from app.core.security.auth import AUTH_ERROR_HTTP, AuthError
 from app.core.security.cors_lockdown import CORSPolicy, add_cors
 from app.core.security.rate_limiting import InMemoryBucketStore, RateLimitMiddleware
 from app.core.security.security_headers import SecurityHeadersPolicy, add_security_headers
@@ -149,6 +150,56 @@ def _app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     per-subclass status/code table in error-envelope/README.md's "The
     exception hierarchy" section."""
     return JSONResponse(status_code=exc.status_code, content=exc.to_envelope().model_dump(mode="json"))
+
+
+def _auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
+    """Catches the vendored auth component's `AuthError` hierarchy
+    (`InvalidCredentials`, `InvalidToken`, `TokenReused`,
+    `EmailAlreadyExists` — plus that same component's `InsufficientRole`,
+    which also subclasses `AuthError`) and renders THIS app's
+    `ErrorEnvelope`, using the component's own `AUTH_ERROR_HTTP` table
+    (exception type -> `(status_code, ErrorCode string value)`) to pick
+    the status and code — see that table's own docstring in
+    `app/core/security/auth/fastapi.py` for why it's keyed by STRING code
+    values rather than importing this app's `ErrorCode` enum directly (the
+    vendored component has zero `app.*` imports; this handler is the one
+    place that bridges the two).
+
+    Registered for `AuthError` itself, not each concrete subclass — FastAPI/
+    Starlette's exception-handler lookup walks an exception's MRO, so one
+    registration here catches every subclass, present or future, without
+    this file needing to know their names. A subclass with no entry in
+    `AUTH_ERROR_HTTP` (shouldn't happen — every concrete subclass this app
+    can raise has one) still fails SAFELY closed, at 401
+    `unauthenticated` — the same posture as an actually-invalid token,
+    never a 500 that would leak "this specific auth exception type wasn't
+    wired up" as an implementation detail.
+
+    FIX (whole-PR review, Stage 5a): the 401 (`unauthenticated`) bucket
+    emits a SINGLE fixed, generic client message, never `str(exc)` — see
+    `_core.py`'s `TokenReused` docstring: "A client must not be able to
+    distinguish 'reuse was detected and your whole session was killed'
+    from 'this token was simply invalid' from the wire response alone."
+    `_core.py` raises genuinely distinct messages within that same 401
+    bucket (`TokenReused("...reuse detected -- the token family has been
+    revoked.")` vs `InvalidToken("Refresh token has expired.")` vs
+    `InvalidToken("Refresh token has been revoked.")`, etc.) — echoing
+    `str(exc)` straight to the client, as this handler used to
+    unconditionally do, would let an attacker replaying a stolen refresh
+    token read "reuse detected" in the response body and confirm their
+    token was burned, directly violating that contract. Every 401 auth
+    failure (bad password, unknown/expired/revoked/malformed token, AND
+    reuse) is therefore byte-identical on the wire. `conflict` (409,
+    `EmailAlreadyExists`) and `permission_denied` (403, `InsufficientRole`)
+    keep echoing `str(exc)` — neither carries a secret the way a
+    refresh-token failure's exact cause does. `str(exc)` remains available
+    server-side (it's still on `exc`) for logging/audit; this only changes
+    what reaches the CLIENT."""
+    status_code, code_str = AUTH_ERROR_HTTP.get(type(exc), (401, ErrorCode.UNAUTHENTICATED.value))
+    code = ErrorCode(code_str)
+    message = "Authentication failed." if code is ErrorCode.UNAUTHENTICATED else (str(exc) or "Authentication failed.")
+    envelope = ErrorEnvelope(error=ErrorBody(code=code, message=message))
+    return JSONResponse(status_code=status_code, content=envelope.model_dump(mode="json"))
 
 
 def _make_unhandled_exception_handler(
@@ -319,12 +370,36 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
         lifespan=lifespan_ctx,
     )
 
+    # Stage 5a (#41): `app/api/deps.py:get_auth_service` needs the SAME
+    # `resolved_settings` this factory call was actually given (its
+    # `jwt_signing_key`/`jwt_issuer`/`jwt_*_ttl_seconds` fields) — NOT the
+    # separate, process-wide `get_settings()` singleton, which the hermetic
+    # test suite's `make_client` fixture deliberately never touches (see
+    # that fixture's own docstring: bespoke `Settings(...)` instances are
+    # passed straight to THIS function's `settings=` parameter specifically
+    # so a test can configure e.g. `jwt_signing_key` without mutating env
+    # vars that would leak across tests). Stashing it on `app.state` is the
+    # standard FastAPI way to make a per-app value reachable from a request-
+    # scoped dependency without threading it through every route's own
+    # `Depends(...)` — see `get_auth_service`'s own docstring for the read
+    # side.
+    app.state.settings = resolved_settings
+
     app.include_router(health.router)
     app.include_router(items.router)
     app.include_router(auth.router)
 
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
     app.add_exception_handler(AppError, _app_error_handler)
+    # Stage 5a (#41): the vendored auth component raises its OWN exception
+    # hierarchy (AuthError, not AppError — see _core.py's module docstring
+    # on why) — registered separately so those exceptions render this
+    # app's identical ErrorEnvelope shape too. Order relative to the
+    # AppError/Exception handlers above/below doesn't matter: Starlette
+    # dispatches by walking the RAISED exception's own MRO against the
+    # registered handler dict, not by registration order, and AuthError
+    # shares no base class with AppError short of Exception itself.
+    app.add_exception_handler(AuthError, _auth_error_handler)
     app.add_exception_handler(Exception, _make_unhandled_exception_handler(security_headers_policy))
 
     # Stage 3 Step 4 (#26): make the exported/served OpenAPI schema

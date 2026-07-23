@@ -13,6 +13,12 @@ dependencies = [
   "alembic==1.18.*",
   "asyncpg==0.31.*",
   "uvicorn[standard]==0.51.*",
+  # Stage 5a (#41): the auth component's runtime deps (JWT signing/
+  # verification, Argon2id password hashing) — see
+  # references/compatibility-matrix.md's "Backend — Python" row for the
+  # pin rationale.
+  "pyjwt==2.13.*",
+  "argon2-cffi==25.1.*",
 ]
 
 [dependency-groups]

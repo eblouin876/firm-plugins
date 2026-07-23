@@ -92,10 +92,48 @@ class Settings(AppSettings):
         default_factory=lambda: get_secret("JWT_SIGNING_KEY", required=False),
         repr=False,
         exclude=True,
-        description="Stage 5 (#28) JWT signing key, resolved via "
+        description="Stage 5a (#41) JWT signing key, resolved via "
         "secret_store.get_secret's layered env-then-AWS-Secrets-Manager "
-        "resolution. Unset (None) until Stage 5 actually consumes it and a "
-        "project sets JWT_SIGNING_KEY.",
+        "resolution. Still resolves to None when JWT_SIGNING_KEY is unset -- "
+        "most of this app's routes/tests never touch auth at all, so "
+        "Settings() construction must not hard-fail on a missing secret this "
+        "request doesn't need. app/core/security/auth/stores.py's "
+        "get_token_service() is where the fail-CLOSED check actually lives: "
+        "it refuses to construct a TokenService (and therefore refuses to "
+        "sign/verify anything) when this is None, at the point auth is "
+        "actually used, not at Settings() construction time.",
+    )
+
+    # --- Auth (Stage 5a, #41): the vendored auth component's TokenService,
+    # constructed in app/core/security/auth/stores.py:get_token_service()
+    # from the three fields below plus jwt_signing_key above -----------
+    jwt_issuer: str = Field(
+        default="app",
+        description="The `iss` claim TokenService stamps into every minted "
+        "JWT and requires on every decode (_core.py's TokenService.decode_* "
+        "-- see its own docstring on why issuer is checked, not just "
+        "signature/expiry). A generic default; a project with more than one "
+        "issuer sharing a signing key (rare) would override this per "
+        "environment -- most projects never need to.",
+    )
+    jwt_access_ttl_seconds: int = Field(
+        default=900,
+        description="Access token TTL, 15 minutes -- short-lived by design "
+        "(references/security/secure-baseline.md: 'Prefer short-lived "
+        "access tokens with refresh over long-lived static tokens'). A "
+        "stolen access token's blast radius is bounded by this window; "
+        "there is no server-side revocation for access tokens themselves "
+        "(only refresh tokens are revocable, via RefreshTokenStore).",
+    )
+    jwt_refresh_ttl_seconds: int = Field(
+        default=1_209_600,
+        description="Refresh token TTL, 14 days (1_209_600 seconds) -- long "
+        "enough that a legitimate user isn't forced to re-login constantly, "
+        "short enough to bound how long a family that somehow evades reuse "
+        "detection could stay alive. Refresh tokens ARE individually "
+        "revocable (RefreshTokenStore.revoke_family, on reuse detection or "
+        "logout), unlike access tokens above -- this TTL is a ceiling on top "
+        "of that, not the only defense.",
     )
 
 
