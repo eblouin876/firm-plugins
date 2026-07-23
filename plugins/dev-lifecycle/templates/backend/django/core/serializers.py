@@ -267,6 +267,31 @@ class AdminRolesInSerializer(serializers.Serializer):
     schemas/admin.py`'s `AdminRolesIn`: a full-replace role list, validated
     at the VIEW layer (`core/views.py`'s `AdminUserRolesView`) against the
     app's own closed allowed-role set -- this serializer only enforces "a
-    list of strings", same posture that schema's own docstring documents."""
+    list of strings", same posture that schema's own docstring documents.
+
+    `validate()` below rejects any key in the request body that isn't a
+    declared field -- parity with `AdminRolesIn`'s own `ConfigDict(extra=
+    "forbid")` (that schema's docstring, `app/schemas/admin.py`), which 422s
+    on an unknown top-level key. A plain DRF `Serializer` otherwise silently
+    DROPS undeclared input keys instead of rejecting them (`is_valid()`
+    only ever populates `validated_data` from declared `fields`, so an
+    unknown key just never makes it in) -- comparing `self.initial_data`
+    (the raw, as-received body DRF stashes before validation) against
+    `self.fields` catches exactly that gap. Raising `serializers.
+    ValidationError` here (not a bespoke exception) keeps this on the SAME
+    path `AdminUserRolesView.put`'s `serializer.is_valid(raise_exception=
+    True)` already uses for every other validation failure -- `core.
+    exceptions.exception_handler`'s `rest_framework.exceptions.
+    ValidationError` branch envelopes it as 422 `validation_failed`, same
+    as an unknown ROLE (`AdminUserRolesView`'s own `_ALLOWED_ROLES` check)
+    already is, just one layer earlier."""
 
     roles = serializers.ListField(child=serializers.CharField(), default=list)
+
+    def validate(self, attrs: dict) -> dict:
+        unexpected = set(self.initial_data) - set(self.fields)
+        if unexpected:
+            raise serializers.ValidationError(
+                {field: "This field is not recognized." for field in sorted(unexpected)}
+            )
+        return attrs

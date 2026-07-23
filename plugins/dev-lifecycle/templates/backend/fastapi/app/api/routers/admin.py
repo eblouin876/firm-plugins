@@ -86,6 +86,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.deps import require_admin
+from app.core.config import get_settings
 from app.core.db import AsyncRepository, Page, PageParams, get_db
 from app.core.errors import ConflictError, ErrorDetail, ErrorEnvelope, NotFoundError, ValidationFailedError
 from app.core.security.audit_logging.audit import audit_event
@@ -144,14 +145,35 @@ _ALLOWED_ROLES: frozenset[str] = frozenset({"admin"})
 # store already has. 30 requests/minute is a starting-point default (not
 # load-tested), deliberately tighter than `Settings.rate_limit_capacity`'s
 # own 60/minute default -- tune per project.
+#
+# Per-process, like every other `InMemoryBucketStore` in this catalog -- see
+# that class's own "Known limitations" docstring (rate_limiting/_core.py)
+# for the full multi-worker caveat: under N gunicorn/uvicorn workers this
+# bucket is duplicated per worker, so the effective ceiling is roughly
+# N x 30/minute rather than a hard shared one, and a client can land on a
+# fresh, unexhausted bucket per worker. A Redis-backed `BucketStore` (Stage
+# 11) is the upgrade for a true shared ceiling under a multi-worker deploy.
 _ADMIN_RATE_LIMIT_STORE = InMemoryBucketStore(max_keys=10_000)
 _ADMIN_RATE_LIMIT_CAPACITY = 30
 _ADMIN_RATE_LIMIT_REFILL_PER_SECOND = 30 / 60
 
+# `trusted_hops` mirrors the general `RateLimitMiddleware` wiring in
+# app/main.py's `create_app()` (`trusted_hops=resolved_settings.
+# rate_limit_trusted_hops`) -- reading the SAME `Settings.
+# rate_limit_trusted_hops` field (see that field's own docstring,
+# app/core/config.py) so this tighter admin bucket derives the client key
+# the identical way the rest of this app does, and matches the Django
+# admin limiter's own posture (`core/security/admin_rate_limit.py`'s
+# `enforce_admin_rate_limit`, which reads `settings.RATE_LIMIT_TRUSTED_
+# HOPS`). Without this, this dependency defaulted to `trusted_hops=0` and
+# always keyed on `request.client.host` regardless of environment -- behind
+# a trusted reverse proxy that's the proxy's own IP, not the caller's, so
+# every admin shared one bucket.
 require_admin_rate_limit = make_rate_limit_dependency(
     _ADMIN_RATE_LIMIT_STORE,
     capacity=_ADMIN_RATE_LIMIT_CAPACITY,
     refill_per_second=_ADMIN_RATE_LIMIT_REFILL_PER_SECOND,
+    trusted_hops=get_settings().rate_limit_trusted_hops,
 )
 
 

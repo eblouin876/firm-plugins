@@ -37,6 +37,12 @@ from core.security.rate_limiting import InMemoryBucketStore, check, client_ip_ke
 # has for the whole-app middleware. 30 requests/minute is a starting-point
 # default (not load-tested), deliberately tighter than `settings.
 # RATE_LIMIT_CAPACITY`'s own 60/minute default -- tune per project.
+#
+# Per-process, like every `InMemoryBucketStore` in this catalog -- see that
+# class's own "Known limitations" docstring (rate_limiting/_core.py) for the
+# full multi-worker caveat (effective ceiling is roughly N x this capacity
+# under N gunicorn workers; a Redis-backed `BucketStore`, Stage 11, is the
+# shared-ceiling upgrade).
 _ADMIN_RATE_LIMIT_STORE = InMemoryBucketStore(max_keys=10_000)
 _ADMIN_RATE_LIMIT_CAPACITY = 30
 _ADMIN_RATE_LIMIT_REFILL_PER_SECOND = 30 / 60

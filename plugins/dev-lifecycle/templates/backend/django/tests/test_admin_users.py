@@ -275,6 +275,24 @@ def test_set_roles_rejects_an_unknown_role(api_client: APIClient, email_sender: 
     assert response.json()["error"]["code"] == "validation_failed"
 
 
+def test_set_roles_rejects_an_unknown_field(api_client: APIClient, email_sender: _CapturingEmailSender) -> None:
+    """Parity with the FastAPI track's `AdminRolesIn` (`ConfigDict(extra=
+    "forbid")`) -- an unknown top-level key in the request body 422s the
+    same way on both backends, per `AdminRolesInSerializer.validate()`'s
+    own docstring."""
+    registered = _register_and_verify(api_client, email_sender, email="nora@example.com", password=_PASSWORD)
+    headers = _admin_headers(api_client)
+
+    response = api_client.put(
+        f"/admin/users/{registered['id']}/roles",
+        {"roles": ["admin"], "is_superuser": True},
+        format="json",
+        **headers,
+    )
+    assert response.status_code == 422, response.content
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
 # ---------------------------------------------------------------------------
 # force-verify
 # ---------------------------------------------------------------------------
