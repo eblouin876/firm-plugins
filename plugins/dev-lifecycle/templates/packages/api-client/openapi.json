@@ -316,7 +316,7 @@
           "auth"
         ],
         "summary": "Register",
-        "description": "Delegates straight to `AuthService.register` \u2014 raises\n`EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized\nemail, uncaught here (see module docstring).\n\nStage 5c (#45): on success, additionally (a) sends a verification email\n(`AccountService.request_email_verification(user)` \u2014 the freshly\ncreated `UserRecord` `AuthService.register` just returned, so no extra\nlookup is needed) and (b) emits an `auth.register` audit event. Neither\nchanges this endpoint's response shape (still 201 `PrincipalOut`) \u2014 a\nproject whose `Settings.auth_require_email_verification` is `True`\n(the secure default) needs the caller to actually consume the emailed\nlink (`POST /auth/verify-email`) before `AuthService.login` will let\nthis account in; see that dependency's own docstring.",
+        "description": "Delegates straight to `AuthService.register` \u2014 raises\n`EmailAlreadyExists` (-> 409 `conflict`) for a duplicate normalized\nemail, uncaught here (see module docstring).\n\nStage 5c (#45): on success, additionally (a) sends a verification email\n(`AccountService.request_email_verification(user)` \u2014 the freshly\ncreated `UserRecord` `AuthService.register` just returned, so no extra\nlookup is needed) and (b) emits an `auth.register` audit event. Neither\nchanges this endpoint's response shape (still 201 `PrincipalOut`) \u2014 a\nproject whose `Settings.auth_require_email_verification` is `True`\n(the secure default) needs the caller to actually consume the emailed\nlink (`POST /auth/verify-email`) before `AuthService.login` will let\nthis account in; see that dependency's own docstring.\n\nAdversarial-review fix (M2): `request_email_verification` is wrapped in\n`try/except Exception` \u2014 the user row is already durably committed by\nthe time this runs (`AuthService.register` returned successfully), so\na verification-email failure here (SMTP outage, bounced address) must\nNEVER turn into a 500: the account already exists, a retry would just\n409 on the duplicate email, `require_verification=True` means the\naccount can't log in either way, and the wire caller (whoever showed\nthe registration form) has no way to \"undo\" or recover a 500 here \u2014\nit would brick a just-created account with no path forward. Register\nstays 201 regardless of whether the email actually went out; the\nfailure is only logged/audited (`auth.register.verification_email_\nfailed`, no PII/token in the event), never surfaced to the caller. The\nrecovery path for an account whose verification email never arrived is\n`POST /auth/request-password-reset` -> `POST /auth/reset-password` \u2014\n`AccountService.reset_password` now also marks the email verified (see\n`_core.AccountService.reset_password`'s own docstring), so a user who\nnever got their verification link can still get into their account.",
         "operationId": "register_auth_register_post",
         "requestBody": {
           "content": {
@@ -368,7 +368,7 @@
           "auth"
         ],
         "summary": "Login",
-        "description": "Delegates to `AuthService.login` \u2014 raises `InvalidCredentials`\n(-> 401 `unauthenticated`) identically for an unknown email or a wrong\npassword (see that exception's own docstring on the deliberate\nuser-enumeration defense), uncaught here.",
+        "description": "Delegates to `AuthService.login` \u2014 raises `InvalidCredentials`\n(-> 401 `unauthenticated`) identically for an unknown email or a wrong\npassword (see that exception's own docstring on the deliberate\nuser-enumeration defense), uncaught here.\n\nStage 5d (#46) web cookie mode: `request.headers.get(\"X-Auth-Mode\")\n== \"cookie\"` switches this call into cookie mode \u2014 read directly off\n`request.headers`, deliberately NOT a declared `Header(...)`\nparameter (see this module's own docstring for why: keeps it out of\nthe exported OpenAPI schema as a documented parameter). Anything\nelse (absent header, any other value) is BEARER mode \u2014 the exact,\nunchanged current behavior; mode is NEVER inferred from User-Agent or\nany other signal, matching the locked design. No CSRF check on login\neither way: login is credential-authenticated (email+password), and\nthere is no cookie yet for a CSRF check to protect.\n\nCookie mode still returns the SAME `TokenResponse` shape \u2014 the wire\ncontract (`packages/api-client/openapi.json`'s `TokenResponse`\nschema) is byte-unchanged \u2014 but with `refresh_token=\"\"` in the body\n(an empty string still satisfies the schema's required `str` field);\nthe real refresh JWT travels ONLY in the HttpOnly `refresh_token`\ncookie `set_auth_cookies` sets below, alongside a fresh, independent\nCSRF cookie (`generate_csrf_token()` \u2014 never derived from either\ntoken) the SPA echoes back as `X-CSRF-Token` on every cookie-\nauthenticated `/auth/refresh`/`/auth/logout` call. `max_age` is this\nrequest's own `jwt_refresh_ttl_seconds`, read off `request.app.state.\nsettings` \u2014 the SAME `Settings` instance this app was actually\nconstructed with (see `app/api/deps.py:get_auth_service`'s own\ndocstring on why that's read this way rather than `Depends(\nget_settings)`), so neither cookie outlives the refresh token it's\npaired with.",
         "operationId": "login_auth_login_post",
         "requestBody": {
           "content": {
@@ -420,7 +420,7 @@
           "auth"
         ],
         "summary": "Refresh token",
-        "description": "Delegates to `AuthService.refresh` \u2014 THE rotation-with-reuse-\ndetection state machine (see `_core.py`'s own module docstring and\n`AuthService.refresh`'s docstring for the full 6-step state machine).\nRaises `InvalidToken` or `TokenReused` (both -> 401 `unauthenticated`,\ndeliberately indistinguishable at the wire \u2014 see `TokenReused`'s own\ndocstring), uncaught here. A `TokenReused` raise has, as a side\neffect, ALREADY revoked the token's entire family in the DB by the\ntime this handler's caller sees the 401.",
+        "description": "Delegates to `AuthService.refresh` \u2014 THE rotation-with-reuse-\ndetection state machine (see `_core.py`'s own module docstring and\n`AuthService.refresh`'s docstring for the full 6-step state machine).\nRaises `InvalidToken` or `TokenReused` (both -> 401 `unauthenticated`,\ndeliberately indistinguishable at the wire \u2014 see `TokenReused`'s own\ndocstring), uncaught here. A `TokenReused` raise has, as a side\neffect, ALREADY revoked the token's entire family in the DB by the\ntime this handler's caller sees the 401.\n\nStage 5d (#46) web cookie mode: DUAL-SOURCE, decided per-request by\n`read_refresh_cookie(request)` (whether the `refresh_token` cookie is\nactually present on THIS request), never by a header the client\ndeclares \u2014 a forged/absent cookie can't claim cookie mode, and a\ngenuine cookie-bearing browser request can't accidentally fall onto\nthe bearer path either.\n\n- **Cookie path** (cookie present): `enforce_csrf(request)` runs\n  FIRST \u2014 raises `CsrfValidationError` (-> 403 `permission_denied`,\n  `AUTH_ERROR_HTTP`) before the cookie's refresh token is ever\n  presented to `AuthService.refresh` at all, so a request that fails\n  the double-submit check never gets to attempt a rotation. The\n  request BODY's `payload.refresh_token` is parsed (still required \u2014\n  `RefreshRequest`'s schema is unchanged) but its VALUE is\n  deliberately ignored; the cookie's own value is what's rotated.\n  On success, BOTH cookies are set again \u2014 `set_auth_cookies` with\n  the NEWLY minted refresh JWT and a FRESH `generate_csrf_token()`\n  (never the old CSRF value) \u2014 exactly `login`'s own cookie-setting\n  shape, so a stolen, already-rotated refresh cookie (reused after\n  this response) is rejected the same way `AuthService.refresh`'s\n  reuse-detection already rejects any other reused refresh token\n  (401, whole family revoked). The response body is `TokenResponse`\n  with `refresh_token=\"\"`, matching `login`'s cookie-mode shape.\n- **Bearer path** (no cookie): the exact, unchanged prior behavior \u2014\n  `payload.refresh_token` is the real token, no CSRF check, and the\n  real new refresh JWT is returned in the body.",
         "operationId": "refresh_auth_refresh_post",
         "requestBody": {
           "content": {
@@ -472,7 +472,7 @@
           "auth"
         ],
         "summary": "Logout",
-        "description": "Delegates to `AuthService.logout` \u2014 best-effort and idempotent by\ndesign (see that method's own docstring): an already-invalid, unknown,\nor already-revoked refresh token still returns 204, never an error.\nRevokes the entire token family, not just the presented token.",
+        "description": "Delegates to `AuthService.logout` \u2014 best-effort and idempotent by\ndesign (see that method's own docstring): an already-invalid, unknown,\nor already-revoked refresh token still returns 204, never an error.\nRevokes the entire token family, not just the presented token.\n\nStage 5d (#46) web cookie mode: same dual-source shape as `refresh`\nabove, decided by `read_refresh_cookie(request)`.\n\n- **Cookie path** (cookie present): JUDGMENT CALL \u2014 logout is\n  STATE-CHANGING (it revokes the presented token's entire family via\n  `AuthService.logout`), so this endpoint enforces the double-submit\n  CSRF check on the cookie path too, `enforce_csrf(request)` called\n  BEFORE the best-effort logout runs \u2014 a cookie-present request with\n  a missing/blank/mismatched `X-CSRF-Token` is rejected 403 at that\n  gate and `AuthService.logout` is never even called; it does NOT\n  reach 204. This does not weaken `AuthService.logout`'s own\n  idempotency for the TOKEN itself \u2014 a bad/expired/already-revoked\n  cookie value, once past the CSRF gate, still 204s exactly as the\n  bearer path already does. On success, clears both cookies\n  (`clear_auth_cookies`).\n- **Bearer path** (no cookie): the exact, unchanged prior behavior \u2014\n  the body's `refresh_token`, no CSRF check, 204 either way.",
         "operationId": "logout_auth_logout_post",
         "requestBody": {
           "content": {
@@ -666,6 +666,53 @@
             }
           }
         }
+      }
+    },
+    "/admin/ping": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin ping",
+        "description": "`require_admin` (declared in `dependencies=` above, not as a bound\nparameter -- this handler needs nothing from the resolved principal,\nonly the gate itself) already verified the bearer token AND the\n`\"admin\"` role before this body ever runs. `HTTPBearer` (via\n`require_admin` -> `get_current_principal` -> the vendored component's\n`bearer_scheme`) is picked up in this operation's OpenAPI `security`\nthe same way it already is for `GET /auth/me` -- FastAPI resolves\nsecurity schemes from the full dependency tree, not just parameters\nbound directly on the route function, so declaring the gate via\n`dependencies=[Depends(require_admin)]` documents it in the schema\nexactly as if it were a direct parameter.",
+        "operationId": "admin_ping_admin_ping_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     }
   },

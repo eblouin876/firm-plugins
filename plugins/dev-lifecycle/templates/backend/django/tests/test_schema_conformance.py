@@ -361,7 +361,26 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # above this one) already documents: this constant (and both stale-guards
 # below, which still apply to any FUTURE pending-parity op) stays the
 # documented seam a later stage's own in-flight parity work reuses.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
+#
+# Stage 5c (#45) -> Stage 5d (#46): backend/fastapi's Stage 5d added the
+# RBAC admin example -- `GET /admin/ping` (`app/api/routers/admin.py`,
+# gated by `require_roles(get_current_principal, "admin")`) -- and
+# extended the frozen contract with that one new operation. It also wired
+# web cookie mode (`X-Auth-Mode: cookie` on `POST /auth/login`, dual-source
+# cookie/bearer `POST /auth/refresh`/`POST /auth/logout`) -- but that work
+# adds NO wire-surface diff of its own: `X-Auth-Mode`/`X-CSRF-Token` are
+# read directly off `request.headers`, never declared FastAPI `Header(...)`
+# parameters, and `TokenResponse`/`RefreshRequest` are byte-unchanged (see
+# `app/api/routers/auth.py`'s own module docstring) -- so cookie mode
+# itself needs no Django-side parity entry here at all, only `/admin/ping`
+# does. Django's own RBAC/admin-example implementation is a FUTURE stage's
+# job, not this surgical FastAPI-side edit's -- `/admin/ping` has no Django
+# view/route at all yet, so it is excluded here the same way `register`/
+# `logout` once were (Stage 5a -> Stage 5b's own comment above), pending
+# that stage landing full parity and removing this entry.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = {
+    ("/admin/ping", "get"),
+}
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
