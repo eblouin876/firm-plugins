@@ -44,6 +44,12 @@ dependencies = [
   # concerned; gunicorn is the conventional WSGI-path production server.
   "uvicorn[standard]==0.51.*",
   "gunicorn==26.0.*",
+  # Stage 13d: server-side HTML sanitization for the blog/CMS write-path
+  # (core/services/sanitize.py) -- the SAME pin backend/fastapi's own
+  # app/services/sanitize.py consumes (references/compatibility-matrix.md's
+  # Backend — Python row) -- Rust/ammonia-backed, ships wheels (no local
+  # Rust toolchain needed to install).
+  "nh3==0.3.*",
 ]
 
 [dependency-groups]

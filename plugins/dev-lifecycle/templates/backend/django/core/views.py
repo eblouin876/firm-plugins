@@ -32,6 +32,7 @@ documents for its FastAPI counterparts."""
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from asgiref.sync import async_to_sync
@@ -47,7 +48,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.contract.errors import ConflictError, ErrorDetail, NotFoundError, ValidationFailedError
-from core.models import Item, User
+from core.models import BlogPost, Comment, Item, User
+from core.pagination import ContractPageNumberPagination
 from core.security.admin_rate_limit import enforce_admin_rate_limit
 from core.security.auth import (
     AuthService,
@@ -76,6 +78,11 @@ from core.security.audit_logging.audit import audit_event
 from core.serializers import (
     AdminRolesInSerializer,
     AdminUserOutSerializer,
+    BlogPostCreateSerializer,
+    BlogPostOutSerializer,
+    BlogPostSummaryOutSerializer,
+    BlogPostUpdateSerializer,
+    CommentOutSerializer,
     ErrorEnvelopeSerializer,
     HealthStatusSerializer,
     ItemCreateSerializer,
@@ -91,6 +98,7 @@ from core.serializers import (
     TokenResponseSerializer,
     VerifyEmailRequestSerializer,
 )
+from core.services.sanitize import sanitize_blog_html
 
 
 def _build_login_auth_service() -> AuthService:
@@ -1238,3 +1246,488 @@ class AdminUserForceVerifyView(APIView):
             changed_fields=["email_verified"],
         )
         return Response(AdminUserOutSerializer(user).data)
+
+
+# ---------------------------------------------------------------------------
+# Stage 13d: blog/CMS admin surface -- the DRF counterpart to `app/api/
+# routers/blog.py`'s own admin blog surface. See that module's docstring
+# for the full design this mirrors handler-for-handler (the stored-XSS
+# write-path boundary, slug resolution, publish/unpublish state machine,
+# audit events, the shared per-route rate limit). Same auth-gate posture
+# as the Stage 13b admin user-management views immediately above: every
+# view calls `require_roles(request, auth_service, "admin")` directly
+# (never `has_role("admin")`) so the SAME call yields the resolved
+# `AccessClaims` this router needs as the audit actor.
+# ---------------------------------------------------------------------------
+
+_BLOG_NOT_FOUND_RESPONSE = {404: ErrorEnvelopeSerializer}
+_BLOG_CONFLICT_RESPONSE = {409: ErrorEnvelopeSerializer}
+_BLOG_VALIDATION_RESPONSE = {422: ErrorEnvelopeSerializer}
+_BLOG_AUTH_RESPONSES = {401: ErrorEnvelopeSerializer, 403: ErrorEnvelopeSerializer}
+
+_ALLOWED_BLOG_POST_STATUS_VALUES = frozenset({"draft", "published"})
+_ALLOWED_COMMENT_STATUS_VALUES = frozenset({"visible", "hidden", "pending"})
+
+
+def _slugify(title: str) -> str:
+    """Byte-identical algorithm to `app/schemas/blog.py`'s `slugify` --
+    see that function's own docstring."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
+    return slug or "post"
+
+
+def _slug_taken(slug: str, *, exclude_id: uuid.UUID | None = None) -> bool:
+    """`True` iff a NOT-soft-deleted `BlogPost` other than `exclude_id`
+    already owns `slug` -- same read-then-write uniqueness check
+    `app/api/routers/blog.py`'s `_slug_taken` documents (including the
+    accepted, DB-UNIQUE-index-backstopped race)."""
+    queryset = BlogPost.objects.filter(slug=slug)
+    if exclude_id is not None:
+        queryset = queryset.exclude(id=exclude_id)
+    return queryset.exists()
+
+
+def _unique_slug(base_slug: str) -> str:
+    """Disambiguates a DERIVED slug -- byte-identical algorithm to
+    `app/api/routers/blog.py`'s `_unique_slug`."""
+    candidate = base_slug
+    suffix = 2
+    while _slug_taken(candidate):
+        candidate = f"{base_slug}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _get_admin_blog_post(post_id: str) -> BlogPost:
+    """`<str:post_id>`, NOT Django's `<uuid:...>` converter -- same
+    "accept a plain string segment, validate by hand, raise the app's own
+    NotFoundError" posture `_get_admin_user`'s own docstring documents,
+    applied here to `BlogPost`."""
+    try:
+        uid = uuid.UUID(post_id)
+    except (ValueError, TypeError):
+        raise NotFoundError(f"Blog post {post_id} was not found.") from None
+    try:
+        return BlogPost.objects.get(id=uid)
+    except BlogPost.DoesNotExist:
+        raise NotFoundError(f"Blog post {post_id} was not found.") from None
+
+
+def _get_admin_comment(comment_id: str) -> Comment:
+    try:
+        uid = uuid.UUID(comment_id)
+    except (ValueError, TypeError):
+        raise NotFoundError(f"Comment {comment_id} was not found.") from None
+    try:
+        return Comment.objects.get(id=uid)
+    except Comment.DoesNotExist:
+        raise NotFoundError(f"Comment {comment_id} was not found.") from None
+
+
+class AdminBlogPostListCreateView(generics.ListAPIView):
+    """`GET`/`POST /admin/blog/posts` -- list (paginated via the SAME
+    `ContractPageNumberPagination` `GET /items`/`GET /admin/users` already
+    use -- inherited from `DEFAULT_PAGINATION_CLASS`, `config/settings.py`)
+    and create, the DRF counterpart to `app/api/routers/blog.py`'s
+    `list_admin_blog_posts`/`create_admin_blog_post`. `generics.
+    ListAPIView` (not a plain `APIView`, unlike this router's other
+    single-object views) is what makes drf-spectacular auto-wrap `GET`'s
+    documented 200 response in the `{items, total, page, size, pages}`
+    pagination envelope -- the SAME reason `AdminUserListView` (Stage 13b)
+    is built the identical way; a plain `APIView` manually calling
+    `ContractPageNumberPagination` (as this view's own first draft did)
+    produces a WORKING response at runtime but an UN-wrapped, wrong
+    documented schema, since drf-spectacular's pagination introspection
+    keys off the view class, not the runtime call. `post()` (create) is
+    a plain additional method on this same class -- `ListAPIView` defines
+    no `post` of its own, so no override conflict."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    serializer_class = BlogPostSummaryOutSerializer
+    # `.order_by(...)`: same "an unordered queryset paginates
+    # non-deterministically" rationale `ItemViewSet.queryset`'s/
+    # `AdminUserListView.queryset`'s own comment documents.
+    queryset = BlogPost.objects.all().order_by("created_at", "id")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            if status_filter not in _ALLOWED_BLOG_POST_STATUS_VALUES:
+                raise ValidationFailedError(
+                    "Invalid status filter.",
+                    details=[ErrorDetail(field="status", message=f"Unknown status: {status_filter!r}")],
+                )
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    @extend_schema(
+        operation_id="list_admin_blog_posts_admin_blog_posts_get",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={200: BlogPostSummaryOutSerializer, **_BLOG_AUTH_RESPONSES, **_BLOG_VALIDATION_RESPONSE},
+    )
+    def get(self, request, *args, **kwargs):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        return super().get(request, *args, **kwargs)
+
+    @extend_schema(
+        operation_id="create_admin_blog_post_admin_blog_posts_post",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        request=BlogPostCreateSerializer,
+        responses={
+            201: BlogPostOutSerializer,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_CONFLICT_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        """**THE stored-XSS write-path boundary, half 1 of 2** -- see
+        `app/api/routers/blog.py`'s `create_admin_blog_post` docstring for
+        the full rationale this mirrors line-for-line."""
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+
+        serializer = BlogPostCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        if data.get("slug"):
+            if _slug_taken(data["slug"]):
+                raise ConflictError(f"Slug '{data['slug']}' is already in use.")
+            slug = data["slug"]
+        else:
+            slug = _unique_slug(_slugify(data["title"]))
+
+        sanitized_html = sanitize_blog_html(data["body_html"])
+
+        post = BlogPost.objects.create(
+            slug=slug,
+            title=data["title"],
+            body_json=data["body_json"],
+            body_html=sanitized_html,
+            author_id=uuid.UUID(claims.sub),
+        )
+        audit_event(
+            "admin.blog.create",
+            actor=claims.sub,
+            resource=f"blog_post:{post.id}",
+            outcome="success",
+        )
+        return Response(BlogPostOutSerializer(post).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema_view(
+    get=extend_schema(
+        operation_id="get_admin_blog_post_admin_blog_posts__post_id__get",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: BlogPostOutSerializer,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    ),
+    patch=extend_schema(
+        operation_id="update_admin_blog_post_admin_blog_posts__post_id__patch",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        request=BlogPostUpdateSerializer,
+        responses={
+            200: BlogPostOutSerializer,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_CONFLICT_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    ),
+    delete=extend_schema(
+        operation_id="delete_admin_blog_post_admin_blog_posts__post_id__delete",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            204: None,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    ),
+)
+class AdminBlogPostDetailView(APIView):
+    """`GET`/`PATCH`/`DELETE /admin/blog/posts/{post_id}` -- get, update
+    (re-sanitizing any supplied `body_html`), and (soft-)delete one post."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    def get(self, request, post_id):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        post = _get_admin_blog_post(post_id)
+        return Response(BlogPostOutSerializer(post).data)
+
+    def patch(self, request, post_id):
+        """**THE stored-XSS write-path boundary, half 2 of 2.** Only
+        explicitly-set fields are applied (`partial=True`) -- an explicit
+        `null` for any of these four NOT-NULL columns is rejected at 422
+        by `BlogPostUpdateSerializer.validate()`, so `serializer.
+        validated_data` only ever contains fields the caller genuinely
+        wants changed, to a genuinely non-null value -- see that
+        serializer's own docstring."""
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        post = _get_admin_blog_post(post_id)
+
+        serializer = BlogPostUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updates = serializer.validated_data
+
+        if "slug" in updates and _slug_taken(updates["slug"], exclude_id=post.id):
+            raise ConflictError(f"Slug '{updates['slug']}' is already in use.")
+        if "body_html" in updates:
+            updates["body_html"] = sanitize_blog_html(updates["body_html"])
+
+        for field, value in updates.items():
+            setattr(post, field, value)
+        if updates:
+            post.save(update_fields=list(updates.keys()))
+        audit_event(
+            "admin.blog.update",
+            actor=claims.sub,
+            resource=f"blog_post:{post.id}",
+            outcome="success",
+            changed_fields=sorted(updates.keys()),
+        )
+        return Response(BlogPostOutSerializer(post).data)
+
+    def delete(self, request, post_id):
+        """Soft-deletes via `BlogPost.mark_deleted()` -- never a hard
+        `DELETE`, same posture `ItemViewSet.perform_destroy`/
+        `AdminUserDetailView.delete` already document."""
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        post = _get_admin_blog_post(post_id)
+        post.mark_deleted()
+        post.save(update_fields=["deleted_at"])
+        audit_event(
+            "admin.blog.delete",
+            actor=claims.sub,
+            resource=f"blog_post:{post_id}",
+            outcome="success",
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminBlogPostPublishView(APIView):
+    """`POST /admin/blog/posts/{post_id}/publish` -- valid only from
+    `status == "draft"` (409 otherwise), matching `app/api/routers/
+    blog.py`'s `publish_admin_blog_post`."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="publish_admin_blog_post_admin_blog_posts__post_id__publish_post",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: BlogPostOutSerializer,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_CONFLICT_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, post_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        post = _get_admin_blog_post(post_id)
+        if post.status != "draft":
+            raise ConflictError(f"Cannot publish a post with status '{post.status}'.")
+        post.status = "published"
+        post.published_at = utc_now()
+        post.save(update_fields=["status", "published_at"])
+        audit_event(
+            "admin.blog.publish",
+            actor=claims.sub,
+            resource=f"blog_post:{post.id}",
+            outcome="success",
+            changed_fields=["status", "published_at"],
+        )
+        return Response(BlogPostOutSerializer(post).data)
+
+
+class AdminBlogPostUnpublishView(APIView):
+    """`POST /admin/blog/posts/{post_id}/unpublish` -- valid only from
+    `status == "published"` (409 otherwise); reverts fully to draft
+    (`status="draft"`, `published_at=None`), matching `app/api/routers/
+    blog.py`'s `unpublish_admin_blog_post`."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="unpublish_admin_blog_post_admin_blog_posts__post_id__unpublish_post",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: BlogPostOutSerializer,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_CONFLICT_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, post_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        post = _get_admin_blog_post(post_id)
+        if post.status != "published":
+            raise ConflictError(f"Cannot unpublish a post with status '{post.status}'.")
+        post.status = "draft"
+        post.published_at = None
+        post.save(update_fields=["status", "published_at"])
+        audit_event(
+            "admin.blog.unpublish",
+            actor=claims.sub,
+            resource=f"blog_post:{post.id}",
+            outcome="success",
+            changed_fields=["status", "published_at"],
+        )
+        return Response(BlogPostOutSerializer(post).data)
+
+
+class AdminBlogCommentListView(generics.ListAPIView):
+    """`GET /admin/blog/comments` -- `?status=`/`?post_id=` filters, both
+    optional and composable, matching `app/api/routers/blog.py`'s
+    `list_admin_blog_comments`. No public create endpoint in this stage --
+    see `core/models.py`'s `Comment` docstring. `generics.ListAPIView`,
+    same pagination-schema rationale `AdminBlogPostListCreateView`'s own
+    docstring documents."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    serializer_class = CommentOutSerializer
+    queryset = Comment.objects.all().order_by("created_at", "id")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            if status_filter not in _ALLOWED_COMMENT_STATUS_VALUES:
+                raise ValidationFailedError(
+                    "Invalid status filter.",
+                    details=[ErrorDetail(field="status", message=f"Unknown status: {status_filter!r}")],
+                )
+            queryset = queryset.filter(status=status_filter)
+        post_id_filter = self.request.query_params.get("post_id")
+        if post_id_filter:
+            try:
+                post_uuid = uuid.UUID(post_id_filter)
+            except (ValueError, TypeError):
+                raise ValidationFailedError(
+                    "Invalid post_id filter.",
+                    details=[ErrorDetail(field="post_id", message="Must be a valid UUID.")],
+                ) from None
+            queryset = queryset.filter(post_id=post_uuid)
+        return queryset
+
+    @extend_schema(
+        operation_id="list_admin_blog_comments_admin_blog_comments_get",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={200: CommentOutSerializer, **_BLOG_AUTH_RESPONSES, **_BLOG_VALIDATION_RESPONSE},
+    )
+    def get(self, request, *args, **kwargs):
+        auth_service = build_auth_service()
+        async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        return super().get(request, *args, **kwargs)
+
+
+class AdminBlogCommentHideView(APIView):
+    """`POST /admin/blog/comments/{comment_id}/hide` -- valid from
+    `status in {"visible", "pending"}` (409 for an already-hidden
+    comment), matching `app/api/routers/blog.py`'s
+    `hide_admin_blog_comment`. Lightweight moderation-ADJACENT action, NOT
+    the Stage 13c Flag/Report surface (out of scope here)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="hide_admin_blog_comment_admin_blog_comments__comment_id__hide_post",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            200: CommentOutSerializer,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_CONFLICT_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    )
+    def post(self, request, comment_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        comment = _get_admin_comment(comment_id)
+        if comment.status == "hidden":
+            raise ConflictError(f"Cannot hide a comment with status '{comment.status}'.")
+        comment.status = "hidden"
+        comment.save(update_fields=["status"])
+        audit_event(
+            "admin.comment.hide",
+            actor=claims.sub,
+            resource=f"blog_comment:{comment.id}",
+            outcome="success",
+            changed_fields=["status"],
+        )
+        return Response(CommentOutSerializer(comment).data)
+
+
+class AdminBlogCommentDeleteView(APIView):
+    """`DELETE /admin/blog/comments/{comment_id}` -- soft-deletes via
+    `Comment.mark_deleted()`, matching `app/api/routers/blog.py`'s
+    `delete_admin_blog_comment`."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="delete_admin_blog_comment_admin_blog_comments__comment_id__delete",
+        tags=["blog"],
+        auth=[{"HTTPBearer": []}],
+        responses={
+            204: None,
+            **_BLOG_AUTH_RESPONSES,
+            **_BLOG_NOT_FOUND_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    )
+    def delete(self, request, comment_id):
+        auth_service = build_auth_service()
+        claims = async_to_sync(require_roles)(request, auth_service, "admin")
+        enforce_admin_rate_limit(request)
+        comment = _get_admin_comment(comment_id)
+        comment.mark_deleted()
+        comment.save(update_fields=["deleted_at"])
+        audit_event(
+            "admin.comment.delete",
+            actor=claims.sub,
+            resource=f"blog_comment:{comment_id}",
+            outcome="success",
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)

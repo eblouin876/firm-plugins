@@ -405,25 +405,15 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # {publish,unpublish}`, `GET /admin/blog/comments`, `POST /admin/blog/
 # comments/{comment_id}/hide`, `DELETE /admin/blog/comments/{comment_id}`
 # (`app/api/routers/blog.py`) -- and extended the frozen contract with all
-# ten new operations. Django parity (`core/models.py`'s new `BlogPost`/
-# `Comment`, `core/serializers.py`'s new serializers, `core/views.py`'s new
-# blog admin views, `core/urls.py`'s new routes, `core/services/sanitize.py`'s
-# byte-identical nh3 policy) is this same stage's job, landed in a
-# follow-up commit -- these ten entries are removed (this set goes back to
-# empty) once that lands with a wire-shape that matches the frozen contract
-# exactly.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = {
-    ("/admin/blog/posts", "get"),
-    ("/admin/blog/posts", "post"),
-    ("/admin/blog/posts/{param}", "get"),
-    ("/admin/blog/posts/{param}", "patch"),
-    ("/admin/blog/posts/{param}", "delete"),
-    ("/admin/blog/posts/{param}/publish", "post"),
-    ("/admin/blog/posts/{param}/unpublish", "post"),
-    ("/admin/blog/comments", "get"),
-    ("/admin/blog/comments/{param}/hide", "post"),
-    ("/admin/blog/comments/{param}", "delete"),
-}
+# ten new operations. Stage 13d landed full Django parity for all ten ops
+# (`core/models.py`'s new `BlogPost`/`Comment`, `core/serializers.py`'s new
+# serializers, `core/views.py`'s new blog admin views, `core/urls.py`'s new
+# routes, `core/services/sanitize.py`'s byte-identical nh3 policy) with a
+# wire-shape that matches the frozen contract exactly -- proven by the
+# strict comparison above, which now includes every one of them. EMPTY, not
+# deleted -- same posture every prior stage's own comment (above) already
+# documents.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:

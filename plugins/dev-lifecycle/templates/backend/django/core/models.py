@@ -467,3 +467,163 @@ class LoginAttempt(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"LoginAttempt(account_key={self.account_key})"
+
+
+# ---------------------------------------------------------------------------
+# Stage 13d: blog/CMS tables -- BlogPost/Comment, the admin surface
+# core/views.py's blog admin views serve. Column-for-column match to
+# backend/fastapi's app/models/{blog_post,comment}.py, cross-checked
+# against alembic/versions/0005_stage13d_blog.py -- see each model's own
+# docstring for the exact shape mirrored. Not vendored files -- this
+# block's own app code, same as Item/User/RefreshToken above.
+# ---------------------------------------------------------------------------
+
+
+class BlogPostQuerySet(models.QuerySet):
+    """`BlogPost`'s soft-delete filter -- identical shape to
+    `ItemQuerySet`/`UserQuerySet` above; see `ItemQuerySet`'s own
+    docstring."""
+
+    def not_deleted(self) -> "BlogPostQuerySet":
+        return self.filter(deleted_at__isnull=True)
+
+    def with_deleted(self) -> "BlogPostQuerySet":
+        return self
+
+
+class BlogPostManager(models.Manager.from_queryset(BlogPostQuerySet)):
+    def get_queryset(self) -> BlogPostQuerySet:
+        return super().get_queryset().not_deleted()
+
+
+class BlogPost(models.Model):
+    """Column-for-column match to `backend/fastapi`'s
+    `app/models/blog_post.py` `BlogPost` — see that model's own docstring
+    for the full render-rule/FK-integrity rationale this mirrors.
+
+    `body_json` (the raw ProseMirror doc) is stored OPAQUE — a plain
+    `JSONField`, never rendered anywhere public, reloaded into the (later,
+    Stage 13d UI) TipTap editor only. `body_html` is the SANITIZED render
+    source of truth — `core/services/sanitize.py`'s `sanitize_blog_html()`
+    is called on it by the write-path (`core/views.py`'s blog admin views)
+    BEFORE this column is ever written.
+
+    `status` is a plain `CharField`, NOT a DB enum — the SAME `User.
+    status` precedent (see that field's own comment above), over
+    `{"draft", "published"}`. `db_default="draft"` is the SAME
+    `db_default`-vs-`default` two-layer precedent `User.status`/`User.
+    email_verified` already establish.
+
+    `author` uses `on_delete=models.PROTECT` — the SAME app-level
+    (Django ORM) enforcement `RefreshToken.user`/`SingleUseToken.user`
+    use above (see `RefreshToken`'s own docstring, nuance 1) — deleting a
+    `User` row while it still owns `BlogPost` rows is refused rather than
+    silently cascading away authored content."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # UNIQUE — DB-level backstop behind core/serializers.py's request-
+    # boundary slug pattern/uniqueness check (see BlogPost's own FastAPI
+    # docstring for the "friendly-error-path plus DB-enforced backstop"
+    # split this mirrors). Plain CharField, NOT Django's own `SlugField` —
+    # `SlugField`'s built-in `validate_slug` validator accepts
+    # `[-a-zA-Z0-9_]+` (uppercase AND underscore both allowed), a WIDER
+    # charset than this app's own `^[a-z0-9-]+$` policy
+    # (`core/serializers.py`'s `BlogPostCreateSerializer`/
+    # `BlogPostUpdateSerializer`); using `SlugField` here would invite a
+    # second, looser, easy-to-forget validation path to drift from the one
+    # this app actually enforces at the request boundary.
+    slug = models.CharField(max_length=220, unique=True)
+    title = models.CharField(max_length=200)
+    body_json = models.JSONField()
+    body_html = models.TextField()
+    status = models.CharField(max_length=16, default="draft", db_default="draft")
+    published_at = models.DateTimeField(null=True, blank=True, default=None)
+    # PROTECT, not CASCADE — see this class's own docstring.
+    author = models.ForeignKey(User, on_delete=models.PROTECT, db_index=True, related_name="blog_posts")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    objects = BlogPostManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        db_table = "blog_posts"
+        indexes = [
+            models.Index(fields=["status"], name="blog_posts_status_idx"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.slug
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    def mark_deleted(self, *, when=None) -> None:
+        from django.utils import timezone
+
+        self.deleted_at = when or timezone.now()
+
+
+class CommentQuerySet(models.QuerySet):
+    """`Comment`'s soft-delete filter -- identical shape to
+    `ItemQuerySet`/`UserQuerySet`/`BlogPostQuerySet` above."""
+
+    def not_deleted(self) -> "CommentQuerySet":
+        return self.filter(deleted_at__isnull=True)
+
+    def with_deleted(self) -> "CommentQuerySet":
+        return self
+
+
+class CommentManager(models.Manager.from_queryset(CommentQuerySet)):
+    def get_queryset(self) -> CommentQuerySet:
+        return super().get_queryset().not_deleted()
+
+
+class Comment(models.Model):
+    """Column-for-column match to `backend/fastapi`'s
+    `app/models/comment.py` `Comment` — see that model's own docstring for
+    the full "admin list/hide/delete only, no public create in THIS
+    stage" scope note and the never-store-raw-untrusted-HTML warning on
+    `body`.
+
+    `status` is a plain `CharField`, NOT a DB enum, over `{"visible",
+    "hidden", "pending"}`, `db_default="visible"`. `post`/`author` are
+    both `on_delete=models.PROTECT` — same "don't silently cascade away
+    content" rationale `BlogPost.author`'s own docstring documents;
+    `author` is additionally `null=True` (an optional FK — see the
+    FastAPI model's own docstring on why)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    post = models.ForeignKey(BlogPost, on_delete=models.PROTECT, db_index=True, related_name="comments")
+    author = models.ForeignKey(
+        User, on_delete=models.PROTECT, db_index=True, null=True, blank=True, related_name="blog_comments"
+    )
+    body = models.TextField()
+    status = models.CharField(max_length=16, default="visible", db_default="visible")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    objects = CommentManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        db_table = "blog_comments"
+        indexes = [
+            models.Index(fields=["status"], name="blog_comments_status_idx"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"Comment(post_id={self.post_id})"
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    def mark_deleted(self, *, when=None) -> None:
+        from django.utils import timezone
+
+        self.deleted_at = when or timezone.now()

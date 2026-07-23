@@ -134,7 +134,7 @@ class BlogPostUpdate(BaseModel):
     body_html: str | None = None
 
     @model_validator(mode="after")
-    def _reject_explicit_null(self) -> "BlogPostUpdate":
+    def _reject_explicit_null(self) -> BlogPostUpdate:
         offending = sorted(
             field
             for field in ("title", "slug", "body_json", "body_html")

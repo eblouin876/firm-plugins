@@ -9,6 +9,13 @@ from django.urls import path
 from rest_framework.routers import SimpleRouter
 
 from core.views import (
+    AdminBlogCommentDeleteView,
+    AdminBlogCommentHideView,
+    AdminBlogCommentListView,
+    AdminBlogPostDetailView,
+    AdminBlogPostListCreateView,
+    AdminBlogPostPublishView,
+    AdminBlogPostUnpublishView,
     AdminPingView,
     AdminUserBanView,
     AdminUserDetailView,
@@ -73,6 +80,33 @@ urlpatterns = [
         "admin/users/<str:user_id>/force-verify",
         AdminUserForceVerifyView.as_view(),
         name="admin-user-force-verify",
+    ),
+    # Stage 13d: the blog/CMS admin surface -- see core/views.py's own
+    # module-level comment for the full design. `<str:post_id>`/
+    # `<str:comment_id>`, same malformed-id-stays-enveloped rationale as
+    # `admin/users/<str:user_id>` above.
+    path("admin/blog/posts", AdminBlogPostListCreateView.as_view(), name="admin-blog-post-list-create"),
+    path("admin/blog/posts/<str:post_id>", AdminBlogPostDetailView.as_view(), name="admin-blog-post-detail"),
+    path(
+        "admin/blog/posts/<str:post_id>/publish",
+        AdminBlogPostPublishView.as_view(),
+        name="admin-blog-post-publish",
+    ),
+    path(
+        "admin/blog/posts/<str:post_id>/unpublish",
+        AdminBlogPostUnpublishView.as_view(),
+        name="admin-blog-post-unpublish",
+    ),
+    path("admin/blog/comments", AdminBlogCommentListView.as_view(), name="admin-blog-comment-list"),
+    path(
+        "admin/blog/comments/<str:comment_id>/hide",
+        AdminBlogCommentHideView.as_view(),
+        name="admin-blog-comment-hide",
+    ),
+    path(
+        "admin/blog/comments/<str:comment_id>",
+        AdminBlogCommentDeleteView.as_view(),
+        name="admin-blog-comment-delete",
     ),
     *router.urls,
 ]
