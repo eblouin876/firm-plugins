@@ -196,6 +196,18 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
     ],
+    # DRF's own default (unset) is [SessionAuthentication, BasicAuthentication]
+    # -- an unintended auth surface on every view that doesn't explicitly
+    # override `authentication_classes` (ItemViewSet, core/views.py, never
+    # did). Closing it kit-wide here means `permission_classes = [AllowAny]`
+    # actually means "no auth attempted at all" everywhere in this block
+    # until Stage 5 (#28) adds real authentication, rather than silently
+    # accepting HTTP Basic credentials against Django's `auth_user` table
+    # nothing in this block ever populates. The health/readyz/auth-stub
+    # views' own explicit `authentication_classes = []` (core/views.py) is
+    # now consistent with -- not a narrower override of -- this default,
+    # rather than the one thing actually closing that surface for them.
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
     # Maps DRF's own exception types (ValidationError, NotFound,
     # PermissionDenied, NotAuthenticated, Throttled, ...) — and anything
     # else unhandled — onto core.contract.errors.ErrorEnvelope, so this

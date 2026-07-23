@@ -1,0 +1,16 @@
+# This block's own .gitignore — layered on top of the repo root's
+# .gitignore (which already covers __pycache__/, *.pyc, .pytest_cache/,
+# .venv/). Entries here are specific to this Django block's own
+# uv-managed/sqlite artifacts.
+
+# No uv.lock is committed for this template (README.md, "Composition
+# contract" / "Judgment calls": Python 3.13.x + uv, deps pinned in
+# pyproject.toml, no lockfile shipped) — `uv sync`/`uv run` regenerate one
+# locally, which otherwise keeps showing up as untracked.
+uv.lock
+
+# Hermetic pytest-django's sqlite backend (config/settings_test.py) runs
+# against `:memory:` and leaves nothing on disk under normal use, but an
+# accidental file-backed sqlite database from a local run should never be
+# committed either.
+*.sqlite3

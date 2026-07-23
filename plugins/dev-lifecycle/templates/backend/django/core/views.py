@@ -14,6 +14,7 @@ omission (references/backend/drf.md's "Permissions & queryset scoping":
 
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection
 from django.db.utils import Error as DjangoDBError
 from rest_framework import status, viewsets
@@ -58,16 +59,26 @@ class ItemViewSet(viewsets.ModelViewSet):
     (and this class's own `get_object` override below) never need to
     repeat that filter by hand.
 
-    ACCEPTED DIVERGENCE (documented, not forced — see this block's README,
-    "Conformance"): `ModelViewSet` + a router also exposes `PUT
-    /items/{item_id}` (full replace) via `update()`, which
-    `packages/api-client/openapi.json` does not define (FastAPI's `items`
-    router only has PATCH). `update()` is overridden below to always apply
-    partial semantics regardless of PUT vs PATCH — `ItemUpdateSerializer`
-    already declares every field optional, matching the contract's
-    PATCH-only `ItemUpdate` shape — so a stray PUT behaves identically to
-    PATCH rather than silently nulling out omitted fields; a client
-    generated from the frozen `openapi.json` simply never calls PUT."""
+    `http_method_names` below deliberately excludes `"put"`: `ModelViewSet`
+    + a router would otherwise also expose `PUT /items/{item_id}` (full
+    replace) via `update()`, which `packages/api-client/openapi.json` does
+    not define (FastAPI's `items` router only has PATCH). Excluding it
+    means Django's own `View.dispatch()` routes a PUT request to
+    `http_method_not_allowed()` (405) before `update()` (below) is ever
+    reached — a stray PUT gets the correct "this verb doesn't exist"
+    answer instead of being silently accepted, matching the frozen
+    contract exactly rather than merely being a harmless no-op for it.
+    `update()` still forces partial semantics (`partial=True`
+    unconditionally) purely because `partial_update()` (PATCH) delegates
+    into it — see that method's own docstring."""
+
+    # Router-registered PUT is excluded so a stray full-replace request
+    # 405s instead of silently landing on `update()` (see class docstring
+    # above) — `packages/api-client/openapi.json` has no PUT operation for
+    # this resource. `"head"`/`"options"` stay: DRF/Django handle both
+    # generically and every other view in this block leaves them enabled
+    # too.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     # `.order_by(...)`: `Item` has no default `Meta.ordering` — an
     # unordered queryset paginates non-deterministically page-to-page
@@ -98,20 +109,26 @@ class ItemViewSet(viewsets.ModelViewSet):
         pk = self.kwargs[self.lookup_url_kwarg or self.lookup_field]
         try:
             return self.get_queryset().get(pk=pk)
-        except (Item.DoesNotExist, ValueError, TypeError):
-            # ValueError/TypeError: a malformed (non-UUID) `item_id` —
-            # Django's UUIDField lookup raises this rather than
-            # `DoesNotExist` for a value that isn't a well-formed UUID at
-            # all. FastAPI's path-typed `item_id: uuid.UUID` would instead
-            # reject that at 422 (a routing-level type mismatch) before
-            # the handler ever runs — a second, smaller accepted
-            # per-framework divergence alongside the one this block's
-            # README already documents for PageParams `extra="forbid"`.
-            # Treating it as "not found" here (404) rather than
-            # "unvalidatable" (422) is the more conservative of the two
-            # readings for an ID a caller already has no way to have
-            # gotten right, and keeps this override's error path single
-            # (one exception type raised, not two).
+        except (Item.DoesNotExist, ValueError, TypeError, DjangoValidationError):
+            # ValueError/TypeError/DjangoValidationError: a malformed
+            # (non-UUID) `item_id`. Which of these three Django's UUIDField
+            # lookup actually raises for a value that isn't a well-formed
+            # UUID depends on the value's shape — `django.core.exceptions.
+            # ValidationError` (via `UUIDField.to_python()`, in the normal
+            # `.get(pk=pk)` filtering path) is the common case, but
+            # ValueError/TypeError are kept too since they're the cheaper,
+            # narrower failure a raw `uuid.UUID(pk)` coercion elsewhere
+            # could still raise. All three mean the same thing here: "not a
+            # value that could ever address a real row." FastAPI's
+            # path-typed `item_id: uuid.UUID` would instead reject that at
+            # 422 (a routing-level type mismatch) before the handler ever
+            # runs — a second, smaller accepted per-framework divergence
+            # alongside the one this block's README already documents for
+            # PageParams `extra="forbid"`. Treating it as "not found" here
+            # (404) rather than "unvalidatable" (422) is the more
+            # conservative of the two readings for an ID a caller already
+            # has no way to have gotten right, and keeps this override's
+            # error path single (one exception type raised, not two).
             raise NotFoundError(f"Item {pk} was not found.") from None
 
     def create(self, request, *args, **kwargs):

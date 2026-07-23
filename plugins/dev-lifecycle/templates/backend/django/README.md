@@ -177,7 +177,7 @@ still create *some* index there, just not a genuinely partial one on
 backends that don't support the feature — harmless for this step's
 purposes.)
 
-## Conformance (Step 1 vs. Step 2)
+## Conformance (Step 1 vs. Step 2, + fix round)
 
 **Gate-1 decision (recorded in the PR's decision log):** the client-
 interchangeability guarantee this Django track works toward is **wire-
@@ -213,20 +213,101 @@ conformance-proof test suite (`tests/test_conformance_errors.py`,
 against `core/contract/`'s vendored Pydantic models for the same inputs —
 not just "some 4xx"/"some paginated list".
 
-**Accepted, documented per-framework divergences** (neither is forced —
-see each source's own docstring for the full rationale):
+**Fix round (this state):** an internal review of Step 2 found several real
+bugs where this layer broke wire-contract identity rather than merely
+diverging from it — see each fix's own commit/docstring for detail:
+- A malformed (non-UUID) `item_id` used to raise `django.core.exceptions.
+  ValidationError` inside `ItemViewSet.get_object()`'s ORM lookup, which
+  escaped the narrower `except (DoesNotExist, ValueError, TypeError)` and
+  reached the client as a bare, un-enveloped 500. Fixed: that exception type
+  is now caught too (`core/views.py`) — the documented 404 `NotFoundError`
+  envelope, verified via a real `GET /items/not-a-uuid` request.
+- Every DRF `APIException` subclass without its own explicit branch
+  (`AuthenticationFailed`, `ParseError`/malformed JSON, `MethodNotAllowed`,
+  `UnsupportedMediaType`, ...) used to fall through `core/exceptions.py`'s
+  catch-all straight to a bare 500 with a logged traceback — including for
+  ordinary client mistakes, not just genuine bugs. Fixed: a new branch maps
+  every remaining `APIException` from its own real `status_code` onto the
+  best-fit `ErrorCode`, keeps that real status code (never fakes it to
+  500), and only logs at `exception` level for a genuine 5xx — see
+  `core/exceptions.py`'s own module docstring for the full mapping table.
+  Verified via real requests: malformed JSON → 400 `validation_failed`
+  (not 500), `PUT /items/{id}` → 405 `validation_failed` (not 500), bad
+  Basic-auth credentials → 401 `unauthenticated` (not 500), a genuine
+  `RuntimeError` → still 500 `internal_error` with no `str(exc)` leak.
+- DRF's default `DEFAULT_AUTHENTICATION_CLASSES`
+  (`SessionAuthentication`+`BasicAuthentication`) was left unset, so every
+  view without its own explicit `authentication_classes` override —
+  `ItemViewSet` included — silently accepted HTTP Basic credentials against
+  Django's `auth_user` table, an auth surface nothing in this block
+  populates or intends before Stage 5 (#28). Fixed: `config/settings.py`
+  now sets `"DEFAULT_AUTHENTICATION_CLASSES": []` kit-wide; the health/
+  readyz/auth-stub views' own explicit `authentication_classes = []`
+  (`core/views.py`) is unchanged and now consistent with, rather than the
+  only thing closing, that surface.
+- `page`/`size` bounds (`page=0`/negative, `size=0`, `size>200`) used to be
+  silently accepted or clamped by DRF's own `PageNumberPagination` rather
+  than rejected, and a `page` past the last one 404'd ("Invalid page")
+  instead of returning an empty page — both real divergences from
+  FastAPI's `Depends(PageParams)` behavior. Fixed, turning both into real
+  conformance rather than accepted gaps: `core/pagination.py`'s
+  `paginate_queryset` now validates `page`/`size` through the SAME
+  vendored `PageParams` FastAPI uses (out-of-bounds → 422
+  `validation_failed`, verified for `page=0`, `page=-1`, `size=0`,
+  `size=201`, `size=500`), and tolerates a past-the-end `page` as `items:
+  []` at 200 (verified) rather than DRF's own 404.
+- `ModelViewSet` + a router used to also expose `PUT /items/{item_id}`
+  (full replace, forced to partial semantics), which `openapi.json` does
+  not define at all. Fixed: `ItemViewSet.http_method_names` (`core/
+  views.py`) now excludes `"put"` outright, so `PUT` 405s via the
+  `APIException` fix above instead of being silently accepted — verified
+  a `PUT` now returns 405 and `PATCH` still works.
+
+**Accepted, documented per-framework divergences** (none forced — see each
+source's own docstring for the full rationale; the guarantee is
+wire-identity on the DOCUMENTED operations and their success/documented-
+error responses, not on framework-level plumbing a well-behaved generated
+client never triggers):
 - `PageParams`'s `extra="forbid"` (an unrecognized query param is a hard
-  422 on FastAPI) has no DRF equivalent wired here — an unknown query
-  param is silently ignored (`core/pagination.py`).
+  422 on FastAPI) has no DRF equivalent wired here — an unrelated unknown
+  query param is silently ignored (`core/pagination.py`).
 - `ItemViewSet.get_object()` treats a malformed (non-UUID) `item_id` path
   segment as 404 (`core/views.py`) where FastAPI's path-typed `item_id:
   uuid.UUID` rejects it at 422 before the handler runs — a routing-level
-  type-coercion difference, not a contract-shape one.
-- `ModelViewSet` + a router also exposes `PUT /items/{item_id}` (full
-  replace), which `openapi.json` does not define; `core/views.py`'s
-  `ItemViewSet.update()` forces partial semantics for it regardless, so a
-  stray PUT never silently nulls out omitted fields — a client generated
-  from the frozen `openapi.json` never calls it.
+  type-coercion difference, not a contract-shape one (the underlying 500
+  BUG this used to also trigger is the fix above; the 404-vs-422 choice
+  itself remains an accepted, deliberate divergence).
+- **Framework-level negotiation/parse errors may differ in exact status
+  between the two tracks.** A malformed JSON body is DRF's own `ParseError`
+  (`status_code = 400`) here vs. FastAPI's 422 for the equivalent case; a
+  disallowed method (`PUT`) is 405 on both, but DRF's `UnsupportedMediaType`
+  (415) has no FastAPI-side equivalent pinned. None of these are documented
+  operations or documented error responses in `packages/api-client/
+  openapi.json` — a well-behaved client generated from that frozen schema
+  never sends a request that triggers them. The wire-identity guarantee
+  this block targets (see "Gate-1 decision" above) covers the DOCUMENTED
+  surface; these framework-negotiation edges are honestly out of scope for
+  byte-identical status matching, though both sides still return a real,
+  enveloped `ErrorEnvelope` (never a bare 500) for every one of them.
+- **The 422 `details[]` array's exact content is NOT byte-identical**
+  between the two tracks, even though the envelope's outer shape (`code`,
+  `status`, `message`) is. `field` differs (DRF's `ValidationError.detail`
+  keys are the bare field name, e.g. `"name"`; FastAPI's
+  `RequestValidationError.errors()` `loc` includes the request-part prefix,
+  e.g. `"body.name"`) and `message` text differs (DRF's own validator
+  messages vs. Pydantic's). A client that switches on `error.code` (as
+  `core/contract/errors.py`'s own `ErrorBody` docstring already instructs —
+  "a client should switch on `code`, never on `message`") is unaffected;
+  one that parses `details[].field`/`.message` as a stable, cross-backend
+  identifier is not supported by either track's contract.
+- **List ordering**: `ItemViewSet.queryset` here is explicitly
+  `.order_by("created_at", "id")` (`core/views.py`) — a deterministic,
+  repeatable page-to-page order. `backend/fastapi`'s equivalent list query
+  currently applies no `ORDER BY` at all. This is flagged, not fixed here
+  (out of this fix round's scope, which is this Django block only): the
+  FastAPI block should adopt the same deterministic order for genuine
+  cross-backend list-order parity — tracked as a follow-up for Step 4 /
+  the whole-PR review, not addressed in this commit.
 
 ## Security
 
@@ -277,14 +358,30 @@ that real database via `manage.py shell`.
   the same inputs (round-tripped through `ErrorEnvelope.model_validate`
   and, for the 404/500 cases, built directly from `NotFoundError`/
   `AppError`). Also asserts `deleted_at` never appears in any item
-  response and `name=""` is rejected at 422.
+  response and `name=""` is rejected at 422. **Fix round additions**
+  (every one hits the real route via `APIClient`, not the handler
+  function in isolation): `test_malformed_uuid_path_is_404_not_500`,
+  `test_malformed_json_body_is_not_500`, `test_put_is_405_not_500`,
+  `test_bad_basic_auth_credentials_are_401_not_500` (the last via a new
+  throwaway `_BasicAuthOnlyView` in `tests/_conformance_urls.py`, since no
+  real route runs `BasicAuthentication` any more after the
+  `DEFAULT_AUTHENTICATION_CLASSES = []` fix).
 - `test_conformance_pagination.py` — creates N items, asserts `GET /items`
   equals `{items, total, page, size, pages}` cross-checked against
-  `core.contract.pagination.Page.create(...)` for the same data.
+  `core.contract.pagination.Page.create(...)` for the same data. **Fix
+  round**: `test_max_page_size_is_capped_at_200` (the old accepted-
+  divergence clamp test) is replaced by `test_size_over_200_is_422`
+  (same input, now the correct 422 outcome); new
+  `test_size_exactly_201_is_422`, `test_size_zero_is_422`,
+  `test_page_zero_is_422`, `test_page_negative_is_422`,
+  `test_page_past_the_end_is_200_with_empty_items` cover the rest of the
+  now-validated `PageParams` bounds.
 
-Verification for this step: `manage.py check` (hermetic-sqlite), `manage.py
-migrate` clean, the full pytest suite green, and `scripts/validate_plugin.py`
-0 warnings — see this step's PR description for the full transcript.
+Verification for this step + fix round: `manage.py check` (hermetic-sqlite),
+`manage.py migrate` clean, the full pytest suite green (26 tests — 17 from
+Step 2 plus 9 added this fix round: 4 in `test_conformance_errors.py`, 5 net
+in `test_conformance_pagination.py`), and `scripts/validate_plugin.py` 0
+warnings — see this step's PR description for the full transcript.
 Step 1's own real-PostgreSQL-16 verification (model + migration) is
 unchanged and not repeated here.
 

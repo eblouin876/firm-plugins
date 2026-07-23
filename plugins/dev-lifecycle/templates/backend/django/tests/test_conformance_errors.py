@@ -3,7 +3,16 @@ Step 2 (#27), the acceptance core for this step. Every assertion here checks
 the response body against a shape independently constructed from
 `core.contract.errors` (the vendored contract source), not just "some 4xx/
 5xx status" — see each test's own docstring for exactly what's cross-checked
-and against what."""
+and against what.
+
+Fix round additions (below `test_empty_name_is_rejected_with_422`): the
+review found real bugs where several exception paths escaped
+`core.exceptions.exception_handler`'s mapping entirely and fell through to
+a bare, un-enveloped 500 — a malformed (non-UUID) `item_id`, malformed JSON,
+a disallowed HTTP method, and bad Basic-auth credentials. Every one of
+those is exercised here via the REAL request path (DRF's `APIClient`
+against the real `ItemViewSet`/throwaway conformance route), not by
+asserting the model/handler function in isolation."""
 
 from __future__ import annotations
 
@@ -117,3 +126,91 @@ def test_item_response_never_includes_deleted_at(api_client: APIClient) -> None:
 def test_empty_name_is_rejected_with_422(api_client: APIClient) -> None:
     response = api_client.post("/items", {"name": ""}, format="json")
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Fix round: paths that used to escape `exception_handler`'s mapping and
+# fall through to a bare, un-enveloped 500. Every test below hits the REAL
+# route through `APIClient`, not the handler function directly.
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_uuid_path_is_404_not_500(api_client: APIClient) -> None:
+    """BLOCKER fix: a non-UUID `item_id` (`django.core.exceptions.
+    ValidationError`, raised inside `UUIDField`'s lookup coercion) used to
+    escape `ItemViewSet.get_object()`'s `except (DoesNotExist, ValueError,
+    TypeError)` entirely, reaching the client as a bare 500. Now caught
+    (core/views.py) and rendered as the documented 404 `NotFoundError`
+    envelope, byte-equal to what the vendored exception class itself would
+    produce for the same message."""
+    response = api_client.get("/items/not-a-uuid")
+
+    assert response.status_code == 404
+    expected = NotFoundError("Item not-a-uuid was not found.").to_envelope().model_dump(mode="json")
+    assert response.json() == expected
+
+
+def test_malformed_json_body_is_not_500(api_client: APIClient) -> None:
+    """BLOCKER fix: a body that fails JSON parsing raises DRF's `ParseError`
+    (an `APIException` with no explicit branch above) — this used to fall
+    through the old catch-all straight to a bare 500. Now mapped by
+    `exception_handler`'s generic `APIException` branch: DRF's own
+    `ParseError.status_code` (400) is kept as the real status (documented,
+    honest divergence from FastAPI's 422 for the same malformed-body case
+    — see this block's README, "Conformance"), and the body is a real
+    `ErrorEnvelope` with `code=validation_failed`, not an unhandled 500."""
+    response = api_client.post("/items", data="{not valid json", content_type="application/json")
+
+    assert response.status_code != 500
+    assert response.status_code == 400
+    body = response.json()
+    envelope = ErrorEnvelope.model_validate(body)
+    assert envelope.error.code.value == "validation_failed"
+    assert envelope.model_dump(mode="json") == body
+
+
+def test_put_is_405_not_500(api_client: APIClient) -> None:
+    """BLOCKER fix: `MethodNotAllowed` (an `APIException` with no explicit
+    branch above) used to fall through to a bare 500. `ItemViewSet.
+    http_method_names` (core/views.py, this fix round) also now excludes
+    `"put"` entirely, so a `PUT` request never reaches `update()` — Django's
+    own `dispatch()` routes it straight to `http_method_not_allowed()`,
+    which `exception_handler`'s generic `APIException` branch renders as a
+    real `ErrorEnvelope` at the correct 405 status (kept real, not folded
+    into 422/400 — see core/exceptions.py's own module docstring)."""
+    created = api_client.post("/items", {"name": "Original"}, format="json").json()
+
+    response = api_client.put(f"/items/{created['id']}", {"name": "Replaced"}, format="json")
+
+    assert response.status_code == 405
+    body = response.json()
+    envelope = ErrorEnvelope.model_validate(body)
+    assert envelope.error.code.value == "validation_failed"
+    assert envelope.model_dump(mode="json") == body
+
+    # PATCH is still the real, contract-defined update path.
+    patch_response = api_client.patch(f"/items/{created['id']}", {"name": "Renamed"}, format="json")
+    assert patch_response.status_code == 200
+    assert patch_response.json()["name"] == "Renamed"
+
+
+@pytest.mark.urls("tests._conformance_urls")
+def test_bad_basic_auth_credentials_are_401_not_500(api_client: APIClient) -> None:
+    """BLOCKER fix: `AuthenticationFailed` (bad/malformed credentials, an
+    `APIException` distinct from `NotAuthenticated`'s "no credentials at
+    all" — the latter already had its own explicit branch above) used to
+    fall through to a bare 500. No real route in this block runs
+    `BasicAuthentication` any more (`DEFAULT_AUTHENTICATION_CLASSES = []`,
+    config/settings.py, this fix round's HIGH fix) — exercised via a
+    throwaway test-only route that opts back into it (see
+    `tests/_conformance_urls.py`), the same pattern the 401/403/500 tests
+    above already use."""
+    api_client.credentials(HTTP_AUTHORIZATION="Basic not-a-valid-base64-credential")
+
+    response = api_client.get("/__test_only_basic_auth")
+
+    assert response.status_code == 401
+    body = response.json()
+    envelope = ErrorEnvelope.model_validate(body)
+    assert envelope.error.code.value == "unauthenticated"
+    assert envelope.model_dump(mode="json") == body

@@ -1,15 +1,20 @@
 """Conformance-proof tests for `core.pagination.ContractPageNumberPagination`
-— Stage 4 Step 2 (#27). Creates N items, asserts `GET /items`'s JSON body
-equals `{items, total, page, size, pages}` and cross-checks it against
-`core.contract.pagination.Page.create(...)` built directly from the same
-data — the vendored contract source's own page-count math, not a
-re-implementation of it."""
+— Stage 4 Step 2 (#27), fix round. Creates N items, asserts `GET /items`'s
+JSON body equals `{items, total, page, size, pages}` and cross-checks it
+against `core.contract.pagination.Page.create(...)` built directly from the
+same data — the vendored contract source's own page-count math, not a
+re-implementation of it. Also asserts the `page`/`size` bounds are now
+validated through that same vendored `PageParams` (page/size out of bounds
+-> 422, matching FastAPI's own `Depends(PageParams)` validation) and that a
+page past the end returns 200 with `items: []` rather than DRF's own
+default 404."""
 
 from __future__ import annotations
 
 import pytest
 from rest_framework.test import APIClient
 
+from core.contract.errors import ErrorEnvelope
 from core.contract.pagination import Page, PageParams
 from core.models import Item
 from core.serializers import ItemOutSerializer
@@ -72,13 +77,49 @@ def test_empty_list_matches_contract_page_zero_pages(api_client: APIClient) -> N
     assert body == expected
 
 
-def test_max_page_size_is_capped_at_200(api_client: APIClient) -> None:
+def test_size_over_200_is_422(api_client: APIClient) -> None:
+    """FIXED (was an accepted divergence: DRF's `PageNumberPagination`
+    used to silently clamp `size=500` to `max_page_size=200`). Now
+    `size` is validated through `PageParams` (`le=200`) exactly like
+    FastAPI's own `Depends(PageParams)` -- an out-of-bounds `size` is a
+    hard 422, not a silent clamp."""
     _make_items(3)
 
     response = api_client.get("/items", {"size": 500})
 
+    assert response.status_code == 422
+    envelope = ErrorEnvelope.model_validate(response.json())
+    assert envelope.error.code.value == "validation_failed"
+
+
+def test_size_exactly_201_is_422(api_client: APIClient) -> None:
+    response = api_client.get("/items", {"size": 201})
+    assert response.status_code == 422
+
+
+def test_size_zero_is_422(api_client: APIClient) -> None:
+    response = api_client.get("/items", {"size": 0})
+    assert response.status_code == 422
+
+
+def test_page_zero_is_422(api_client: APIClient) -> None:
+    response = api_client.get("/items", {"page": 0})
+    assert response.status_code == 422
+
+
+def test_page_negative_is_422(api_client: APIClient) -> None:
+    response = api_client.get("/items", {"page": -1})
+    assert response.status_code == 422
+
+
+def test_page_past_the_end_is_200_with_empty_items(api_client: APIClient) -> None:
+    """Matches FastAPI's offset-past-end behavior: a `page` beyond the
+    last real page is 200 with `items: []`, NOT DRF's own default 404
+    "Invalid page"."""
+    _make_items(3)
+
+    response = api_client.get("/items", {"page": 99, "size": 10})
+
     assert response.status_code == 200
-    # ACCEPTED DIVERGENCE (see core/pagination.py's own docstring):
-    # PageParams(size=500) would be a hard 422 on FastAPI (`le=200`); DRF's
-    # PageNumberPagination instead silently clamps to max_page_size.
-    assert response.json()["size"] == 200
+    body = response.json()
+    assert body == {"items": [], "total": 3, "page": 99, "size": 10, "pages": 1}
