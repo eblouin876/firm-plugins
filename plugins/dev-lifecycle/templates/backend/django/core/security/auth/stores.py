@@ -48,14 +48,13 @@ differs because Django's async ORM has no session object to hold.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
-from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core import mail as django_mail
 from django.db import IntegrityError
@@ -566,6 +565,84 @@ def build_auth_service() -> AuthService:
 _email_logger = logging.getLogger("auth.email.django")
 
 
+# In-process bounded thread pool this app's `DjangoEmailSender` delivers
+# through -- see that class's own docstring for the full WHY. Module-level
+# (not per-instance) so every `DjangoEmailSender()` this process ever
+# constructs (`build_account_service()` builds a fresh one per call, see
+# `get_email_sender`'s own docstring) shares ONE bounded pool rather than
+# each spinning up its own unbounded set of OS threads -- `max_workers=4`
+# caps how much concurrent blocking mail I/O (SMTP handshakes, etc.) this
+# process will run at once, matching the "bounded" half of this fix's own
+# name. `thread_name_prefix="auth-email"` makes these threads identifiable
+# in a stack dump / `py-spy` trace / thread-count metric, distinct from
+# gunicorn's own sync worker threads.
+_email_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="auth-email")
+
+# Strong references to in-flight delivery futures, module-level (shared by
+# every `DjangoEmailSender` instance, mirroring `_email_executor` above) --
+# a `Future` returned by `ThreadPoolExecutor.submit()` is NOT at risk of
+# garbage collection the way a bare `asyncio.create_task()` result is (the
+# executor itself keeps the underlying work alive until it completes), but
+# this set is still what `flush_pending_email_deliveries` below waits on,
+# and it doubles as the single place every delivery's terminal
+# exception is logged (via the `done_callback` registered in `send()`
+# below), regardless of which `DjangoEmailSender` instance submitted it.
+_pending_deliveries: set[Future[None]] = set()
+
+
+def _on_delivery_done(future: Future[None]) -> None:
+    """`done_callback` registered on every future `DjangoEmailSender.send`
+    submits -- runs in the POOL THREAD that just finished the delivery
+    attempt (`ThreadPoolExecutor`'s own documented callback semantics),
+    never on the request thread/event loop that called `send()`. Discards
+    the future from `_pending_deliveries` (mirroring `SmtpEmailSender`'s
+    own `_tasks.discard` `add_done_callback`) and logs any exception that
+    escaped `_deliver_sync`'s own `try/except` -- belt-and-braces only;
+    `_deliver_sync` already catches and logs everything itself, so
+    `future.exception()` is expected to be `None` here in the normal case."""
+    _pending_deliveries.discard(future)
+    exc = future.exception()
+    if exc is not None:
+        _email_logger.warning("Unhandled exception delivering auth email", exc_info=exc)
+
+
+def flush_pending_email_deliveries(timeout: float | None = None) -> None:
+    """Blocks until every delivery future that was pending AT THE MOMENT
+    THIS IS CALLED has finished (or `timeout` seconds elapse, per future).
+    Two intended callers:
+
+    1. **Tests** -- the real `DjangoEmailSender` (below) is fire-and-forget
+       by contract (see its own docstring), so a test driving a real HTTP
+       request through `POST /auth/register` and then wanting to assert on
+       `django.core.mail.outbox` needs a deterministic point at which
+       delivery is GUARANTEED to have already happened, without a flaky
+       `time.sleep`. This is that point.
+    2. **Graceful shutdown** -- a project wiring this app's shutdown
+       sequence (e.g. a `SIGTERM` handler, an ASGI lifespan shutdown event)
+       can call this to give in-flight deliveries a chance to finish before
+       the process actually exits, rather than the pool being torn down
+       out from under them. This is still BEST-EFFORT, not a durability
+       guarantee -- see `DjangoEmailSender`'s own docstring's
+       "best-effort-on-process-shutdown" caveat: a worker that is killed
+       (not given a chance to run its shutdown hook at all -- e.g. `SIGKILL`,
+       an OOM-kill, a recycled gunicorn worker mid-request) loses whatever
+       was still pending regardless of this function.
+
+    Snapshots `_pending_deliveries` before waiting (`list(...)`, a copy) so
+    a delivery that gets scheduled by some OTHER concurrent request while
+    this call is already waiting does not extend how long this particular
+    call blocks -- callers that need to wait for deliveries scheduled
+    after this call started should call this again."""
+    for future in list(_pending_deliveries):
+        try:
+            future.result(timeout=timeout)
+        except Exception:
+            # A delivery failure (or a timeout) here has already been
+            # logged by `_on_delivery_done` above -- this call's job is
+            # only to WAIT, not to re-raise or re-log.
+            pass
+
+
 class DjangoEmailSender:
     """The single `_core.EmailSender` implementation this Django track
     needs, for both dev/test AND prod — built on Django's OWN pluggable
@@ -585,89 +662,131 @@ class DjangoEmailSender:
     own docstring describes, just reached via Django's own backend
     machinery rather than a second Python class.
 
-    **Fire-and-forget by contract** — the SAME `_core.EmailSender` Protocol
-    requirement `SmtpEmailSender`'s own docstring documents (backend/
-    fastapi): `send()` SCHEDULES delivery (`asyncio.create_task(self.
-    _deliver(message))`) and returns immediately — it does NOT await the
-    actual send, and it NEVER raises. This is what `_core.EmailSender`'s own
-    Protocol docstring requires ("implementations MUST NOT let delivery
-    latency or delivery failure affect the caller") and what `_core.
-    AccountService.request_password_reset`'s anti-enumeration defense and
-    `register`'s post-registration verification-email call (Agent B's
-    endpoint work) both depend on. `_deliver` bridges Django's own
-    (synchronous, potentially network-blocking under the SMTP backend)
-    `django.core.mail.EmailMessage.send()` onto a worker thread via
-    `asgiref.sync.sync_to_async` — `asgiref` is already a hard, non-optional
-    dependency of this whole async-ORM-backed block (it's what
-    `async_to_sync`, used throughout this app's own views/tests, comes
-    from), so reaching for its `sync_to_async` counterpart here needs no new
-    pin, matching this block's "stdlib/anyio/django.core.mail only" posture
-    for this stage. `thread_sensitive=False` — the general asyncio thread
-    pool, not Django's single "main thread" `sync_to_async` normally
-    serializes ORM calls onto — since a blocking SMTP round trip is
-    plain network I/O with no ORM/session affinity to preserve, matching
-    `SmtpEmailSender`'s own use of `anyio.to_thread.run_sync` for the
-    identical reason. Any exception (a connection failure, an auth
-    rejection, a timeout, a misconfigured backend) is caught in `_deliver`
-    and only LOGGED (`_email_logger`, `warning` level) — nothing above that
-    method ever sees it, because nothing above it is awaiting this
-    coroutine at all.
+    **Delivered via a bounded thread pool, NOT `asyncio.create_task` --
+    this is the fix for a HIGH-severity availability bug, read this
+    carefully before touching it again.** An earlier version of this class
+    scheduled delivery with `asyncio.create_task(self._deliver(message))`,
+    the same pattern `SmtpEmailSender` (backend/fastapi) correctly uses.
+    That pattern depends on the event loop that created the task still
+    being alive, and still pumping, at some point AFTER the task is
+    created -- true for `backend/fastapi`, which runs under uvicorn's own
+    long-lived, continuously-pumped event loop. It is FALSE here: this
+    app's shipped deployment (`backend/django/Dockerfile`, `docker-
+    compose.yml`) runs `gunicorn config.wsgi:application` -- plain
+    synchronous WSGI workers, never uvicorn/ASGI. Every DRF view that ends
+    up calling `AccountService.request_email_verification`/
+    `request_password_reset` (which call this class's `send()`) is an
+    ordinary SYNC view that bridges into the async `AccountService` via
+    `asgiref.sync.async_to_sync(...)` (see `build_account_service`'s own
+    docstring). `async_to_sync` creates a FRESH event loop for that one
+    call, drives the awaited coroutine to completion, and then TEARS THAT
+    LOOP DOWN before returning control to the sync view -- and because
+    neither `request_email_verification` nor `request_password_reset`
+    awaits anything else after `send()` returns, a task merely SCHEDULED
+    (not yet run) by `asyncio.create_task` inside that call never gets a
+    chance to actually execute: the loop it was scheduled on is gone the
+    instant `async_to_sync` returns. The result, under this app's default
+    `AUTH_REQUIRE_EMAIL_VERIFICATION=True`: verification emails (and
+    password-reset emails) were SILENTLY NEVER DELIVERED -- every new
+    account was permanently unable to verify (and therefore unable to log
+    in), and the reset-based recovery path was equally dead. An
+    availability/auth denial-of-service, not a data-correctness bug -- the
+    anti-enumeration and generic-401 SECURITY properties were unaffected
+    either way, only delivery was silently dropped.
 
-    **In-flight task lifetime**: identical `_tasks` strong-reference-`set`
-    pattern to `SmtpEmailSender`'s own — a bare `asyncio.create_task(...)`
-    result nothing holds a reference to is eligible for garbage collection
-    mid-flight (`asyncio.create_task`'s own docs); `_tasks` holds a strong
-    reference to every task this instance has scheduled for as long as it's
-    in flight, added in `send()`, removed via an `add_done_callback` once
-    the task finishes (success OR the already-caught-internally failure).
+    A `concurrent.futures.ThreadPoolExecutor` (module-level `_email_
+    executor` above) sidesteps this entirely: `send()` calls `_email_
+    executor.submit(...)`, which starts running `_deliver_sync` on a REAL
+    OS thread immediately -- that thread is not owned by, and does not
+    depend on, whichever asyncio event loop happened to be running when
+    `send()` was called (or whether one is running at all by the time the
+    work finishes). It survives `async_to_sync`'s loop teardown by
+    construction, and the identical `send()`/`_deliver_*` shape keeps
+    working unchanged if this app later adds a real ASGI view path
+    (`config/asgi.py` already exists for that -- see the `Dockerfile`'s own
+    comment) since a thread pool works under both WSGI and ASGI, unlike
+    `asyncio.create_task`, which only works when a loop is guaranteed to
+    keep pumping.
 
-    **Best-effort on shutdown / instance lifetime** — same accepted
-    trade-off `SmtpEmailSender`'s own docstring documents: a task still in
-    flight when the process exits, or when nothing outside this instance
-    holds a reference to it any longer, can be cut off mid-delivery. A
-    project with a hard delivery guarantee should replace this with a real
-    queue/outbox; `_core.EmailSender`'s Protocol is the seam that swap
-    happens behind, unchanged for either `AccountService` caller."""
+    **Fire-and-forget by contract, still** — the SAME `_core.EmailSender`
+    Protocol requirement as before (see `SmtpEmailSender`'s own docstring,
+    backend/fastapi): `send()` SUBMITS delivery and returns immediately —
+    it does NOT wait for the result, and it NEVER raises. This is what
+    `_core.EmailSender`'s own Protocol docstring requires ("implementations
+    MUST NOT let delivery latency or delivery failure affect the caller")
+    and what `_core.AccountService.request_password_reset`'s
+    anti-enumeration defense and `register`'s post-registration
+    verification-email call both depend on. `_deliver_sync` (a plain SYNC
+    method, running in the pool thread -- no event loop involved at all,
+    so no `sync_to_async`/`anyio.to_thread` bridge is needed the way the
+    old `asyncio`-task version needed one) performs the actual, potentially
+    network-blocking `django.core.mail` send inside a `try/except Exception`
+    that only LOGS (`_email_logger`, `warning` level) -- nothing above that
+    method ever sees the exception, because nothing above it is waiting on
+    this future's result at all (`send()` itself never calls `.result()`).
 
-    def __init__(self) -> None:
-        # Strong references to in-flight delivery tasks -- see this class's
-        # own docstring on why a bare create_task() result can't be left to
-        # get garbage-collected mid-flight.
-        self._tasks: set[asyncio.Task[None]] = set()
+    **In-flight future lifetime**: `send()` registers every future it
+    submits in the module-level `_pending_deliveries` set (added on
+    submit, discarded by `_on_delivery_done`'s `done_callback` once the
+    future finishes, success or already-caught-internally failure) --
+    this is what `flush_pending_email_deliveries` (module-level, above)
+    waits on, both for tests and as an optional graceful-shutdown hook.
+    Unlike `asyncio.create_task`'s bare-reference footgun, a
+    `ThreadPoolExecutor` future is not at risk of being garbage-collected
+    mid-flight even without this set (the executor itself keeps the work
+    alive) -- `_pending_deliveries` exists for `flush_pending_email_
+    deliveries` to have something to wait on, not to prevent GC.
+
+    **Best-effort on process shutdown, still an accepted caveat.** A
+    delivery still running in a pool thread when the process is killed
+    (not given a chance to shut down gracefully -- `SIGKILL`, an OOM-kill,
+    a gunicorn worker recycled mid-request) is lost, same as any other
+    in-process background send -- this is the SAME class of caveat every
+    fire-and-forget in-process sender has (identical to the old
+    `asyncio.create_task` version's own "best-effort on shutdown" note,
+    and to `SmtpEmailSender`'s), just no longer compounded by the
+    `async_to_sync`-teardown bug above. A project that needs a hard
+    delivery guarantee (survives a crash, retried, durable) should replace
+    this with a real queue/outbox -- `_core.EmailSender`'s Protocol is the
+    seam that swap happens behind, unchanged for either `AccountService`
+    caller; that is a Stage-11-and-later recipe, not something this stage
+    adds."""
 
     async def send(self, message: EmailMessage) -> None:
-        """Schedules delivery and returns immediately -- does NOT await the
-        send, does NOT raise. See this class's own docstring."""
-        task = asyncio.create_task(self._deliver(message))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        """Submits delivery to the module-level bounded thread pool and
+        returns immediately -- does NOT await/wait for the result, does
+        NOT raise. Declared `async def` (rather than a plain sync method)
+        because it implements `_core.EmailSender`'s `Protocol`, which
+        declares `send` as `async def` -- see that Protocol's own
+        docstring. See this class's own docstring for why a thread pool,
+        not `asyncio.create_task`, is what actually runs the delivery."""
+        future = _email_executor.submit(self._deliver_sync, message)
+        _pending_deliveries.add(future)
+        future.add_done_callback(_on_delivery_done)
 
-    async def _deliver(self, message: EmailMessage) -> None:
-        """Runs as a background task (scheduled by `send()` above), never
-        awaited by a caller. Any exception is caught here and only
-        LOGGED -- this is the actual enforcement point of this class's
-        fire-and-forget contract."""
+    def _deliver_sync(self, message: EmailMessage) -> None:
+        """Runs on a pool thread (submitted by `send()` above) -- a plain
+        SYNC method, never `await`ed, with no event loop involved at all.
+        BLOCKING I/O under the SMTP backend is exactly what a real OS
+        thread is for. `fail_silently=False` so a delivery failure raises
+        here, caught by this method's own `try/except` and only LOGGED
+        (`_email_logger`, `warning` level) -- rather than Django's own
+        `EmailMessage.send(fail_silently=True)` posture, which would
+        swallow the error one layer BELOW where this class's own logging
+        happens, silently. Calls Django's sync mail API directly (no
+        `sync_to_async` wrapper needed -- this is already a real thread,
+        not asyncio-scheduled work)."""
         try:
-            await sync_to_async(self._send_sync, thread_sensitive=False)(message)
+            django_mail.EmailMessage(
+                subject=message.subject,
+                body=message.body,
+                from_email=settings.EMAIL_FROM,
+                to=[message.to],
+            ).send(fail_silently=False)
         except Exception:
             _email_logger.warning(
                 "Failed to deliver email to %s (subject=%r)", message.to, message.subject, exc_info=True
             )
-
-    def _send_sync(self, message: EmailMessage) -> None:
-        """Runs on a worker thread (via `sync_to_async` in `_deliver`
-        above) -- BLOCKING I/O under the SMTP backend, never `await`ed
-        directly. `fail_silently=False` so a delivery failure raises here
-        (into `_deliver`'s own `try/except`, which logs and swallows it) --
-        rather than Django's own `EmailMessage.send(fail_silently=True)`
-        posture, which would swallow the error silently, one layer BELOW
-        where this class's own logging happens."""
-        django_mail.EmailMessage(
-            subject=message.subject,
-            body=message.body,
-            from_email=settings.EMAIL_FROM,
-            to=[message.to],
-        ).send(fail_silently=False)
 
 
 def get_email_sender() -> EmailSender:
@@ -712,7 +831,19 @@ class AuditAuthEventSink:
     function — no network/DB I/O, just a structured `logging` call (see
     that function's own docstring) — so this method calls it directly,
     with no `await`, despite `emit` itself being declared `async def` to
-    satisfy the `AuthEventSink` Protocol."""
+    satisfy the `AuthEventSink` Protocol.
+
+    **What `outcome="success"` means for `auth.email.verify_requested`/
+    `auth.password.reset_requested`** (emitted by `_core.py`, forwarded
+    here unchanged): it denotes that the request was accepted and delivery
+    was DISPATCHED to `DjangoEmailSender` — never that the email was
+    actually delivered. `DjangoEmailSender.send` is fire-and-forget by the
+    `EmailSender` Protocol's own contract (see that class's docstring), so
+    this sink is never in a position to know the real delivery outcome by
+    the time it emits. A genuine delivery failure IS still attempted and
+    logged — by `DjangoEmailSender._deliver_sync`, on its own pool thread,
+    at `_email_logger` `warning` level — just as a separate log line, not
+    as a different `outcome` on this audit event."""
 
     async def emit(self, action: str, *, actor: str, outcome: str, **extra: object) -> None:
         audit_event(action, actor=actor, resource="auth", outcome=outcome, **extra)
