@@ -1,6 +1,6 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07"
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07"
 last-verified: 2026-07-23
 provenance: manual
 sources:
@@ -15,6 +15,7 @@ sources:
   - https://www.django-rest-framework.org/community/release-notes/
   - https://drf-spectacular.readthedocs.io/
   - https://pypi.org/project/psycopg/
+  - https://pypi.org/project/django-cors-headers/
   - https://docs.djangoproject.com/en/5.2/releases/5.2/
   - https://nodejs.org/en/about/previous-releases
   - https://www.npmjs.com/package/pnpm?activeTab=versions
@@ -85,6 +86,7 @@ Re-verify against official release notes/registries before bumping any line — 
 | Django REST Framework | **3.17.x** | Current stable, tracks Django 5.2. |
 | drf-spectacular | **0.30.x** | OpenAPI 3 schema generation for DRF; current stable, keep in lockstep with DRF. |
 | psycopg | **3.3.x** (3.3.4), `[binary]` extra | Postgres driver for the Django track. Current stable (PyPI, verified for Stage 4 #27); Django 5.2's `django.db.backends.postgresql` engine auto-detects psycopg2 or psycopg (v3) and Django 5.2 prefers psycopg 3 — see Django 5.2 release notes' "Database backend API" note. The `[binary]` extra ships a self-contained wheel with no local libpq headers/C toolchain needed to install, matching this kit's "no surprise system deps" posture for `uv sync`. Added by Stage 4 Step 1 (#27), the first block on this track to need a real Postgres driver. |
+| django-cors-headers | **4.9.x** (4.9.0) | Current stable (PyPI, released Sep 18 2025 — verified via `pypi.org/pypi/django-cors-headers/json`, `info.version`). The Django-ecosystem convention for CORS; `core/security/cors_lockdown/django.py` (Stage 4 Step 3, #27) emits this package's settings from `CORSPolicy` but never imports it directly — the Django block itself installs it and puts `"corsheaders"` in `INSTALLED_APPS` + `corsheaders.middleware.CorsMiddleware` in `MIDDLEWARE`. Supports Django 4.2–6.0 per its own PyPI classifiers, comfortably covering this matrix's Django 5.2 LTS pin above. |
 
 ## Frontend / web
 | Dep | Pinned line | Why this line |

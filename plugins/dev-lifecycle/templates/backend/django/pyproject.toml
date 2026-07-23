@@ -9,6 +9,12 @@ dependencies = [
   "django==5.2.*",
   "djangorestframework==3.17.*",
   "drf-spectacular==0.30.*",
+  # cors-lockdown/django.py (core/security/cors_lockdown/) emits this
+  # package's settings from CORSPolicy but never imports it directly — the
+  # project itself installs it. Current stable (PyPI, verified for Stage 4
+  # Step 3 #27) — see references/compatibility-matrix.md's new
+  # django-cors-headers row.
+  "django-cors-headers==4.9.*",
   # core/contract/{errors,pagination,secret_store}.py (vendored) are Pydantic
   # v2 models/dataclasses — pinned to the same line
   # references/compatibility-matrix.md's Backend — Python row locks

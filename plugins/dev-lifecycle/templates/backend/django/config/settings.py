@@ -13,7 +13,11 @@ DRF's own exceptions onto `core.contract.errors.ErrorEnvelope`, and the
 `DEFAULT_PAGINATION_CLASS` (`core/pagination.py`) that emits `core.contract.
 pagination.Page`'s `{items, total, page, size, pages}` shape — Stage 4 Step 2
 (#27) — see this block's README, "Conformance", for the full wire-identity
-target these two seams complete."""
+target these two seams complete.
+
+Stage 4 Step 3 (#27): this module now also wires the security-composition
+MIDDLEWARE stack — see "Security composition" below for the full,
+load-bearing MIDDLEWARE order and its rationale."""
 
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ import os
 from pathlib import Path
 
 import dj_database_url
+
+from core.security.cors_lockdown import CORS_MIDDLEWARE_CLASSPATH, CORSPolicy, cors_settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -72,10 +78,93 @@ INSTALLED_APPS = [
     # OpenAPI 3 schema generation a later step wires; no DEFAULT_SCHEMA_CLASS
     # is set yet — see the REST_FRAMEWORK TODO below.
     "drf_spectacular",
+    # cors-lockdown's REQUIRED_INSTALLED_APP (core/security/cors_lockdown/
+    # django.py) — django-cors-headers' own app, needed for its CorsMiddleware
+    # (MIDDLEWARE, below) to function. Matrix-pinned: references/
+    # compatibility-matrix.md's "Backend — Django track", django-cors-headers row.
+    "corsheaders",
     "core",
 ]
 
+# ---------------------------------------------------------------------------
+# Security composition (Stage 4 Step 3, #27). Four of the six vendored
+# core/security/ components are wired here as MIDDLEWARE; the other two
+# (secret_store, input_validation) are library code composed at the point of
+# use, not middleware — see "Secrets" below for secret_store's composition
+# (core/contract/secret_store.py, already vendored in Step 1 — reused here,
+# not re-vendored, see "secret_store: one copy, not two" in README.md) and
+# core/security/input_validation/__init__.py's docstring for why
+# input_validation isn't wired as the DRF request boundary. `webhook_signature`
+# and `idempotency` (also in the component catalog) are NOT vendored here at
+# all -- payments-shaped concerns with no consumer yet; the Stage 11 payments
+# recipe vendors and wires them when there's an actual webhook endpoint to
+# protect (mirrors backend/fastapi's own "not vendored yet" posture for the
+# same two components).
+#
+# **MIDDLEWARE order is OUTERMOST -> INNERMOST, TOP-TO-BOTTOM** for Django
+# new-style middleware: `MIDDLEWARE[0]` wraps `MIDDLEWARE[1]` wraps ... wraps
+# the view, so the request phase runs top-to-bottom (MIDDLEWARE[0] sees the
+# request FIRST) and the response phase runs bottom-to-top (MIDDLEWARE[0]
+# sees the response LAST, giving it the final word). This is the OPPOSITE
+# mechanics of backend/fastapi's Starlette stack (that block's app.py docstring:
+# `add_middleware()` prepends then the runtime stack is built by iterating in
+# REVERSE, so the LAST `add_middleware()` call ends up outermost) — but the
+# same top-of-list/last-call = OUTERMOST semantic falls out both ways, so the
+# four components land in the SAME relative outermost-to-innermost order on
+# both tracks, with one Django-specific exception (CORS) explained below.
+#
+# 1. **corsheaders.middleware.CorsMiddleware (OUTERMOST here — a genuine
+#    divergence from backend/fastapi, where CORS is INNERMOST of the four).**
+#    django-cors-headers' own docs require CorsMiddleware to run "as early as
+#    possible" and specifically BEFORE `CommonMiddleware`
+#    (core/security/cors_lockdown/django.py's module docstring): Django's
+#    `CommonMiddleware` can issue a redirect (e.g. APPEND_SLASH) that returns
+#    a response WITHOUT ever calling further into the wrapped middleware
+#    chain — if CorsMiddleware were listed below (inside) CommonMiddleware,
+#    that redirect response would never reach CorsMiddleware's own
+#    response-phase header injection, silently breaking CORS on exactly the
+#    requests that get redirected. Starlette has no equivalent "a middleware
+#    can synchronously short-circuit before calling downstream" redirect
+#    concern baked into CommonMiddleware's own contract, which is why
+#    backend/fastapi's CORS sits innermost instead — a genuine Django-vs-
+#    Starlette difference, not an inconsistency between the two tracks.
+# 2. **security-headers.** Placed so it precedes (is outside) Django's own
+#    `SecurityMiddleware` — see core/security/security_headers/django.py's
+#    module docstring: Django's `SecurityMiddleware` already sets some of
+#    this same header set (nosniff/HSTS/Referrer-Policy) under its own
+#    SECURE_* settings; listing ours earlier in MIDDLEWARE means ours runs
+#    LAST in the response phase and gets the final, authoritative word —
+#    "component wins," backed up by this app's own Django SECURE_* settings
+#    staying off (see "Transport security headers" below) so the two never
+#    actually race in the first place.
+# 3. **request-id / audit-bind (core/security/audit_logging/middleware.py,
+#    NEW glue — not vendored, mirrors backend/fastapi's own audit-bind
+#    middleware for this track).** Binds a per-request id (inbound
+#    `X-Request-ID` if shape-valid, else a fresh `uuid4`) into audit.py's
+#    contextvar BEFORE rate-limiting runs, so a rate-limit denial's own audit
+#    trail (today: none — `rate_limiting.django.RateLimitMiddleware` doesn't
+#    call `audit_event()` itself; a future stage that adds one gets the id
+#    automatically) and every other downstream `audit_event()` call in this
+#    request already carries it, without threading it through every call
+#    site by hand.
+# 4. **rate-limiting (INNERMOST of the four).** Pre-auth (this app has no
+#    real authentication yet — Stage 5, #28 — so "pre-auth" and "for every
+#    request" are the same thing today), general per-client-IP ceiling. Runs
+#    inside request-id binding (so a 429 still carries the request id).
+#
+# Django's own `SecurityMiddleware`/`CommonMiddleware` are placed innermost
+# of all six, below (inside) this stack — CORS still precedes CommonMiddleware
+# per its own hard requirement (#1 above); security-headers still precedes
+# SecurityMiddleware per its own hard requirement (#2 above); neither Django
+# middleware has a documented ordering requirement relative to request-id/
+# rate-limiting, so they sit closest to the view.
+# ---------------------------------------------------------------------------
+
 MIDDLEWARE = [
+    CORS_MIDDLEWARE_CLASSPATH,  # "corsheaders.middleware.CorsMiddleware" — see note 1 above
+    "core.security.security_headers.django.SecurityHeadersMiddleware",  # note 2
+    "core.security.audit_logging.middleware.RequestIDMiddleware",  # note 3
+    "core.security.rate_limiting.django.RateLimitMiddleware",  # note 4
     "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
@@ -161,25 +250,94 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 # ---------------------------------------------------------------------------
-# Transport security headers — DELIBERATELY not set here (Stage 4 Step 2,
-# #27). HSTS (SECURE_HSTS_SECONDS), nosniff (SECURE_CONTENT_TYPE_NOSNIFF),
-# SSL-redirect (SECURE_SSL_REDIRECT), and referrer-policy
-# (SECURE_REFERRER_POLICY) are Django's own settings-driven equivalents of
-# what backend/fastapi's vendored `security-headers` component
-# (app/core/security/security_headers/) stamps onto every response via
-# middleware — see that component's README for the exact header set. This
-# block does not vendor/wire that (or an equivalent) component yet — Step 3
-# of this stage is where a security-headers component gets wired for the
-# Django track, the same way Stage 3's Step 3b wired it for FastAPI
-# (app/main.py's "Security composition" docstring). Setting Django's own
-# SECURE_* values here NOW, ahead of that, would double-stamp the same
-# headers from two uncoordinated sources once Step 3 lands its own
-# middleware/component — so they are deliberately left unset in this step.
-# A PRODUCTION MATERIALIZATION OF THIS BLOCK MUST WIRE THAT COMPONENT (or,
-# until it exists, set Django's own SECURE_* values itself) — shipping
-# without either leaves every response without HSTS/nosniff/frame-options/
-# referrer-policy protection. See README.md, "Conformance" / "Security".
+# Transport security headers — NOW WIRED (Stage 4 Step 3, #27; previously
+# deferred in Step 2). HSTS/nosniff/frame-options/referrer-policy/CSP/
+# Permissions-Policy are set on every response by
+# `core.security.security_headers.django.SecurityHeadersMiddleware`
+# (MIDDLEWARE, above) — the same component backend/fastapi vendors and wires
+# as ASGI middleware (that block's app/main.py "Security composition"
+# docstring). Django's OWN settings-driven equivalents
+# (SECURE_HSTS_SECONDS, SECURE_CONTENT_TYPE_NOSNIFF, SECURE_SSL_REDIRECT,
+# SECURE_REFERRER_POLICY) are DELIBERATELY left at their off/unset defaults
+# below — turning them on now would double-stamp the same headers from two
+# uncoordinated sources (Django's own `SecurityMiddleware` AND this
+# component's middleware), racing to set the same header with whichever
+# runs last in the response phase silently winning. This component's
+# middleware is placed BEFORE `django.middleware.security.SecurityMiddleware`
+# in MIDDLEWARE specifically so it is authoritative even if a future edit
+# reorders things — see core/security/security_headers/django.py's own
+# module docstring and this file's "Security composition" note above.
+SECURE_CONTENT_TYPE_NOSNIFF = False  # core.security.security_headers sets it instead
+SECURE_HSTS_SECONDS = 0  # core.security.security_headers sets it instead (when request.is_secure())
+SECURE_REFERRER_POLICY = None  # core.security.security_headers sets it instead
+# SECURE_SSL_REDIRECT is left at Django's own default (False) — an HTTP->HTTPS
+# redirect is a routing/proxy-layer concern (the TLS-terminating proxy/load
+# balancer a real deployment sits behind), not something security-headers
+# (which only sets response HEADERS, never redirects) claims either. See
+# security_headers/django.py's "Deployment note: HSTS behind a TLS-
+# terminating proxy" for the related SECURE_PROXY_SSL_HEADER prerequisite a
+# real deployment behind such a proxy needs for is_https detection to work
+# at all — not set here, since this block has no fixed proxy topology to
+# assume.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# CORS — Stage 4 Step 3 (#27). Deny-by-default: the comma-separated
+# `CORS_ALLOWED_ORIGINS` env var is empty unless a project sets it, and an
+# empty tuple means NO cross-origin request is ever allowed — see
+# `_cors_allowed_origins` below and core.security.cors_lockdown.CORSPolicy's
+# own construction-time guard (raises InsecureCORSPolicyError on an empty or
+# wildcard allowlist; a project that wants a public, unauthenticated,
+# any-origin API doesn't construct a CORSPolicy at all, matching
+# backend/fastapi's own "no CORSMiddleware at all" equivalent posture — see
+# that block's app/main.py for the parallel comment). NEVER allow-all
+# (`"*"`) combined with credentials — CORSPolicy's constructor makes that
+# configuration impossible to construct in the first place, not just
+# discouraged.
+# ---------------------------------------------------------------------------
+
+
+def _cors_allowed_origins() -> tuple[str, ...]:
+    raw = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+    return tuple(origin.strip() for origin in raw.split(",") if origin.strip())
+
+
+_cors_origins = _cors_allowed_origins()
+if _cors_origins:
+    globals().update(cors_settings(CORSPolicy(allow_origins=_cors_origins)))
+else:
+    # No CORS_ALLOWED_ORIGINS configured: leave django-cors-headers' own
+    # settings entirely unset. CorsMiddleware is still in MIDDLEWARE (it has
+    # to be, since Django's MIDDLEWARE is a fixed list, not conditionally
+    # built per-environment the way backend/fastapi's app.add_middleware()
+    # calls are) but with CORS_ALLOWED_ORIGINS unset, django-cors-headers'
+    # own default is an empty allowlist — no Access-Control-Allow-Origin
+    # header is ever sent, so a browser blocks every cross-origin JS request
+    # against this app regardless. Same practical deny-by-default outcome as
+    # backend/fastapi's "no CORSMiddleware at all when unconfigured" path,
+    # reached via CorsMiddleware's own empty-allowlist default instead of
+    # omitting the middleware (which Django's static MIDDLEWARE list can't
+    # do per-request/per-environment the way an ASGI factory function can).
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — Stage 4 Step 3 (#27). Read from env with the same defaults
+# core.security.rate_limiting.django.RateLimitMiddleware itself falls back to
+# when a setting is absent (capacity=60, refill_per_second=1.0,
+# trusted_hops=0) — set explicitly here so a project sees the actual
+# configured values in one place rather than relying on the component's own
+# internal fallback silently applying. `RATE_LIMIT_TRUSTED_HOPS` defaults to
+# 0 (ignore X-Forwarded-For, trust only the real TCP peer) -- a project
+# behind exactly one trusted edge proxy (e.g. a single ALB) sets this to 1,
+# per core/security/rate_limiting/_core.py's client_ip_key docstring; never
+# guessed, never higher than the real proxy count.
+# ---------------------------------------------------------------------------
+
+RATE_LIMIT_CAPACITY = int(os.environ.get("RATE_LIMIT_CAPACITY", "60"))
+RATE_LIMIT_REFILL_PER_SECOND = float(os.environ.get("RATE_LIMIT_REFILL_PER_SECOND", "1.0"))
+RATE_LIMIT_TRUSTED_HOPS = int(os.environ.get("RATE_LIMIT_TRUSTED_HOPS", "0"))
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +380,33 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "core.pagination.ContractPageNumberPagination",
     "PAGE_SIZE": 20,
 }
+
+
+# ---------------------------------------------------------------------------
+# Secrets — Stage 4 Step 3 (#27). secret_store: ONE copy, not two. This
+# block already vendored `secrets-loading/secret_store.py` verbatim in Step 1
+# (`core/contract/secret_store.py`, alongside errors.py/pagination.py -- see
+# "Vendored contract sources" in README.md) -- this step REUSES that copy
+# rather than vendoring a second one under core/security/. Decision: leave
+# it in `core/contract/` (not move it under core/security/secrets_loading/)
+# because it is already established there as one of Step 1's three vendored
+# contract sources, all sharing that directory's "keep in sync via the
+# weekly freshness audit" maintenance path; moving it now would split that
+# maintenance story across two locations for a file whose vendored content
+# is unaffected either way. `core.security` (this step's new subpackage) has
+# no `secrets_loading/` subpackage as a result -- see core/security/
+# __init__.py's own docstring for the same note.
+#
+# `jwt_signing_key` is the concrete secret_store composition example, same
+# seam backend/fastapi's app/core/config.py demonstrates: nothing in this
+# block consumes it yet (Stage 5, #28, wires real authentication) --
+# `required=False` and no invented default means this resolves to `None`
+# until a project sets `JWT_SIGNING_KEY`, and this line itself never logs or
+# raises with the resolved value (secret_store.get_secret's own "never log a
+# secret value" posture -- see core/contract/secret_store.py's module
+# docstring).
+# ---------------------------------------------------------------------------
+
+from core.contract.secret_store import get_secret as _get_secret  # noqa: E402  (after CORS/rate-limit env reads, matching this module's env-driven top-to-bottom layout)
+
+JWT_SIGNING_KEY: str | None = _get_secret("JWT_SIGNING_KEY", required=False)
