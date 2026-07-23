@@ -66,7 +66,7 @@ this) has been removed.
 - Build & deploy
 - Testing
 - Materialized-location paths
-- For later stages (13c/13d)
+- For later stages
 
 ## Composition contract
 
