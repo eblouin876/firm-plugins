@@ -718,8 +718,13 @@ class Flag(models.Model):
         related_name="reported_flags",
     )
     reason = models.TextField()
-    # Plain CharField, NOT a DB enum -- see class docstring.
-    status = models.CharField(max_length=16, default="open", db_default="open")
+    # Plain CharField, NOT a DB enum -- see class docstring. `db_index=True`
+    # (unlike `BlogPost.status`/`Comment.status`, which rely solely on
+    # their own `Meta.indexes` entry) -- byte-identical intent to
+    # `app/models/flag.py`'s individually-`index=True` `status` column on
+    # the FastAPI track, on top of the SAME composite `Meta.indexes` entry
+    # below (`flags_status_target_type_idx`) both tracks also carry.
+    status = models.CharField(max_length=16, default="open", db_default="open", db_index=True)
     # The ACTING ADMIN -- set once, at resolve/dismiss time. PROTECT, not
     # CASCADE/SET_NULL -- the SAME "don't silently cascade away an audit
     # trail" rationale `BlogPost.author`/`RefreshToken.user` document above
