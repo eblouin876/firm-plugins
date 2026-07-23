@@ -33,6 +33,7 @@ contracts over HTTP — is explicitly out of scope for this step**; see
 - App layout
 - The Item model
 - Conformance (Step 1 vs. later steps)
+- Security
 - Database & migrations
 - Testing
 - Judgment calls
@@ -198,6 +199,24 @@ route set (`GET/POST /items`, `GET/PATCH/DELETE /items/{id}`, `/health`,
 mapping DRF's own exception types onto `ErrorEnvelope`, and wires a custom
 pagination class emitting `{items, total, page, size, pages}` instead of
 DRF's own default `{count, next, previous, results}` shape.
+
+## Security
+
+**Transport security headers (HSTS, `X-Content-Type-Options: nosniff`,
+SSL-redirect, `Referrer-Policy`) are deferred, deliberately.** Django's own
+`SECURE_HSTS_SECONDS`/`SECURE_CONTENT_TYPE_NOSNIFF`/`SECURE_SSL_REDIRECT`/
+`SECURE_REFERRER_POLICY` settings are left unset in `config/settings.py` on
+purpose — that job belongs to the same `security-headers` component
+backend/fastapi vendors and wires as middleware (Stage 3 Step 3b,
+`app/core/security/security_headers/`), and Step 3 of this stage is where
+this Django track vendors/wires the equivalent. Setting Django's own
+`SECURE_*` values now, ahead of that, would double-stamp the same headers
+from two uncoordinated sources once Step 3 lands. **A production
+materialization of this block MUST wire that component** (or, until it
+exists here, set Django's own `SECURE_*` values itself) — shipping with
+neither leaves every response without HSTS/nosniff/frame-options/
+referrer-policy protection. See `config/settings.py`'s own comment block
+near `REST_FRAMEWORK` for the same note in code.
 
 ## Database & migrations
 

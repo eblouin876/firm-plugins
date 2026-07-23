@@ -160,12 +160,35 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 # ---------------------------------------------------------------------------
-# Django REST Framework — PLACEHOLDER as of this step (Stage 4 Step 1, #27).
-# JSONRenderer-only is locked in now; the custom EXCEPTION_HANDLER and
-# DEFAULT_PAGINATION_CLASS that make this app's wire responses match the
-# FastAPI block byte-for-byte are Step 2's job — see this block's README,
-# "Conformance", and error-envelope/errors.py + pagination/schema.py's own
-# module docstrings for the shapes they must reproduce.
+# Transport security headers — DELIBERATELY not set here (Stage 4 Step 2,
+# #27). HSTS (SECURE_HSTS_SECONDS), nosniff (SECURE_CONTENT_TYPE_NOSNIFF),
+# SSL-redirect (SECURE_SSL_REDIRECT), and referrer-policy
+# (SECURE_REFERRER_POLICY) are Django's own settings-driven equivalents of
+# what backend/fastapi's vendored `security-headers` component
+# (app/core/security/security_headers/) stamps onto every response via
+# middleware — see that component's README for the exact header set. This
+# block does not vendor/wire that (or an equivalent) component yet — Step 3
+# of this stage is where a security-headers component gets wired for the
+# Django track, the same way Stage 3's Step 3b wired it for FastAPI
+# (app/main.py's "Security composition" docstring). Setting Django's own
+# SECURE_* values here NOW, ahead of that, would double-stamp the same
+# headers from two uncoordinated sources once Step 3 lands its own
+# middleware/component — so they are deliberately left unset in this step.
+# A PRODUCTION MATERIALIZATION OF THIS BLOCK MUST WIRE THAT COMPONENT (or,
+# until it exists, set Django's own SECURE_* values itself) — shipping
+# without either leaves every response without HSTS/nosniff/frame-options/
+# referrer-policy protection. See README.md, "Conformance" / "Security".
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Django REST Framework — PLACEHOLDER as of this step (Stage 4 Step 2,
+# #27 routes/serializers commit). JSONRenderer-only is locked in now; the
+# custom EXCEPTION_HANDLER and DEFAULT_PAGINATION_CLASS that make this
+# app's wire responses match the FastAPI block byte-for-byte are this same
+# step's NEXT commit — see this block's README, "Conformance", and
+# error-envelope/errors.py + pagination/schema.py's own module docstrings
+# for the shapes they must reproduce.
 # ---------------------------------------------------------------------------
 
 REST_FRAMEWORK = {
@@ -178,7 +201,7 @@ REST_FRAMEWORK = {
     # app's error responses are wire-identical to the FastAPI block's — see
     # core/contract/errors.py's module docstring ("ONE error shape, not two").
     # "EXCEPTION_HANDLER": "core.exceptions.exception_handler",
-    # TODO(Stage 4 Step 2/3, #27): DRF's built-in PageNumberPagination emits
+    # TODO(Stage 4 Step 2, #27): DRF's built-in PageNumberPagination emits
     # {count, next, previous, results} — NOT this contract's {items, total,
     # page, size, pages} shape (core.contract.pagination.Page). Wire a custom
     # pagination class that emits the latter before enabling this.
