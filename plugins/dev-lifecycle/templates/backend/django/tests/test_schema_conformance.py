@@ -398,6 +398,21 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # this same stage's job, landed in a follow-up commit -- these eight
 # entries are removed (this set goes back to empty) once that lands with a
 # wire-shape that matches the frozen contract exactly.
+#
+# Stage 13b -> Stage 13d: backend/fastapi's Stage 13d implemented the
+# blog/CMS admin surface -- `GET`/`POST /admin/blog/posts`, `GET`/`PATCH`/
+# `DELETE /admin/blog/posts/{post_id}`, `POST /admin/blog/posts/{post_id}/
+# {publish,unpublish}`, `GET /admin/blog/comments`, `POST /admin/blog/
+# comments/{comment_id}/hide`, `DELETE /admin/blog/comments/{comment_id}`
+# (`app/api/routers/blog.py`) -- and extended the frozen contract with all
+# ten new operations. Stage 13d landed full Django parity for all ten ops
+# (`core/models.py`'s new `BlogPost`/`Comment`, `core/serializers.py`'s new
+# serializers, `core/views.py`'s new blog admin views, `core/urls.py`'s new
+# routes, `core/services/sanitize.py`'s byte-identical nh3 policy) with a
+# wire-shape that matches the frozen contract exactly -- proven by the
+# strict comparison above, which now includes every one of them. EMPTY, not
+# deleted -- same posture every prior stage's own comment (above) already
+# documents.
 _PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 

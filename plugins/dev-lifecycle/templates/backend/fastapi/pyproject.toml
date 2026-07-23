@@ -19,6 +19,12 @@ dependencies = [
   # pin rationale.
   "pyjwt==2.13.*",
   "argon2-cffi==25.1.*",
+  # Stage 13d: server-side HTML sanitization for the blog/CMS write-path
+  # (app/services/sanitize.py) -- Rust/ammonia-backed, ships wheels (no
+  # local Rust toolchain needed to install). See
+  # references/compatibility-matrix.md's Backend — Python row for the pin
+  # rationale.
+  "nh3==0.3.*",
 ]
 
 [dependency-groups]

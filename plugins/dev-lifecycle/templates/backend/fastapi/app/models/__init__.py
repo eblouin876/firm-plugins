@@ -13,10 +13,12 @@ about where callers get the class from."""
 
 from __future__ import annotations
 
+from app.models.blog_post import BlogPost  # noqa: F401
+from app.models.comment import Comment  # noqa: F401
 from app.models.item import Item  # noqa: F401
 from app.models.login_attempt import LoginAttempt  # noqa: F401
 from app.models.refresh_token import RefreshToken  # noqa: F401
 from app.models.single_use_token import SingleUseToken  # noqa: F401
 from app.models.user import User  # noqa: F401
 
-__all__ = ["Item", "LoginAttempt", "RefreshToken", "SingleUseToken", "User"]
+__all__ = ["BlogPost", "Comment", "Item", "LoginAttempt", "RefreshToken", "SingleUseToken", "User"]

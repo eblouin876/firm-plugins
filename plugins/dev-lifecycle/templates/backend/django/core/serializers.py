@@ -8,6 +8,8 @@ this module only owns the shape."""
 
 from __future__ import annotations
 
+import json
+
 from rest_framework import serializers
 
 from core.contract.errors import ErrorCode
@@ -295,3 +297,190 @@ class AdminRolesInSerializer(serializers.Serializer):
                 {field: "This field is not recognized." for field in sorted(unexpected)}
             )
         return attrs
+
+
+# ---------------------------------------------------------------------------
+# Stage 13d: blog/CMS -- matches `app/schemas/blog.py`'s `BlogPostSummaryOut`/
+# `BlogPostOut`/`BlogPostCreate`/`BlogPostUpdate`/`CommentOut` field-for-field.
+# ---------------------------------------------------------------------------
+
+_BLOG_POST_STATUS_CHOICES = ["draft", "published"]
+_COMMENT_STATUS_CHOICES = ["visible", "hidden", "pending"]
+
+# Matches app/schemas/blog.py's SLUG_PATTERN exactly -- the ONE regex both
+# backends validate a caller-supplied slug against.
+SLUG_PATTERN = r"^[a-z0-9-]+$"
+
+# Defense-in-depth size caps -- byte-identical intent and VALUE to
+# `app/schemas/blog.py`'s `_BODY_HTML_MAX_CHARS`/
+# `_BODY_JSON_MAX_SERIALIZED_CHARS` (see that module's own comment for the
+# full rationale: this write-path is already admin-gated and rate-limited,
+# so this is a generous backstop, not a tight editorial limit). Kept at the
+# SAME 1,000,000-character value on both tracks deliberately -- `body_html`'s
+# cap is `CharField(max_length=...)`, which drf-spectacular renders as a
+# `maxLength` JSON Schema keyword -- exactly the keyword pydantic's own
+# `Field(max_length=...)` renders on the FastAPI side -- so the two MUST
+# match numerically or `tests/test_schema_conformance.py`'s strict wire-shape
+# comparison fails on `maxLength` divergence.
+_BODY_HTML_MAX_CHARS = 1_000_000
+_BODY_JSON_MAX_SERIALIZED_CHARS = 1_000_000
+
+
+def _validate_body_json_size(value: dict) -> dict:
+    """Shared body for `BlogPostCreateSerializer`/`BlogPostUpdateSerializer`'s
+    `validate_body_json` -- byte-identical check to `app/schemas/blog.py`'s
+    `_check_body_json_size`: caps the SERIALIZED (`json.dumps`) size, not
+    Python object identity/depth, the same quantity the FastAPI-side
+    validator bounds. `DictField` has no `max_length` of its own the way
+    `CharField` does, so this is a `validate_<field>` method, not a
+    constructor kwarg -- deliberately NOT schema-visible (FastAPI's own
+    `field_validator` is likewise a runtime-only check with no
+    `Field(max_length=...)` counterpart on `body_json`, so neither side's
+    OpenAPI schema documents a `body_json` size constraint; only
+    `body_html`'s does, via `maxLength`) -- this keeps both tracks'
+    wire-schemas for `body_json` identical (no divergence to reconcile)
+    while still enforcing the SAME runtime cap on both."""
+    serialized_len = len(json.dumps(value))
+    if serialized_len > _BODY_JSON_MAX_SERIALIZED_CHARS:
+        raise serializers.ValidationError(
+            f"body_json is too large: serialized size {serialized_len} exceeds the "
+            f"{_BODY_JSON_MAX_SERIALIZED_CHARS}-character cap."
+        )
+    return value
+
+
+def _reject_unrecognized_fields(serializer: serializers.Serializer) -> None:
+    """Shared body for the `validate()` override every blog write
+    serializer below needs -- parity with `AdminRolesInSerializer.
+    validate()`'s own identical check (see that method's own docstring):
+    a plain DRF `Serializer`/`ModelSerializer` otherwise silently DROPS an
+    undeclared input key instead of rejecting it, unlike `app/schemas/
+    blog.py`'s `ConfigDict(extra="forbid")` Pydantic schemas."""
+    unexpected = set(serializer.initial_data) - set(serializer.fields)
+    if unexpected:
+        raise serializers.ValidationError(
+            {field: "This field is not recognized." for field in sorted(unexpected)}
+        )
+
+
+class BlogPostSummaryOutSerializer(serializers.Serializer):
+    """The LIST shape (`GET /admin/blog/posts`) -- matches `app/schemas/
+    blog.py`'s `BlogPostSummaryOut` exactly: deliberately NO body fields.
+    A plain `Serializer` constructed directly from a `core.models.
+    BlogPost` instance -- `author_id`/`post_id`-style fields below read
+    straight off Django's own auto-generated `<fk_name>_id` attribute
+    (`instance.author_id`), no explicit `source=` needed since the field
+    name already matches."""
+
+    id = serializers.UUIDField()
+    title = serializers.CharField()
+    slug = serializers.CharField()
+    status = serializers.ChoiceField(choices=_BLOG_POST_STATUS_CHOICES)
+    published_at = serializers.DateTimeField(allow_null=True)
+    author_id = serializers.UUIDField()
+    created_at = serializers.DateTimeField()
+
+
+class BlogPostOutSerializer(BlogPostSummaryOutSerializer):
+    """The single-post shape -- `BlogPostSummaryOutSerializer` plus both
+    body columns. `body_html` is always the sanitized value already
+    persisted (`core/services/sanitize.py`) -- this serializer never
+    re-runs or bypasses sanitization, only reads back what the write-path
+    already cleaned.
+
+    `body_json` uses `DictField()`, NOT the more generic `JSONField()` --
+    `app/schemas/blog.py`'s `dict[str, Any]` Pydantic type generates a
+    `{"type": "object"}` JSON Schema; `JSONField` (any JSON-serializable
+    value, including a bare string/number/array) has no fixed `type` to
+    declare and drf-spectacular emits an unconstrained `{}` for it, a wire
+    divergence from the frozen contract. `DictField` (an object whose keys
+    are strings — exactly what a ProseMirror doc's top level always is)
+    is both the semantically-correct match AND the schema-matching one."""
+
+    body_json = serializers.DictField()
+    body_html = serializers.CharField(allow_blank=True)
+
+
+class BlogPostCreateSerializer(serializers.Serializer):
+    """`POST /admin/blog/posts`'s request body -- matches `app/schemas/
+    blog.py`'s `BlogPostCreate`: `slug` OPTIONAL (server derives one from
+    `title` when omitted -- see `core/views.py`'s create view), `body_json`/
+    `body_html` both REQUIRED. `body_html` is RAW/UNTRUSTED input at this
+    layer -- the view sanitizes it before persisting, never this
+    serializer (same "the write-path sanitizes, not the schema" split
+    `BlogPostCreate`'s own docstring documents)."""
+
+    title = serializers.CharField(min_length=1, max_length=200)
+    slug = serializers.RegexField(
+        regex=SLUG_PATTERN, min_length=1, max_length=220, required=False, allow_null=True, default=None
+    )
+    body_json = serializers.DictField()
+    body_html = serializers.CharField(allow_blank=True, max_length=_BODY_HTML_MAX_CHARS)
+
+    def validate_body_json(self, value: dict) -> dict:
+        return _validate_body_json_size(value)
+
+    def validate(self, attrs: dict) -> dict:
+        _reject_unrecognized_fields(self)
+        return attrs
+
+
+class BlogPostUpdateSerializer(serializers.Serializer):
+    """`PATCH /admin/blog/posts/{post_id}`'s request body -- matches `app/
+    schemas/blog.py`'s `BlogPostUpdate`: every field optional (so a client
+    can PATCH a subset). `allow_null=True` on all four (matching the
+    frozen contract's own schema -- `BlogPostUpdate`'s Pydantic type is
+    genuinely `str | None`/`dict[str, Any] | None`, so its GENERATED
+    SCHEMA documents `nullable: true` even though its own
+    `_reject_explicit_null` model validator rejects an ACTUAL null at
+    runtime; see that validator's own docstring) -- `validate()` below
+    reproduces the identical runtime behavior: an explicit `null` for any
+    of these four NOT-NULL columns is rejected as a 422
+    `validation_failed`, the SAME wire outcome `app/schemas/blog.py`'s
+    validator produces, achieved here by checking `attrs` after DRF's own
+    per-field validation already let a `None` value through
+    (`allow_null=True` short-circuits `CharField`'s own `min_length`/etc.
+    checks for a `None` input, so this is the one place left to catch
+    it)."""
+
+    title = serializers.CharField(min_length=1, max_length=200, required=False, allow_null=True)
+    slug = serializers.RegexField(
+        regex=SLUG_PATTERN, min_length=1, max_length=220, required=False, allow_null=True
+    )
+    body_json = serializers.DictField(required=False, allow_null=True)
+    body_html = serializers.CharField(
+        allow_blank=True, required=False, allow_null=True, max_length=_BODY_HTML_MAX_CHARS
+    )
+
+    def validate_body_json(self, value: dict | None) -> dict | None:
+        # `None` here means "explicitly nulled" -- `validate()` below is
+        # what turns that into a 422 (see this class's own docstring), so
+        # there's nothing to size-check for a `None` value; pass it
+        # through unchanged. Byte-identical short-circuit to `app/schemas/
+        # blog.py`'s `BlogPostUpdate._check_body_json_size`.
+        if value is None:
+            return value
+        return _validate_body_json_size(value)
+
+    def validate(self, attrs: dict) -> dict:
+        _reject_unrecognized_fields(self)
+        offending = sorted(
+            field for field in ("title", "slug", "body_json", "body_html") if field in attrs and attrs[field] is None
+        )
+        if offending:
+            raise serializers.ValidationError(
+                {field: "This field may not be null." for field in offending}
+            )
+        return attrs
+
+
+class CommentOutSerializer(serializers.Serializer):
+    """Matches `app/schemas/blog.py`'s `CommentOut` exactly: `id`,
+    `post_id`, `author_id`, `body`, `status`, `created_at`."""
+
+    id = serializers.UUIDField()
+    post_id = serializers.UUIDField()
+    author_id = serializers.UUIDField(allow_null=True)
+    body = serializers.CharField(allow_blank=True)
+    status = serializers.ChoiceField(choices=_COMMENT_STATUS_CHOICES)
+    created_at = serializers.DateTimeField()

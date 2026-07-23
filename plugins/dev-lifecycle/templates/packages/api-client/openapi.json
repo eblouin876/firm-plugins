@@ -1434,6 +1434,879 @@
           }
         }
       }
+    },
+    "/admin/blog/posts": {
+      "get": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "List blog posts (admin)",
+        "description": "`?status=` filters to one exact `BlogPostStatus` (an unrecognized\nvalue 422s automatically, same as `app/api/routers/admin.py`'s own\n`?status=` on `GET /admin/users`). Deliberately the SUMMARY shape \u2014\nno `body_json`/`body_html` on a list response, see `app/schemas/\nblog.py`'s own module docstring.",
+        "operationId": "list_admin_blog_posts_admin_blog_posts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BlogPostStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_BlogPostSummaryOut_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Create blog post (admin)",
+        "description": "**THE stored-XSS write-path boundary, half 1 of 2** (the other is\n`update_admin_blog_post`, below). `payload.body_html` is caller-\nsupplied, UNTRUSTED HTML \u2014 `sanitize_blog_html()` runs on it BEFORE\n`AsyncRepository.create` ever persists a row; the value written to\n`BlogPost.body_html` is always the SANITIZED result, never\n`payload.body_html` itself.\n\nSlug resolution: an explicit `payload.slug` that's already taken is a\n409 `conflict` (the caller chose it, so a silent auto-rename would\nsurprise them); an OMITTED slug is derived from `payload.title`\n(`slugify`) and auto-disambiguated (`_unique_slug`) \u2014 never a 409 for\nthat case, see this module's own `_unique_slug` docstring.\n\nThe creating admin becomes the post's `author_id` \u2014 this stage has no\nseparate \"assign an author\" concept; `claims.sub` (the access token's\nown `sub` claim) is already a user id string, parsed straight to\n`uuid.UUID`.",
+        "operationId": "create_admin_blog_post_admin_blog_posts_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlogPostCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlogPostOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the resource's current state, or its slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/blog/posts/{post_id}": {
+      "get": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Get blog post (admin)",
+        "description": "Includes `body_json` (opaque, for the TipTap editor to reload \u2014\nNEVER rendered) and `body_html` (already sanitized at write time, see\nthis module's own docstring) \u2014 the single-post shape, admin-gated\nlike every route in this router.",
+        "operationId": "get_admin_blog_post_admin_blog_posts__post_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Post Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlogPostOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blog post not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Update blog post (admin)",
+        "description": "**THE stored-XSS write-path boundary, half 2 of 2.** Only\nexplicitly-set fields are applied (`model_dump(exclude_unset=True)`,\nthe `ItemUpdate`/`app/api/routers/items.py` convention) \u2014 an omitted\n`body_html` leaves the already-sanitized column untouched; a SUPPLIED\n`body_html` is RE-sanitized here (`sanitize_blog_html`) before the\nupdate, same as create \u2014 this is what \"re-sanitizes\" means in this\nstage's own test suite (`tests/test_blog.py`).\n\nAn explicitly-set `slug` that collides with a DIFFERENT post\n(`exclude_id=post_id`, so a post PATCHing its own unchanged slug back\nnever self-conflicts) is a 409, same posture as create's explicit-slug\ncase. `BlogPostUpdate`'s own `_reject_explicit_null` validator\n(`app/schemas/blog.py`) already rejects an explicit `null` for any of\nthese four NOT-NULL columns at the schema layer \u2014 this handler never\nhas to guess whether a value made it into `model_dump(exclude_unset=\nTrue)` because it was omitted or because it was nulled; only the\n\"omitted\" case is possible by the time this body runs.",
+        "operationId": "update_admin_blog_post_admin_blog_posts__post_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Post Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlogPostUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlogPostOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blog post not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the resource's current state, or its slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Delete blog post (admin)",
+        "description": "Soft-deletes via `AsyncRepository.delete()` (`post.mark_deleted()`\n\u2014 `BlogPost` composes `SoftDeleteMixin`, same as every other model in\nthis catalog), never a hard `DELETE`.",
+        "operationId": "delete_admin_blog_post_admin_blog_posts__post_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Post Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blog post not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/blog/posts/{post_id}/publish": {
+      "post": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Publish blog post (admin)",
+        "description": "Valid only from `status == \"draft\"` \u2014 an already-`published` post\nraises `ConflictError` (409, matching `app/api/routers/admin.py`'s own\nstrict-transition posture for `suspend`/`ban`/`reinstate`: idempotent\nre-publish is rejected, not silently no-op'd). Sets `status=\n\"published\"` and stamps `published_at=<now>`.",
+        "operationId": "publish_admin_blog_post_admin_blog_posts__post_id__publish_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Post Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlogPostOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blog post not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the resource's current state, or its slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/blog/posts/{post_id}/unpublish": {
+      "post": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Unpublish blog post (admin)",
+        "description": "Valid only from `status == \"published\"` \u2014 an already-`draft` post\nraises `ConflictError` (409). Reverts fully to draft: `status=\n\"draft\"` AND `published_at=None` \u2014 a re-publish later stamps a FRESH\n`published_at`, rather than this endpoint leaving a stale historical\ntimestamp on a post that's no longer live.",
+        "operationId": "unpublish_admin_blog_post_admin_blog_posts__post_id__unpublish_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Post Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlogPostOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blog post not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the resource's current state, or its slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/blog/comments": {
+      "get": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "List blog comments (admin)",
+        "description": "`?status=` filters to one exact `CommentStatus`; `?post_id=`\nfilters to one post's comments \u2014 both optional, composable.",
+        "operationId": "list_admin_blog_comments_admin_blog_comments_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CommentStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "post_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Post Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CommentOut_"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/blog/comments/{comment_id}/hide": {
+      "post": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Hide blog comment (admin)",
+        "description": "Valid from `status in {\"visible\", \"pending\"}` \u2014 an already-`hidden`\ncomment raises `ConflictError` (409, idempotent re-hide rejected, same\nstrict-transition posture as the post publish/unpublish pair above).\nThis is a lightweight moderation-ADJACENT action, NOT the Stage 13c\nFlag/Report surface (out of scope here) \u2014 it only flips `status`.",
+        "operationId": "hide_admin_blog_comment_admin_blog_comments__comment_id__hide_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "comment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Comment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Comment not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The action conflicts with the resource's current state, or its slug is already taken.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/blog/comments/{comment_id}": {
+      "delete": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Delete blog comment (admin)",
+        "description": "Soft-deletes via `AsyncRepository.delete()` \u2014 `Comment` composes\n`SoftDeleteMixin` too, never a hard `DELETE`.",
+        "operationId": "delete_admin_blog_comment_admin_blog_comments__comment_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "comment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Comment Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated, but the caller lacks the 'admin' role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Comment not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1496,6 +2369,296 @@
         ],
         "title": "AdminUserOut",
         "description": "The read shape every admin user-management endpoint returns.\nDeliberately NO `password_hash`, NO token fields \u2014 this is the ONE\nplace `app/models/user.py`'s `User` ORM instance is ever serialized for\nan admin caller, and leaking either would be a straightforward secret\nleak into an HTTP response (and, via `app/api/routers/admin.py`'s own\n`audit_event(...)` calls, never into an audit log either \u2014 see that\nrouter's module docstring). `from_attributes=True` lets\n`AdminUserOut.model_validate(user)` read straight off the ORM\ninstance's attributes, the same convention `app/schemas/item.py`'s\n`ItemOut` documents."
+      },
+      "BlogPostCreate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 220,
+                "minLength": 1,
+                "pattern": "^[a-z0-9-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "body_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Body Json"
+          },
+          "body_html": {
+            "type": "string",
+            "maxLength": 1000000,
+            "title": "Body Html"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "body_json",
+          "body_html"
+        ],
+        "title": "BlogPostCreate",
+        "description": "`POST /admin/blog/posts`'s request body. `slug` is OPTIONAL \u2014 when\nomitted, `app/api/routers/blog.py`'s `create_admin_blog_post` derives\none from `title` (slugify + auto-disambiguate on collision, NEVER a\n409 for the derived case \u2014 the caller didn't choose it). An\nEXPLICITLY supplied `slug` that collides with an existing post's slug\nis a 409 `conflict` instead (see that handler's own docstring) \u2014 this\nschema only enforces the wire SHAPE (`^[a-z0-9-]+$`, `Field(pattern=\n...)` below \u2014 an invalid shape is a 422, at the request boundary,\nbefore the handler's uniqueness check ever runs).\n\n`body_json`/`body_html` are both REQUIRED \u2014 a post is created with its\ninitial ProseMirror doc and HTML render already in hand (this stage\nbuilds no separate \"create an empty draft\" flow). `body_html` is\nRAW/UNTRUSTED input at this layer \u2014 `create_admin_blog_post` is what\nsanitizes it before persisting; this schema does not, and must not,\npre-sanitize (that would hide what the write-path itself is\nresponsible for, and this schema has no way to prove IT ran instead\nof some other, unaudited call site)."
+      },
+      "BlogPostOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BlogPostStatus"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Author Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "body_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Body Json"
+          },
+          "body_html": {
+            "type": "string",
+            "title": "Body Html"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "slug",
+          "status",
+          "published_at",
+          "author_id",
+          "created_at",
+          "body_json",
+          "body_html"
+        ],
+        "title": "BlogPostOut",
+        "description": "The single-post shape (`GET`/`POST`/`PATCH .../posts/{post_id}`,\n`.../publish`, `.../unpublish`) \u2014 `BlogPostSummaryOut` plus both body\ncolumns. `body_html` here is ALWAYS the sanitized value already\npersisted (`app/services/sanitize.py`) \u2014 this schema never re-runs or\nbypasses sanitization; it only reads back what the write-path already\ncleaned."
+      },
+      "BlogPostStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "published"
+        ],
+        "title": "BlogPostStatus"
+      },
+      "BlogPostSummaryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BlogPostStatus"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Author Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "slug",
+          "status",
+          "published_at",
+          "author_id",
+          "created_at"
+        ],
+        "title": "BlogPostSummaryOut",
+        "description": "The LIST shape (`GET /admin/blog/posts`) \u2014 deliberately NO body\nfields (`body_json`/`body_html`) at all, matching the plan's own\nendpoint contract table. `from_attributes=True` lets `BlogPostSummaryOut.\nmodel_validate(post)` read straight off the ORM instance, same\nconvention `app/schemas/admin.py`'s `AdminUserOut` documents."
+      },
+      "BlogPostUpdate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 220,
+                "minLength": 1,
+                "pattern": "^[a-z0-9-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "body_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Json"
+          },
+          "body_html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Html"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BlogPostUpdate",
+        "description": "`PATCH /admin/blog/posts/{post_id}`'s request body \u2014 every field\noptional, so a client can PATCH a subset; the route maps only\nexplicitly-set fields (`model_dump(exclude_unset=True)`) onto the\nexisting row, the same `ItemUpdate` convention (`app/schemas/item.py`).\n\nEvery one of these four columns is NOT NULL at the DB level (`app/\nmodels/blog_post.py`) \u2014 unlike `app/schemas/item.py`'s `ItemUpdate.\nname` (a documented, NOT mirrored, divergence \u2014 see `tests/\ntest_schema_conformance.py`'s `_KNOWN_DIVERGENCES` on the Django\ntrack), this schema does NOT leave an explicit `{\"title\": null}`\naccepted-then-crashing: `_reject_explicit_null` below rejects it as a\n422 at the schema layer itself, so `app/api/routers/blog.py`'s\n`update_admin_blog_post` never has to guess whether a `None` in\n`model_dump(exclude_unset=True)` means \"field omitted\" (impossible,\n`exclude_unset` already filters those out) or \"field explicitly\nnulled\" (now impossible too, rejected here)."
+      },
+      "CommentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "post_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Post Id"
+          },
+          "author_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Id"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CommentStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "post_id",
+          "author_id",
+          "body",
+          "status",
+          "created_at"
+        ],
+        "title": "CommentOut",
+        "description": "The shape every blog-comment admin endpoint returns\n(`GET /admin/blog/comments`, `POST .../hide`) \u2014 matches the plan's\ntable exactly: `id`, `post_id`, `author_id`, `body`, `status`,\n`created_at`."
+      },
+      "CommentStatus": {
+        "type": "string",
+        "enum": [
+          "visible",
+          "hidden",
+          "pending"
+        ],
+        "title": "CommentStatus"
       },
       "ErrorBody": {
         "additionalProperties": false,
@@ -1770,6 +2933,88 @@
           "pages"
         ],
         "title": "Page[AdminUserOut]"
+      },
+      "Page_BlogPostSummaryOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BlogPostSummaryOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size"
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "pages"
+        ],
+        "title": "Page[BlogPostSummaryOut]"
+      },
+      "Page_CommentOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CommentOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size"
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "pages"
+        ],
+        "title": "Page[CommentOut]"
       },
       "Page_ItemOut_": {
         "properties": {
