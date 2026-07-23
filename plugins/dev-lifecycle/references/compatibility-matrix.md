@@ -1,6 +1,6 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07"
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07; Stage 6 Frontend/web + Frontend testing rows for the Vite SPA / @repo/web-shared stack, 2026-07"
 last-verified: 2026-07-23
 provenance: manual
 sources:
@@ -34,6 +34,21 @@ sources:
   - https://www.npmjs.com/package/eslint
   - https://www.npmjs.com/package/typescript-eslint
   - https://www.npmjs.com/package/prettier
+  - https://www.npmjs.com/package/tailwindcss
+  - https://www.npmjs.com/package/@tailwindcss/vite
+  - https://www.npmjs.com/package/@headlessui/react
+  - https://www.npmjs.com/package/react-router
+  - https://www.npmjs.com/package/react-hook-form
+  - https://www.npmjs.com/package/zod
+  - https://www.npmjs.com/package/@hookform/resolvers
+  - https://www.npmjs.com/package/@vitejs/plugin-react
+  - https://www.npmjs.com/package/@types/react
+  - https://www.npmjs.com/package/@types/react-dom
+  - https://www.npmjs.com/package/@testing-library/react
+  - https://www.npmjs.com/package/@testing-library/user-event
+  - https://www.npmjs.com/package/@testing-library/jest-dom
+  - https://www.npmjs.com/package/jsdom
+  - https://www.npmjs.com/package/msw
   - https://pypi.org/project/bandit/
   - https://pypi.org/project/semgrep/
   - https://pypi.org/project/pip-audit/
@@ -56,6 +71,7 @@ sources:
 - Backend — Python
 - Backend — Django track
 - Frontend / web
+- Frontend testing
 - Client codegen
 - Mobile
 - Kit-wide lint & format tooling
@@ -99,6 +115,27 @@ Re-verify against official release notes/registries before bumping any line — 
 | React | **19.x** (19.2.x) | Current stable major; Actions/`use()` are the baseline idiom set. |
 | Vite | **8.x** (8.1.x) | Default bundler is now Rolldown (Rust) — faster cold start/HMR than Vite 7's Rollup default. |
 | Next.js (App Router) | **16.x** (16.2.x) | App Router is the only sensible default at this line (Pages Router is maintenance-mode); Turbopack is the default bundler for `dev` and `build`. |
+| Tailwind CSS | **4.x** (4.3.3) | Current v4 line; the CSS-first, zero-config-file engine (`@import "tailwindcss"`, no `tailwind.config.js` required). Paired with `@tailwindcss/vite` below rather than the PostCSS plugin for the Vite SPA. Cleared the workspace `minimumReleaseAge: 1440` window at pin time (published 2026-07-16). |
+| @tailwindcss/vite | **4.x** (4.3.3) | The first-party Vite plugin for Tailwind v4 — kept in lockstep with the `tailwindcss` core pin above (same 4.3.3 release train). This is the integration the Vite SPA block wires into `vite.config.ts`, not the legacy PostCSS path. |
+| @headlessui/react | **2.x** (2.2.10) | Unstyled, accessible UI primitives (menus, dialogs, listboxes) that pair with Tailwind utility classes — the house idiom for interactive components that need correct focus/ARIA behavior without a heavier component library. React 18/19 compatible. |
+| react-router | **7.x** (7.18.1) | Client-side routing for the Vite SPA. **Consumed only by the app block, never by `@repo/web-shared`** — the shared package's route guards are render-gate primitives (`children` vs `fallback`), deliberately router-agnostic so the same package imports cleanly into a Next.js client component (which uses its own router). The app supplies router redirects as the guard `fallback`. |
+| react-hook-form | **7.x** (7.82.0) | Form state + validation for the web stack. `@repo/web-shared`'s `useZodForm`/`applyEnvelopeToForm` are built on it; it's a **peer dependency** there (one RHF instance per consumer tree, like `react`/`@tanstack/react-query`). |
+| zod | **4.x** (4.4.3) | Schema validation, the resolver source for `useZodForm`. Current v4 line (v4 is a distinct major from v3 — different import surface). Peer dependency of `@repo/web-shared` alongside `@hookform/resolvers`. |
+| @hookform/resolvers | **5.x** (5.4.0) | Bridges `react-hook-form` to `zod` (`zodResolver`). Major 5.x is the line compatible with react-hook-form 7.x + zod 4.x. Peer dependency of `@repo/web-shared`. |
+| @vitejs/plugin-react | **6.x** (6.0.4) | The React plugin for Vite (Babel-based Fast Refresh + JSX). 6.x is the line compatible with the Vite **8.x** pin above. App-block dependency (wired in `vite.config.ts`); not needed by `@repo/web-shared`. Cleared the 1440 window at pin time (published 2026-07-22). |
+| @types/react | **19.x** (19.2.17) | React 19 type definitions, matched to the React 19.2.x pin above. Dev dependency wherever TSX is authored (the app block and `@repo/web-shared`). |
+| @types/react-dom | **19.x** (19.2.3) | React DOM 19 type definitions, kept in lockstep with `@types/react`. |
+
+## Frontend testing
+The web-stack test toolchain: component tests via Testing Library over the kit's already-pinned **vitest 4.1.x** (see "Kit-wide lint & format tooling"), a jsdom DOM, and MSW for network interception at the boundary (`references/testing/frontend-testing.md`). These are the deps `@repo/web-shared`'s test suite and the Vite SPA block's component tests install as `devDependencies`.
+
+| Dep | Pinned line | Why this line |
+| --- | --- | --- |
+| @testing-library/react | **16.x** (16.3.2) | React 18/19-compatible render/query API; the "test from the user's perspective" layer (`getByRole`/`findBy*`). Runs under vitest with the jsdom environment below. |
+| @testing-library/user-event | **14.x** (14.6.1) | Realistic user-interaction events (typing, clicking) layered on Testing Library — preferred over firing raw synthetic events. |
+| @testing-library/jest-dom | **6.x** (6.10.0) | Custom DOM matchers (`toBeInTheDocument`, `toHaveTextContent`), wired into vitest's `expect` via a setup file (`import "@testing-library/jest-dom/vitest"`). |
+| jsdom | **29.x** (29.1.1) | The DOM implementation vitest runs component tests against (`environment: "jsdom"`); provides `document`/`window`/`document.cookie` so the cookie-mode CSRF echo and React rendering work headlessly. |
+| msw | **2.x** (2.15.0) | Mock Service Worker — intercepts the api-client mutator's `fetch` at the network boundary (`setupServer` from `msw/node`) so tests exercise the real data-fetching path (login → `X-Auth-Mode` header, 401 → refresh → retry) rather than stubbing the client. v2 is the current major (distinct request-handler API from v1). |
 
 ## Client codegen
 | Dep | Pinned line | Why this line |
