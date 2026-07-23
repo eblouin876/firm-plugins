@@ -51,6 +51,13 @@ services:
         condition: service_healthy
 
   # --- Frontend (uncomment once a frontend block is scaffolded to apps/web/) --
+  # A project scaffolds exactly ONE frontend block into apps/web/ (they're
+  # mutually exclusive) — uncomment the variant matching whichever one you
+  # picked, not both. Both build from the SAME apps/web/Dockerfile path; only
+  # the port and the public API-base-URL env var name differ, per that
+  # block's own next.config.ts/vite.config.ts dev cross-origin cookie fix.
+  #
+  # Vite SPA (templates/frontend/vite-spa/) — port 5173, VITE_API_BASE_URL:
   # web:
   #   build:
   #     context: ./apps/web
@@ -60,6 +67,22 @@ services:
   #     VITE_API_BASE_URL: http://localhost:8000
   #   ports:
   #     - "5173:5173"
+  #   depends_on:
+  #     - api
+  #
+  # Next.js App Router (templates/frontend/nextjs/) — port 3000,
+  # NEXT_PUBLIC_API_BASE_URL. Next's Dockerfile has no separate `dev` stage
+  # (see that file); its dev loop runs via `just dev` (`next dev`) on the
+  # host instead, so this compose service targets the same build the
+  # Dockerfile ships in production — drop `target: dev` for this variant:
+  # web:
+  #   build:
+  #     context: ./apps/web
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+  #   ports:
+  #     - "3000:3000"
   #   depends_on:
   #     - api
 

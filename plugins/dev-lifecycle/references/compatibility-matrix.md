@@ -1,9 +1,10 @@
 <!--
 scope: cross-stack starter kit
-versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07; Stage 6 Frontend/web + Frontend testing rows for the Vite SPA / @repo/web-shared stack, 2026-07; Stage 8 Mobile expo-router/expo-secure-store/react-native-screens/react-native-safe-area-context rows, 2026-07"
+versions-covered: "Stage 0 kit-wide pin set, 2026-07; Stage 2 security-tooling pin set, 2026-07; Stage 4 psycopg row, 2026-07; Stage 4 Step 3 django-cors-headers row, 2026-07; Stage 4 Step 4 Containers rows now also cite backend/django, 2026-07; Stage 6 Frontend/web + Frontend testing rows for the Vite SPA / @repo/web-shared stack, 2026-07; Stage 8 Mobile expo-router/expo-secure-store/react-native-screens/react-native-safe-area-context rows, 2026-07; Stage 7 Next.js frontend @tailwindcss/postcss row (Frontend testing rows reused unchanged from Stage 6 — same vitest/Testing Library/jsdom/msw toolchain), 2026-07"
 last-verified: 2026-07-23
 provenance: manual
 sources:
+  - https://www.npmjs.com/package/vite
   - https://pypi.org/project/fastapi/
   - https://pypi.org/project/pydantic/
   - https://pypi.org/project/pydantic-settings/
@@ -39,6 +40,7 @@ sources:
   - https://www.npmjs.com/package/prettier
   - https://www.npmjs.com/package/tailwindcss
   - https://www.npmjs.com/package/@tailwindcss/vite
+  - https://www.npmjs.com/package/@tailwindcss/postcss
   - https://www.npmjs.com/package/@headlessui/react
   - https://www.npmjs.com/package/react-router
   - https://www.npmjs.com/package/react-hook-form
@@ -120,6 +122,7 @@ Re-verify against official release notes/registries before bumping any line — 
 | Next.js (App Router) | **16.x** (16.2.x) | App Router is the only sensible default at this line (Pages Router is maintenance-mode); Turbopack is the default bundler for `dev` and `build`. |
 | Tailwind CSS | **4.x** (4.3.3) | Current v4 line; the CSS-first, zero-config-file engine (`@import "tailwindcss"`, no `tailwind.config.js` required). Paired with `@tailwindcss/vite` below rather than the PostCSS plugin for the Vite SPA. Cleared the workspace `minimumReleaseAge: 1440` window at pin time (published 2026-07-16). |
 | @tailwindcss/vite | **4.x** (4.3.3) | The first-party Vite plugin for Tailwind v4 — kept in lockstep with the `tailwindcss` core pin above (same 4.3.3 release train). This is the integration the Vite SPA block wires into `vite.config.ts`, not the legacy PostCSS path. |
+| @tailwindcss/postcss | **4.x** (4.3.3) | The first-party **PostCSS** plugin for Tailwind v4 — kept in lockstep with the `tailwindcss` core pin above (same 4.3.3 release train), the counterpart to `@tailwindcss/vite` above for a consumer with no Vite build pipeline. Next.js exposes no Vite plugin hook (Turbopack owns its bundler pipeline), so the Next.js (App Router) block wires this into `postcss.config.mjs` instead — the integration path Tailwind's own docs recommend for Next.js. |
 | @headlessui/react | **2.x** (2.2.10) | Unstyled, accessible UI primitives (menus, dialogs, listboxes) that pair with Tailwind utility classes — the house idiom for interactive components that need correct focus/ARIA behavior without a heavier component library. React 18/19 compatible. |
 | react-router | **7.x** (7.18.1) | Client-side routing for the Vite SPA. **Consumed only by the app block, never by `@repo/web-shared`** — the shared package's route guards are render-gate primitives (`children` vs `fallback`), deliberately router-agnostic so the same package imports cleanly into a Next.js client component (which uses its own router). The app supplies router redirects as the guard `fallback`. |
 | react-hook-form | **7.x** (7.82.0) | Form state + validation for the web stack. `@repo/web-shared`'s `useZodForm`/`applyEnvelopeToForm` are built on it; it's a **peer dependency** there (one RHF instance per consumer tree, like `react`/`@tanstack/react-query`). |
@@ -130,7 +133,7 @@ Re-verify against official release notes/registries before bumping any line — 
 | @types/react-dom | **19.x** (19.2.3) | React DOM 19 type definitions, kept in lockstep with `@types/react`. |
 
 ## Frontend testing
-The web-stack test toolchain: component tests via Testing Library over the kit's already-pinned **vitest 4.1.x** (see "Kit-wide lint & format tooling"), a jsdom DOM, and MSW for network interception at the boundary (`references/testing/frontend-testing.md`). These are the deps `@repo/web-shared`'s test suite and the Vite SPA block's component tests install as `devDependencies`.
+The web-stack test toolchain: component tests via Testing Library over the kit's already-pinned **vitest 4.1.x** (see "Kit-wide lint & format tooling"), a jsdom DOM, and MSW for network interception at the boundary (`references/testing/frontend-testing.md`). These are the deps `@repo/web-shared`'s test suite, the Vite SPA block's component tests, and (Stage 7, unchanged versions — same toolchain, no new pins) the Next.js (App Router) block's component tests all install as `devDependencies`. The Next.js block additionally installs `vite` (**8.x**, 8.1.x — same line as the Vite SPA's own pin above) and `@vitejs/plugin-react` (**6.x**, 6.0.4 — see that row above) purely so its `vitest.config.ts` has a Vite instance + JSX transform to run tests under; Next's own `next build`/`next dev` never read either.
 
 | Dep | Pinned line | Why this line |
 | --- | --- | --- |

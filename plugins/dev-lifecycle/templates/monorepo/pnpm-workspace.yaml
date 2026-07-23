@@ -25,3 +25,13 @@ allowBuilds:
   # than an unresolved "ignored build" that fails every later `pnpm install`
   # (and thus every `pnpm run`) with ERR_PNPM_IGNORED_BUILDS.
   msw: false
+  # sharp (an optional dependency of `next`, Stage 7) ships a postinstall
+  # script that compiles/downloads its native libvips binary, used for
+  # next/image's optimization pipeline. Determined empirically during that
+  # block's verification: pnpm 11's build gate flagged ONLY this one native
+  # build for the nextjs app (Tailwind's @tailwindcss/oxide native binary
+  # installs via a prebuilt optionalDependency, no build script — it did not
+  # need a gate entry). Trusted and scoped to sharp only; a project that
+  # never scaffolds the Next.js frontend block simply never installs sharp,
+  # so this entry is a harmless no-op for the Vite-only case.
+  sharp: true

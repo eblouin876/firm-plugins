@@ -27,13 +27,23 @@
     // The Next.js TS plugin (editor-only: route-typing, `next/link` href
     // checks, etc.) — has no effect on `tsc --noEmit` itself.
     "plugins": [{ "name": "next" }],
+    // Ambient types the test suite relies on: vitest's globals (vitest.config.ts
+    // sets `globals: true`), jest-dom's matcher augmentation of vitest's
+    // `expect` (applied via vitest.setup.ts's import, picked up here because
+    // that file is in this program too — see `include` below), and node
+    // (msw/node). React/Next's own ambient types are pulled in via `import`
+    // and next-env.d.ts's triple-slash references respectively, not this
+    // list — same split @repo/web-shared's tsconfig.json makes.
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"],
     // Next owns the app bundle; tsc here is a pure typechecker (see
     // package.json's `typecheck`), so it never emits.
     "noEmit": true
   },
-  // App Router source only; next.config.ts is linted via the eslint config's
+  // App Router source, component source, and the test suite (`src/test/`,
+  // plus co-located `*.test.tsx` files under `app/`). next.config.ts and
+  // vitest.config.ts/vitest.setup.ts are linted via the eslint config's
   // `allowDefaultProject` rather than typechecked here, the same split the
   // Vite SPA uses for vite.config.ts.
-  "include": ["next-env.d.ts", "app", "components"],
+  "include": ["next-env.d.ts", "app", "components", "src"],
   "exclude": ["node_modules"]
 }

@@ -29,12 +29,12 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         // next.config.ts and postcss.config.mjs aren't under this app's
-        // tsconfig `include` (that's `app`/`components` only), so linting
-        // next.config.ts needs an explicit opt-in to a default
-        // (non-project) parser service — same pattern the Vite SPA uses for
-        // vite.config.ts.
+        // tsconfig `include` (that's `app`/`components`/`src` only), so
+        // linting them needs an explicit opt-in to a default (non-project)
+        // parser service — same pattern the Vite SPA uses for vite.config.ts,
+        // and @repo/web-shared uses for its vitest.config.ts/vitest.setup.ts.
         projectService: {
-          allowDefaultProject: ["next.config.ts"],
+          allowDefaultProject: ["next.config.ts", "vitest.config.ts", "vitest.setup.ts"],
         },
         tsconfigRootDir: import.meta.dirname,
       },

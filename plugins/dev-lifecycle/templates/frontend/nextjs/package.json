@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "//scripts": "Wires this app into the project-root justfile's standard targets (dev/build/lint/typecheck/test) — `pnpm -r --if-present` fans out to these. `dev`/`build`/`start` are Next's own CLI (Turbopack by default in Next 16); `typecheck` is a pure tsc pass (Next's build does its own internal type-checking too, but this keeps the workspace-standard target). `test` is a stub script — vitest itself + its config land with sub-agent D (see templates/frontend/vite-spa for the pattern this will mirror).",
+  "//scripts": "Wires this app into the project-root justfile's standard targets (dev/build/lint/typecheck/test) — `pnpm -r --if-present` fans out to these. `dev`/`build`/`start` are Next's own CLI (Turbopack by default in Next 16); `typecheck` is a pure tsc pass (Next's build does its own internal type-checking too, but this keeps the workspace-standard target). `test` runs vitest (jsdom + Testing Library + MSW, config in vitest.config.ts) — test-only, does not participate in `next build`/`next dev`. See templates/frontend/vite-spa for the pattern this mirrors.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -26,13 +26,21 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/jest-dom": "6.10.0",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
     "@types/node": "24.x",
     "@types/react": "19.2.x",
     "@types/react-dom": "19.2.x",
+    "@vitejs/plugin-react": "6.0.4",
     "eslint": "10.7.x",
+    "jsdom": "29.1.1",
+    "msw": "2.15.0",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.x",
-    "typescript-eslint": "8.65.x"
+    "typescript-eslint": "8.65.x",
+    "vite": "8.1.x",
+    "vitest": "4.1.x"
   },
   "engines": {
     "node": ">=24 <25"
