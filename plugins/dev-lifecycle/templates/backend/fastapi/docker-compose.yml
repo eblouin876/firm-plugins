@@ -36,6 +36,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Dev stage: live-reload. The Dockerfile's default (last) stage is the
+      # hardened `prod` image — the security-gate containers job builds that,
+      # not this one.
+      target: dev
     environment:
       # Dev-only credentials, matching the `db` service above — never
       # reused for a real environment. `asyncpg` driver per

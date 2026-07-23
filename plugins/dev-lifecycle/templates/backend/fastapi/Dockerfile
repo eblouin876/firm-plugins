@@ -1,14 +1,20 @@
-# Dev Dockerfile for this block (Stage 3 #26, Step 4). Boots the API for
-# LOCAL DEVELOPMENT via docker-compose.yml (this directory) — not a
-# hardened production image (no multi-arch build, no distroless final
-# stage, no image signing); those are devops/infrastructure block concerns
-# for whichever real deploy target a project picks (Stage 9+).
+# Multi-stage image for this block.
+#
+# - `dev`   — live-reload for `just dev` (docker-compose.yml sets
+#             `target: dev`, bind-mounts source, and overrides the command).
+# - `prod`  — the hardened production image, and the LAST/default stage: a
+#             `docker build` with no `--target` (the security-gate containers
+#             job, and the infra block's ECR image build) builds this stage,
+#             so what ships and what trivy scans is always the hardened one.
 #
 # Base image and uv version both per references/compatibility-matrix.md:
 # "Containers" (python:3.13-slim-bookworm) and the uv pin CI already uses
-# (0.11.31, "Security tooling" row) — one uv version across the whole kit,
-# not a separately-drifting Docker-only pin.
-FROM python:3.13-slim-bookworm
+# (0.11.31, "Security tooling" row) — one uv version across the whole kit.
+# No ARG/ENV ever carries a secret: secrets are injected at RUNTIME (the
+# infra block's ECS task `secrets`/`valueFrom`, or docker-compose env), never
+# baked into an image layer (references/security/secure-baseline.md).
+
+FROM python:3.13-slim-bookworm AS base
 
 # uv via its own official, pinned distroless image (COPY --from, no pip-
 # installing uv into the app's own venv) — the pattern
@@ -29,33 +35,41 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
 
-# `--no-dev`: this image boots the API (docker-compose's `api` service,
-# possibly running `alembic upgrade head` first) — it never runs the test
-# suite, so pytest/httpx/aiosqlite (the `dev` dependency-group in
-# pyproject.toml) have no reason to be inside it. No `uv.lock` is
-# committed to this repo (this block's own hermetic test suite pins via
-# `uv run --with <pkg>==<pin>` instead — see README.md's "Testing"
-# section) — `uv sync` here resolves and locks fresh inside THIS build
-# layer, reproducible for this build, not frozen across rebuilds. A
-# project that wants a byte-for-byte-frozen image commits its own
-# `uv.lock` (`uv lock` from this directory) and swaps this to
-# `uv sync --frozen --no-dev`.
+# `--no-dev`: this image boots the API — it never runs the test suite, so the
+# `dev` dependency-group (pytest/httpx/aiosqlite) has no reason to be inside
+# it. No `uv.lock` is committed here (this block's hermetic suite pins via
+# `uv run --with`); `uv sync` resolves and locks fresh in THIS build layer. A
+# project wanting a byte-for-byte-frozen image commits its own `uv.lock` and
+# swaps this to `uv sync --frozen --no-dev`.
 RUN uv sync --no-dev
 
-# Non-root: least privilege at runtime — an RCE in a dependency, or a
-# container escape, doesn't get root inside this container either. Matches
-# references/security/secure-baseline.md's "Least privilege" posture.
-RUN groupadd --system app \
-    && useradd --system --gid app --home-dir /app --no-create-home app \
+# Non-root (uid/gid 1000 — matches the infra block's ECS task def
+# `user = "1000:1000"`): least privilege at runtime, so an RCE in a dependency
+# or a container escape doesn't land as root. References/security/
+# secure-baseline.md's "Non-root containers".
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid 1000 --home-dir /app --no-create-home app \
     && chown -R app:app /app /opt/venv
 USER app
 
 EXPOSE 8000
 
-# `--reload` is deliberate: this is the DEV image (docker-compose.yml
-# bind-mounts `./app` and `./alembic` over the copied-in source at
-# runtime, so an edit on the host is picked up live). A production image
-# built from this same Dockerfile for a real deploy target drops
-# `--reload` and the compose bind mounts — out of scope for this dev seam
-# (Stage 9's devops/infrastructure block owns that image).
+# --- dev: live-reload (docker-compose sets target: dev) ---------------------
+FROM base AS dev
+
+# `--reload` for local development: docker-compose.yml bind-mounts `./app` and
+# `./alembic` over the copied-in source, so a host edit is picked up live.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# --- prod: hardened, default/final stage ------------------------------------
+FROM base AS prod
+
+# Liveness/readiness for orchestrators that honor a container HEALTHCHECK
+# (the infra block's ALB uses its own target-group check on /readyz instead).
+# stdlib only — python:3.13-slim-bookworm ships no curl/wget.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/readyz', timeout=3).status == 200 else 1)"]
+
+# NO `--reload` in production. Migrations run as a separate deploy step
+# (the infra block's deploy runbook), not baked into this CMD.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
