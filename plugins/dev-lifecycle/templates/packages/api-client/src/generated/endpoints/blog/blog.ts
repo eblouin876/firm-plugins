@@ -31,8 +31,11 @@ import type {
   ErrorEnvelope,
   ListAdminBlogCommentsAdminBlogCommentsGetParams,
   ListAdminBlogPostsAdminBlogPostsGetParams,
+  ListPublicBlogPostsBlogPostsGetParams,
   PageBlogPostSummaryOut,
-  PageCommentOut
+  PageCommentOut,
+  PagePublicBlogPostSummaryOut,
+  PublicBlogPostOut
 } from '../../models';
 
 import { customFetch } from '../../../mutator';
@@ -1277,3 +1280,268 @@ export const useDeleteAdminBlogCommentAdminBlogCommentsCommentIdDelete = <TError
       > => {
       return useMutation(getDeleteAdminBlogCommentAdminBlogCommentsCommentIdDeleteMutationOptions(options), queryClient);
     }
+    export type listPublicBlogPostsBlogPostsGetResponse200 = {
+  data: PagePublicBlogPostSummaryOut
+  status: 200
+}
+
+export type listPublicBlogPostsBlogPostsGetResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type listPublicBlogPostsBlogPostsGetResponseSuccess = (listPublicBlogPostsBlogPostsGetResponse200) & {
+  headers: Headers;
+};
+export type listPublicBlogPostsBlogPostsGetResponseError = (listPublicBlogPostsBlogPostsGetResponse422) & {
+  headers: Headers;
+};
+
+export type listPublicBlogPostsBlogPostsGetResponse = (listPublicBlogPostsBlogPostsGetResponseSuccess | listPublicBlogPostsBlogPostsGetResponseError)
+
+export const getListPublicBlogPostsBlogPostsGetUrl = (params?: ListPublicBlogPostsBlogPostsGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/blog/posts?${stringifiedParams}` : `/blog/posts`
+}
+
+/**
+ * Newest-first by `published_at` — NOT `AsyncRepository.list()`
+ * (which has no ordering hook of its own; see `app/core/db/repository.py`'s
+ * own docstring), so this builds the `select()` directly and hands it to
+ * `paginate_select()` (the same internal helper `AsyncRepository.list()`
+ * itself delegates to) rather than reusing that wrapper. `?page=`/`?size=`
+ * bounds are `PageParams`'s own (`app/core/db/schema.py`: `size` capped at
+ * 200) — no separate, looser cap for this public surface.
+ * @summary List blog posts (public)
+ */
+export const listPublicBlogPostsBlogPostsGet = async (params?: ListPublicBlogPostsBlogPostsGetParams, options?: RequestInit): Promise<listPublicBlogPostsBlogPostsGetResponse> => {
+
+  return customFetch<listPublicBlogPostsBlogPostsGetResponse>(getListPublicBlogPostsBlogPostsGetUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListPublicBlogPostsBlogPostsGetQueryKey = (params?: ListPublicBlogPostsBlogPostsGetParams,) => {
+    return [
+    `/blog/posts`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListPublicBlogPostsBlogPostsGetQueryOptions = <TData = Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError = ErrorEnvelope>(params?: ListPublicBlogPostsBlogPostsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListPublicBlogPostsBlogPostsGetQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>> = ({ signal }) => listPublicBlogPostsBlogPostsGet(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListPublicBlogPostsBlogPostsGetQueryResult = NonNullable<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>>
+export type ListPublicBlogPostsBlogPostsGetQueryError = ErrorEnvelope
+
+
+export function useListPublicBlogPostsBlogPostsGet<TData = Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError = ErrorEnvelope>(
+ params: undefined |  ListPublicBlogPostsBlogPostsGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>,
+          TError,
+          Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListPublicBlogPostsBlogPostsGet<TData = Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError = ErrorEnvelope>(
+ params?: ListPublicBlogPostsBlogPostsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>,
+          TError,
+          Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListPublicBlogPostsBlogPostsGet<TData = Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError = ErrorEnvelope>(
+ params?: ListPublicBlogPostsBlogPostsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List blog posts (public)
+ */
+
+export function useListPublicBlogPostsBlogPostsGet<TData = Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError = ErrorEnvelope>(
+ params?: ListPublicBlogPostsBlogPostsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPublicBlogPostsBlogPostsGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListPublicBlogPostsBlogPostsGetQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+export type getPublicBlogPostBlogPostsSlugGetResponse200 = {
+  data: PublicBlogPostOut
+  status: 200
+}
+
+export type getPublicBlogPostBlogPostsSlugGetResponse404 = {
+  data: ErrorEnvelope
+  status: 404
+}
+
+export type getPublicBlogPostBlogPostsSlugGetResponse422 = {
+  data: ErrorEnvelope
+  status: 422
+}
+
+export type getPublicBlogPostBlogPostsSlugGetResponseSuccess = (getPublicBlogPostBlogPostsSlugGetResponse200) & {
+  headers: Headers;
+};
+export type getPublicBlogPostBlogPostsSlugGetResponseError = (getPublicBlogPostBlogPostsSlugGetResponse404 | getPublicBlogPostBlogPostsSlugGetResponse422) & {
+  headers: Headers;
+};
+
+export type getPublicBlogPostBlogPostsSlugGetResponse = (getPublicBlogPostBlogPostsSlugGetResponseSuccess | getPublicBlogPostBlogPostsSlugGetResponseError)
+
+export const getGetPublicBlogPostBlogPostsSlugGetUrl = (slug: string,) => {
+
+
+
+
+  return `/blog/posts/${slug}`
+}
+
+/**
+ * A draft or soft-deleted post's slug 404s IDENTICALLY to an unknown
+ * slug — see this module's own docstring, "no draft-existence oracle".
+ * `slug` is a plain `str` path param (not further validated against
+ * `SLUG_PATTERN` here) — an invalid-shaped slug simply can never match
+ * any row's `slug` column, so it falls straight through to the same 404
+ * a well-shaped-but-unknown slug gets; a 422 here would itself leak one
+ * more bit of information (shape-valid vs shape-invalid) a public 404
+ * should not distinguish.
+ * @summary Get blog post (public)
+ */
+export const getPublicBlogPostBlogPostsSlugGet = async (slug: string, options?: RequestInit): Promise<getPublicBlogPostBlogPostsSlugGetResponse> => {
+
+  return customFetch<getPublicBlogPostBlogPostsSlugGetResponse>(getGetPublicBlogPostBlogPostsSlugGetUrl(slug),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetPublicBlogPostBlogPostsSlugGetQueryKey = (slug: string,) => {
+    return [
+    `/blog/posts/${slug}`
+    ] as const;
+    }
+
+
+export const getGetPublicBlogPostBlogPostsSlugGetQueryOptions = <TData = Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError = ErrorEnvelope>(slug: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPublicBlogPostBlogPostsSlugGetQueryKey(slug);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>> = ({ signal }) => getPublicBlogPostBlogPostsSlugGet(slug, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: slug !== null && slug !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetPublicBlogPostBlogPostsSlugGetQueryResult = NonNullable<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>>
+export type GetPublicBlogPostBlogPostsSlugGetQueryError = ErrorEnvelope
+
+
+export function useGetPublicBlogPostBlogPostsSlugGet<TData = Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError = ErrorEnvelope>(
+ slug: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>,
+          TError,
+          Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPublicBlogPostBlogPostsSlugGet<TData = Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError = ErrorEnvelope>(
+ slug: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>,
+          TError,
+          Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPublicBlogPostBlogPostsSlugGet<TData = Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError = ErrorEnvelope>(
+ slug: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get blog post (public)
+ */
+
+export function useGetPublicBlogPostBlogPostsSlugGet<TData = Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError = ErrorEnvelope>(
+ slug: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPublicBlogPostBlogPostsSlugGet>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetPublicBlogPostBlogPostsSlugGetQueryOptions(slug,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+

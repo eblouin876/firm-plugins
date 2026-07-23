@@ -189,6 +189,93 @@ class BlogPostUpdate(BaseModel):
         return self
 
 
+class PublicBlogPostSummaryOut(BaseModel):
+    """The PUBLIC list shape (`GET /blog/posts`, `app/api/routers/
+    blog_public.py`) — deliberately NOT `BlogPostSummaryOut` (the admin
+    list shape) reused/subclassed: this schema omits `status` entirely (a
+    public reader only ever sees published posts, so the field would be a
+    constant, content-free `"published"` on every row — and, more to the
+    point, echoing status back at all invites a future caller to build UI
+    branching on a value this surface has no business exposing, see this
+    stage's own security posture: "no internal status transitions") and
+    ADDS `excerpt` (below), which the admin shape has no need for. NO
+    `body_json`, NO `body_html` — matching the plan's own contract table
+    ("Summary = id, title, slug, excerpt-or-nothing, published_at,
+    author_id, created_at — NO body"). `author_id` only (never an email or
+    any other PII) — same posture `BlogPostSummaryOut` already documents,
+    just restated here since this schema doesn't inherit its docstring."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: uuid.UUID
+    title: str
+    slug: str
+    excerpt: str | None
+    published_at: datetime
+    author_id: uuid.UUID
+    created_at: datetime
+
+
+class PublicBlogPostOut(PublicBlogPostSummaryOut):
+    """The PUBLIC single-post shape (`GET /blog/posts/{slug}`) —
+    `PublicBlogPostSummaryOut` plus the ONE body field a public reader may
+    ever see: `body_html`, always the value `app/services/sanitize.py:
+    sanitize_blog_html()` already cleaned at write time (this schema
+    re-sanitizes nothing — see that module's own "only body_html is ever
+    rendered" render rule). **`body_json` is NEVER a field on this schema,
+    full stop** — it is the opaque ProseMirror editor source `BlogPostOut`
+    (the ADMIN single-post shape) carries for the authenticated editor to
+    reload, and rendering it publicly (e.g. via some future ProseMirror-
+    to-HTML path that bypasses the sanitizer) would reopen the exact
+    stored-XSS hole `sanitize_blog_html()` exists to close — see that
+    module's own docstring, "Any future public-facing blog render endpoint
+    MUST render `body_html` and MUST NOT render `body_json`.\""""
+
+    body_html: str
+
+
+_EXCERPT_MAX_CHARS = 200
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+_SPACE_BEFORE_PUNCTUATION_RE = re.compile(r"\s+([,.;:!?])")
+
+
+def derive_excerpt(body_html: str) -> str | None:
+    """Plain-text excerpt for `PublicBlogPostSummaryOut.excerpt` — derived
+    at READ time from the already-sanitized `body_html`, never stored as
+    its own column (this stage's contract table calls it "excerpt-or-
+    nothing", not a new writable field the admin surface has to grow a
+    concept of). Strips every HTML tag (a bare regex, not `nh3` — safe
+    here specifically because `body_html` is ALREADY `sanitize_blog_html()`
+    -cleaned by the time this runs, so there is no attacker-controlled
+    markup left to mis-parse; this function only ever produces plain JSON
+    string content, never re-embeds anything as HTML), collapses
+    whitespace, tidies the stray space a tag-boundary substitution can
+    leave before punctuation (`"world , "` -> `"world, "` — a tag removed
+    right before a comma/period/etc. that immediately followed inline
+    markup, e.g. `<strong>world</strong>,`), and truncates to
+    `_EXCERPT_MAX_CHARS` at the last whole word boundary (falling back to
+    a hard character cut only if the first `_EXCERPT_MAX_CHARS` characters
+    contain no space at all), appending a single `"…"` when truncated.
+    Returns `None` — never `""` — for a post whose body strips down to
+    nothing (an all-markup, no-text body): the "-or-nothing" half of
+    "excerpt-or-nothing".
+
+    Mirrored BYTE-IDENTICALLY in `core/serializers.py`'s `derive_excerpt`
+    on the Django track — a divergence between the two is a parity bug,
+    the same posture `slugify` (above) already documents for itself."""
+    text = _WHITESPACE_RE.sub(" ", _HTML_TAG_RE.sub(" ", body_html)).strip()
+    text = _SPACE_BEFORE_PUNCTUATION_RE.sub(r"\1", text)
+    if not text:
+        return None
+    if len(text) <= _EXCERPT_MAX_CHARS:
+        return text
+    truncated = text[:_EXCERPT_MAX_CHARS].rsplit(" ", 1)[0].rstrip()
+    if not truncated:
+        truncated = text[:_EXCERPT_MAX_CHARS].rstrip()
+    return truncated + "…"
+
+
 class CommentOut(BaseModel):
     """The shape every blog-comment admin endpoint returns
     (`GET /admin/blog/comments`, `POST .../hide`) — matches the plan's
