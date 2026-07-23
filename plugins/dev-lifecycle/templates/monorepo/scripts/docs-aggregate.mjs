@@ -19,7 +19,7 @@
  *   node scripts/docs-aggregate.mjs --root <dir> --readme <path>
  *     --root defaults to this script's parent directory (the project root
  *     when materialized at <project>/scripts/docs-aggregate.mjs); it is the
- *     directory expected to contain apps/ and packages/.
+ *     directory expected to contain apps/, packages/, and infra/.
  *     --readme defaults to <root>/README.md.
  *
  * Exit codes: 0 clean/success, 1 drift detected (--check only), 2 malformed
@@ -213,10 +213,10 @@ function parseFragment(filePath, raw) {
   return { id, file: filePath, sections };
 }
 
-/** Discover docs/fragment.md under apps/*\/docs/ and packages/*\/docs/, sorted by block id. */
+/** Discover docs/fragment.md under apps/*\/docs/, packages/*\/docs/, and infra/*\/docs/, sorted by block id. */
 function discoverFragments(root) {
   const found = [];
-  for (const group of ["apps", "packages"]) {
+  for (const group of ["apps", "packages", "infra"]) {
     const groupDir = path.join(root, group);
     let entries;
     try {

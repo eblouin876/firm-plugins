@@ -1,22 +1,19 @@
-# Dev Dockerfile for this block (Stage 4 #27, Step 4). Boots the API for
-# LOCAL DEVELOPMENT via docker-compose.yml (this directory) — not a
-# hardened production image (no multi-arch build, no distroless final
-# stage, no image signing); those are devops/infrastructure block concerns
-# for whichever real deploy target a project picks (Stage 9+). Mirrors
-# `backend/fastapi/Dockerfile`'s own posture line-for-line (same base
-# image, same uv-via-COPY-from pattern, same non-root policy) — see that
+# Multi-stage image for this block — mirrors `backend/fastapi/Dockerfile`'s
+# posture line-for-line (same base image, uv-via-COPY pattern, non-root uid
+# 1000, `dev` + hardened `prod` stages with `prod` last/default). See that
 # file's comments for the shared rationale not repeated here.
 #
-# Base image, uv version, and Postgres client tooling all per
-# references/compatibility-matrix.md's "Containers" row (`python:3.13-
-# slim-bookworm`, `ghcr.io/astral-sh/uv:0.11.31`) — the SAME pins
-# `backend/fastapi/Dockerfile` uses, now cited for both blocks in that
-# matrix row rather than re-pinned separately for this track.
-FROM python:3.13-slim-bookworm
+# - `dev`   — live-reload for `just dev` (docker-compose.yml sets `target: dev`).
+# - `prod`  — hardened, LAST/default stage: a `docker build` with no
+#             `--target` (security-gate containers job + the infra block's ECR
+#             image) builds this; no ARG/ENV secret ever, non-root, no --reload,
+#             HEALTHCHECK on readiness.
+#
+# Base image + uv version per references/compatibility-matrix.md "Containers"
+# (python:3.13-slim-bookworm, ghcr.io/astral-sh/uv:0.11.31).
 
-# uv via its own official, pinned distroless image (COPY --from, no pip-
-# installing uv into the app's own venv) — the pattern
-# https://docs.astral.sh/uv/guides/integration/docker/ documents.
+FROM python:3.13-slim-bookworm AS base
+
 COPY --from=ghcr.io/astral-sh/uv:0.11.31 /uv /uvx /usr/local/bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -33,41 +30,37 @@ COPY manage.py ./
 COPY config ./config
 COPY core ./core
 
-# `--no-dev`: this image boots the API (docker-compose's `api` service,
-# migrating then serving) — it never runs the test suite, so
-# pytest/pytest-django/model-bakery (the `dev` dependency-group in
-# pyproject.toml) have no reason to be inside it. No `uv.lock` is
-# committed to this repo (same posture as `backend/fastapi`'s own
-# Dockerfile — see that file's comment) — `uv sync` here resolves fresh
-# inside THIS build layer. A project that wants a byte-for-byte-frozen
-# image commits its own `uv.lock` (`uv lock` from this directory) and
-# swaps this to `uv sync --frozen --no-dev`.
+# `--no-dev`: boots the API, never runs the test suite. Same no-committed-lock
+# posture as backend/fastapi's Dockerfile.
 RUN uv sync --no-dev
 
-# Non-root: least privilege at runtime — an RCE in a dependency, or a
-# container escape, doesn't get root inside this container either. Matches
-# references/security/secure-baseline.md's "Least privilege" posture, and
-# `backend/fastapi/Dockerfile`'s identical policy for this track.
-RUN groupadd --system app \
-    && useradd --system --gid app --home-dir /app --no-create-home app \
+# Non-root (uid/gid 1000 — matches the infra block's ECS task def
+# `user = "1000:1000"`).
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid 1000 --home-dir /app --no-create-home app \
     && chown -R app:app /app /opt/venv
 USER app
 
 EXPOSE 8000
 
-# `gunicorn` (WSGI), not `uvicorn` — this block's `config.wsgi:application`
-# is the primary production entrypoint (`pyproject.toml`'s own comment: "
-# gunicorn is the conventional WSGI-path production server"); `config.asgi:
-# application` exists too (see that module) for a project that later adds
-# real async/websocket views, at which point this CMD swaps to `uvicorn
-# config.asgi:application --host 0.0.0.0 --port 8000 --reload`, mirroring
-# `backend/fastapi/Dockerfile`'s own uvicorn CMD exactly. `--reload` is
-# deliberate here too: this is the DEV image (docker-compose.yml
-# bind-mounts `./core`/`./config` over the copied-in source at runtime, so
-# an edit on the host is picked up live) — gunicorn's own `--reload` flag
-# (documented, dev-oriented) restarts workers on a source change the same
-# way uvicorn's does. A production image built from this same Dockerfile
-# for a real deploy target drops `--reload` and the compose bind mounts —
-# out of scope for this dev seam (Stage 9's devops/infrastructure block
-# owns that image).
+# --- dev: live-reload (docker-compose sets target: dev) ---------------------
+FROM base AS dev
+
+# gunicorn's own `--reload` (documented, dev-oriented) restarts workers on a
+# source change, the same way uvicorn's does; docker-compose bind-mounts
+# `./core`/`./config` over the copied-in source.
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--reload"]
+
+# --- prod: hardened, default/final stage ------------------------------------
+FROM base AS prod
+
+# stdlib-only container HEALTHCHECK on readiness (no curl/wget in the slim
+# image). The infra block's ALB uses its own target-group check.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/readyz', timeout=3).status == 200 else 1)"]
+
+# `gunicorn` (WSGI) is the production entrypoint; `config.asgi:application`
+# exists for a project that later adds async/websocket views (swap to
+# `uvicorn config.asgi:application`). NO `--reload`; migrations run as a
+# separate deploy step (the infra block's deploy runbook).
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]

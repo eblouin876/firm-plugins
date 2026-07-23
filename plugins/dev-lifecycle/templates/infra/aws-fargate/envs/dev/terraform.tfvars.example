@@ -1,0 +1,56 @@
+# Copy to terraform.tfvars (gitignored) and fill per environment. These
+# PLACEHOLDER values are also what `terraform plan -var-file=terraform.tfvars.example`
+# uses for offline, credential-free verification — no real account, no real
+# ARNs, no cloud calls (the provider's skip_* flags + variable-based
+# account_id keep plan offline).
+
+aws_region = "us-east-1"
+
+# 12-digit AWS account ID (placeholder — a real value goes in terraform.tfvars).
+account_id = "000000000000"
+
+project_name = "app"
+environment  = "dev"
+
+# --- Networking ---
+vpc_cidr = "10.0.0.0/16"
+az_count = 2
+
+# --- Application image ---
+app_image_tag  = "latest"
+container_port = 8000
+desired_count  = 2
+task_cpu       = 512
+task_memory    = 1024
+
+# Non-secret env vars for the app container (secrets are injected separately
+# via Secrets Manager valueFrom — never here).
+app_environment = {
+  ENVIRONMENT = "production"
+}
+
+health_check_path = "/readyz"
+
+# --- Database ---
+# 'postgresql+asyncpg' for the FastAPI backend block, 'postgresql' for Django.
+db_url_scheme        = "postgresql+asyncpg"
+db_name              = "app"
+db_username          = "app"
+db_instance_class    = "db.t4g.micro"
+db_allocated_storage = 20
+db_engine_version    = "18.4"
+
+# --- TLS certificates (placeholder ARNs for offline plan) ---
+# ALB cert must be in this region; CloudFront cert must be in us-east-1.
+alb_acm_certificate_arn        = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000"
+cloudfront_acm_certificate_arn = ""
+cloudfront_aliases             = []
+
+# --- CI / OIDC ---
+github_repo          = "your-org/your-repo"
+github_branch        = "main"
+create_oidc_provider = true
+
+tags = {
+  Owner = "platform"
+}

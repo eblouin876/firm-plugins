@@ -1,0 +1,67 @@
+# Root full-stack dev compose for a scaffolded monorepo: the backend API (built
+# from whichever backend block materialized into `apps/api/`, reusing THAT
+# block's own `Dockerfile`) plus a real Postgres, in one top-level file. This
+# is the whole-project counterpart to the per-block `apps/api/docker-compose.yml`
+# the `just dev` recipe boots — use it (`docker compose up --build`) when you
+# want the frontend and API side by side under one compose project.
+#
+# NOT a production manifest (throwaway DB password, no secrets management, no
+# replicas) — the infra block (templates/infra/aws-fargate/) owns real
+# deployment. Postgres pin per references/compatibility-matrix.md "Containers"
+# (postgres:18-bookworm). Frontend services are commented until a frontend
+# block is scaffolded into `apps/web/` — absent-safe: an unbuilt service left
+# commented can't redden `docker compose config` or a `docker compose up`.
+
+services:
+  db:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - monorepo-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+      # Dev stage (live-reload). The Dockerfile's default (last) stage is the
+      # hardened `prod` image that ships and that the security-gate containers
+      # job scans.
+      target: dev
+    environment:
+      # Dev-only credentials matching `db` above — never a real environment.
+      # FastAPI/asyncpg scheme shown; a Django `apps/api` uses
+      # `postgresql://app:app@db:5432/app` instead (no +asyncpg suffix). Real
+      # environments inject DATABASE_URL from Secrets Manager (the infra block).
+      DATABASE_URL: postgresql+asyncpg://app:app@db:5432/app
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # --- Frontend (uncomment once a frontend block is scaffolded to apps/web/) --
+  # web:
+  #   build:
+  #     context: ./apps/web
+  #     dockerfile: Dockerfile
+  #     target: dev
+  #   environment:
+  #     VITE_API_BASE_URL: http://localhost:8000
+  #   ports:
+  #     - "5173:5173"
+  #   depends_on:
+  #     - api
+
+volumes:
+  monorepo-db-data:

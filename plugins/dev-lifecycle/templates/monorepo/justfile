@@ -111,11 +111,21 @@ add-mobile:
     echo "Next: set EXPO_PUBLIC_API_BASE_URL in apps/mobile/.env (see .env.example),"
     echo "then run 'just docs-generate' to fold its doc fragment into the root README."
 
-# Deploy the project. Unwired until an infra/devops block is scaffolded in
-# (epic #22 Stage 9) — fails loudly rather than silently no-opping, so a
-# real missed deploy can't be mistaken for a no-op success.
-deploy:
-    @echo "deploy is not wired yet — see the infra block (epic #22 Stage 9)." >&2 && exit 1
+# Deploy the project to an environment (default: dev). Delegates to the
+# aws-fargate infra block's deploy script (OIDC assume -> ECR push ->
+# terraform apply -> static sync + CloudFront invalidation -> migrations ->
+# ECS force-new-deployment; see infra/aws-fargate/docs/fragment.md). Fails
+# loudly if the infra block hasn't been scaffolded in, so a real missed deploy
+# can't be mistaken for a no-op success.
+deploy env="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script="infra/aws-fargate/scripts/deploy.sh"
+    if [ ! -x "$script" ]; then
+        echo "deploy: $script not found or not executable — scaffold the infra/aws-fargate block first (epic #22 Stage 9)." >&2
+        exit 1
+    fi
+    "$script" "{{env}}"
 
 # Regenerate the root README from every block's co-located doc fragment
 # (docs/fragment.md under apps/*/ and packages/*/ — see

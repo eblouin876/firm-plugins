@@ -1,0 +1,15 @@
+# Terraform working files — never commit state or provider caches.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Real variable values (only terraform.tfvars.example is committed).
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
