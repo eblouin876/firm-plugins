@@ -3,8 +3,21 @@
 // module top level — so this package imports cleanly into a Vite SPA and a
 // Next.js client component alike (the guards are render-gate primitives the
 // app supplies router redirects to; see auth/guards).
-//
-// The barrel is filled as each leaf lands:
-//   - Step 4 (errors / query / jwt primitives)
-//   - Step 5 (auth provider + guards + form helpers)
-export {};
+
+// --- errors ---------------------------------------------------------------
+export { ApiError, isApiError } from "./errors/ApiError";
+export { unwrap } from "./errors/unwrap";
+export type { ApiResult } from "./errors/unwrap";
+export { errorCodeToMessage, getErrorCode, isErrorEnvelope } from "./errors/errorEnvelope";
+export { ApiErrorBoundary } from "./errors/ApiErrorBoundary";
+
+// --- query ----------------------------------------------------------------
+export { createQueryClient } from "./query/createQueryClient";
+export type { CreateQueryClientOptions } from "./query/createQueryClient";
+
+// --- jwt ------------------------------------------------------------------
+export { decodeAccessTokenClaims } from "./jwt/decodeAccessTokenClaims";
+export type { AccessTokenClaims } from "./jwt/decodeAccessTokenClaims";
+
+// --- auth (token getter for configureApiClient; provider/guards land in Step 5) ---
+export { getAccessToken } from "./auth/authBridge";
