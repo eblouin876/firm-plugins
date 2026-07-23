@@ -37,6 +37,16 @@ const CONTENT_TYPES = {
   ".txt": "text/plain; charset=utf-8",
 };
 
+// Baseline security response headers on every response. A full CSP is
+// deliberately left to the edge/CDN (see docs Deployment) since it must be
+// tuned to the app's own script/style/connect origins; these three are safe,
+// app-agnostic hardening that ship by default.
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "DENY",
+};
+
 const sendFile = (res, filePath, status = 200) => {
   const type = CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream";
   // Vite emits content-hashed asset filenames, so anything under /assets/ is
@@ -44,22 +54,31 @@ const sendFile = (res, filePath, status = 200) => {
   const cacheControl = filePath.includes(`${join("/assets")}/`)
     ? "public, max-age=31536000, immutable"
     : "no-cache";
-  res.writeHead(status, { "Content-Type": type, "Cache-Control": cacheControl });
+  res.writeHead(status, { "Content-Type": type, "Cache-Control": cacheControl, ...SECURITY_HEADERS });
   createReadStream(filePath).pipe(res);
 };
 
 const server = createServer((req, res) => {
   // Only GET/HEAD for a static host.
   if (req.method !== "GET" && req.method !== "HEAD") {
-    res.writeHead(405, { Allow: "GET, HEAD" }).end();
+    res.writeHead(405, { Allow: "GET, HEAD", ...SECURITY_HEADERS }).end();
     return;
   }
 
-  const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
+  } catch {
+    // Malformed percent-encoding (e.g. `/%`, `/%ZZ`) makes decodeURIComponent
+    // throw URIError SYNCHRONOUSLY here; unguarded that becomes an
+    // uncaughtException and exits the process — a trivial DoS. Reject as 400.
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS }).end("Bad request");
+    return;
+  }
   // Resolve within DIST and reject any traversal that escapes it.
   const candidate = normalize(join(DIST, urlPath));
   if (candidate !== DIST && !candidate.startsWith(DIST + "/")) {
-    res.writeHead(403).end();
+    res.writeHead(403, SECURITY_HEADERS).end();
     return;
   }
 
@@ -74,12 +93,12 @@ const server = createServer((req, res) => {
       // Not a real file: a request for an asset path that doesn't exist is a
       // genuine 404; anything else is a client-side route -> serve the SPA.
       if (extname(urlPath)) {
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS }).end("Not found");
         return;
       }
       sendFile(res, join(DIST, "index.html"));
     } catch {
-      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" }).end("Server error");
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS }).end("Server error");
     }
   })();
 });

@@ -64,6 +64,31 @@ describe("applyEnvelopeToForm", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("required");
   });
 
+  it("skips prototype-polluting field names without mutating Object.prototype", async () => {
+    const user = userEvent.setup();
+    const before = Object.keys(Object.prototype).length;
+    const apiError = new ApiError(422, {
+      error: {
+        code: "validation_failed",
+        message: "Validation failed",
+        details: [
+          { field: "__proto__", message: "polluted" },
+          { field: "a.constructor.prototype.x", message: "also polluted" },
+          { field: "email", message: "Email is already taken" },
+        ],
+      },
+    } as ErrorEnvelope);
+
+    render(<EnvForm source={apiError} />);
+    await user.click(screen.getByRole("button", { name: "apply" }));
+
+    // The one legitimate field still applies...
+    expect(await screen.findByRole("alert")).toHaveTextContent("Email is already taken");
+    // ...and no polluting segment reached Object.prototype.
+    expect(Object.keys(Object.prototype).length).toBe(before);
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
+  });
+
   it("returns false and sets nothing for a non-validation error", () => {
     const { result } = renderHook(() => useForm<{ email: string }>());
     const apiError = new ApiError(409, {

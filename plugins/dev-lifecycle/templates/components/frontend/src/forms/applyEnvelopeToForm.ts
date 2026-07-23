@@ -28,7 +28,16 @@ export const applyEnvelopeToForm = <TFieldValues extends FieldValues>(
   const details = envelope.error.details ?? [];
   let applied = false;
   for (const detail of details) {
-    const name = (detail.field ? detail.field : "root") as Path<TFieldValues>;
+    // `detail.field` comes from the (server-supplied) response body. Reject
+    // any prototype-polluting segment before using it as a react-hook-form
+    // set-path — cheap defense-in-depth for this shared package, in case a
+    // malicious/injected 422 carries a field like `__proto__` or
+    // `a.constructor.prototype.x`.
+    const rawField = detail.field ?? "";
+    if (rawField.split(".").some((seg) => seg === "__proto__" || seg === "constructor" || seg === "prototype")) {
+      continue;
+    }
+    const name = (rawField ? rawField : "root") as Path<TFieldValues>;
     setError(name, { type: "server", message: detail.message });
     applied = true;
   }
