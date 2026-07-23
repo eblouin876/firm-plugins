@@ -1,0 +1,16 @@
+# Build context is the MONOREPO ROOT (see Dockerfile), so the root
+# .dockerignore governs what Docker sends. This file mirrors those excludes for
+# BuildKit's per-Dockerfile ignore convention (apps/web/Dockerfile ->
+# apps/web/.dockerignore) and for a standalone `docker build apps/web` — its
+# patterns are written relative to the build context root.
+**/node_modules
+**/dist
+**/build
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+**/*.log
