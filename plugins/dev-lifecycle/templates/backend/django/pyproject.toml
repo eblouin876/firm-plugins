@@ -30,6 +30,15 @@ dependencies = [
   "psycopg[binary]==3.3.*",
   # DATABASE_URL parsing — config/settings.py's own module docstring.
   "dj-database-url==3.1.*",
+  # core/security/auth/{_core.py,django.py} (vendored from
+  # templates/components/security/auth/, Stage 5b #44) -- PyJWT for
+  # TokenService (HS256 access/refresh minting/verification) and
+  # argon2-cffi for PasswordService (Argon2id password hashing). Same
+  # pins backend/fastapi's Stage 5a (#41) auth wiring consumes -- see
+  # references/compatibility-matrix.md's Backend — Python row, PyJWT/
+  # argon2-cffi rows.
+  "pyjwt==2.13.*",
+  "argon2-cffi==25.1.*",
   # ASGI/WSGI servers this block's config/asgi.py + config/wsgi.py run
   # under, matching backend/fastapi's uvicorn pin where the ASGI path is
   # concerned; gunicorn is the conventional WSGI-path production server.

@@ -1,19 +1,40 @@
-"""DRF views — Stage 4 Step 2 (#27), the contract-emission layer. Mirrors
+"""DRF views — Stage 4 Step 2 (#27), the contract-emission layer, with the
+`/auth/*` views given real behavior in Stage 5b (#44). Mirrors
 `backend/fastapi`'s `app/api/routers/{items,health,auth}.py` handler-for-
 handler; see each view's own docstring for the specific behavior it
 reproduces and this block's README, "Conformance", for the wire-identity
 target these routes work toward.
 
-Wiring (Step 2 scope) stops at status codes + JSON bodies. Auth
-(`permission_classes`) is deliberately `AllowAny` everywhere below — Stage 5
-(#28) is what adds real authentication; every `AllowAny` here is an
-explicit, documented choice (matching `backend/fastapi`'s items/health
-routers having no `Depends(get_current_principal)` yet), never a bare
-omission (references/backend/drf.md's "Permissions & queryset scoping":
-"Never leave an endpoint AllowAny by omission")."""
+`items`/`health`/`readyz` wiring (Step 2 scope) stops at status codes +
+JSON bodies; their `permission_classes` stay `AllowAny` deliberately (Stage
+5, #28, only ever scoped to `/auth/*` -- see `README.md`'s own Stage 5
+scope note), matching `backend/fastapi`'s items/health routers having no
+`Depends(get_current_principal)` either, never a bare omission
+(references/backend/drf.md's "Permissions & queryset scoping": "Never
+leave an endpoint AllowAny by omission").
+
+The five `/auth/*` views below ARE the real behavior: each validates its
+request body via the matching serializer (DRF's own `is_valid(raise_
+exception=True)` -- a malformed body still 422s, mapped by `core.
+exceptions.exception_handler`'s `ValidationError` branch), builds a fresh
+`AuthService` via `core.security.auth.stores.build_auth_service()`, and
+bridges into that service's async methods with `asgiref.sync.
+async_to_sync(...)` -- every one of these views is an ordinary SYNC DRF
+`APIView` method (`def`, not `async def`), the same "sync view, async
+service, bridged at the call site" posture `stores.py`'s own module
+docstring documents. Every raised `_core.AuthError` (`InvalidCredentials`,
+`InvalidToken`, `TokenReused`, `EmailAlreadyExists`) is left UNCAUGHT here
+-- `core/exceptions.py`'s `exception_handler` maps the whole hierarchy onto
+`ErrorEnvelope`, mirroring `app/main.py`'s `_auth_error_handler` on the
+FastAPI track. No view below ever constructs an `ErrorEnvelope`/`AppError`
+itself, same posture `app/api/routers/auth.py`'s own module docstring
+documents for its FastAPI counterparts."""
 
 from __future__ import annotations
 
+import uuid
+
+from asgiref.sync import async_to_sync
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection
 from django.db.utils import Error as DjangoDBError
@@ -25,6 +46,8 @@ from rest_framework.views import APIView
 
 from core.contract.errors import NotFoundError
 from core.models import Item
+from core.security.auth import InvalidToken, resolve_principal
+from core.security.auth.stores import DjangoUserStore, build_auth_service
 from core.serializers import (
     ErrorEnvelopeSerializer,
     HealthStatusSerializer,
@@ -35,6 +58,7 @@ from core.serializers import (
     PrincipalOutSerializer,
     ReadinessStatusSerializer,
     RefreshRequestSerializer,
+    RegisterRequestSerializer,
     TokenResponseSerializer,
 )
 
@@ -49,18 +73,6 @@ from core.serializers import (
 # operationId parity (not just best-effort) with the frozen contract — see
 # README.md, "Conformance", and tests/test_schema_conformance.py for the
 # proof.
-
-# JUDGMENT CALL (mirrors app/api/routers/auth.py's own, identical call):
-# these 501s are a plain `{"detail": ...}` body, deliberately bypassing
-# core.contract.errors.ErrorEnvelope — `ErrorCode` is a LOCKED, versioned
-# enum with no `not_implemented` member, and adding one for a temporary
-# stub is exactly the kind of contract change that module's own docstring
-# says needs the same coordination as any other wire-shape edit. Returning
-# a plain `Response(...)` here (never raising) also means this never
-# touches `core.exceptions.exception_handler` at all — the bypass is
-# structural, not just a documented intent.
-_STUB_DETAIL = "Not implemented — lands in Stage 5 (#28)."
-
 
 @extend_schema_view(
     list=extend_schema(
@@ -254,20 +266,40 @@ class ReadinessCheckView(APIView):
         return Response(ReadinessStatusSerializer({"status": "ready"}).data)
 
 
-class LoginView(APIView):
-    """`POST /auth/login` — stub. Validates the request body against
-    `LoginRequestSerializer` (so a malformed body still 422s, matching
-    FastAPI validating `LoginRequest` before its own stub handler ever
-    runs) then unconditionally returns the plain 501 stub body — see this
-    module's `_STUB_DETAIL` docstring for why that bypasses
-    `ErrorEnvelope`.
+class RegisterView(APIView):
+    """`POST /auth/register` (Stage 5b, #44) — real handler, the DRF
+    counterpart to `app/api/routers/auth.py`'s `register`. Delegates
+    straight to `AuthService.register` — raises `EmailAlreadyExists` (->
+    409 `conflict`, via `core.exceptions.exception_handler`'s `AuthError`
+    branch) for a duplicate normalized email, uncaught here (see this
+    module's own docstring)."""
 
-    The `@extend_schema` `responses` below document the shape Stage 5
-    (#28) actually returns (`TokenResponseSerializer`, matching
-    `openapi.json`'s documented `200`) — NOT the current 501 stub body —
-    same "document the target contract now, implement the behavior later"
-    posture `TokenResponseSerializer`'s own docstring already establishes
-    (core/serializers.py)."""
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="register_auth_register_post",
+        tags=["auth"],
+        request=RegisterRequestSerializer,
+        responses={201: PrincipalOutSerializer, 409: ErrorEnvelopeSerializer, 422: ErrorEnvelopeSerializer},
+    )
+    def post(self, request):
+        serializer = RegisterRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        auth_service = build_auth_service()
+        user = async_to_sync(auth_service.register)(
+            serializer.validated_data["email"], serializer.validated_data["password"]
+        )
+        principal = PrincipalOutSerializer({"id": uuid.UUID(user.id), "email": user.email})
+        return Response(principal.data, status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    """`POST /auth/login` (Stage 5b, #44) — real handler. Delegates to
+    `AuthService.login` — raises `InvalidCredentials` (-> 401
+    `unauthenticated`) identically for an unknown email or a wrong
+    password (see that exception's own docstring on the deliberate
+    user-enumeration defense), uncaught here."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -276,16 +308,30 @@ class LoginView(APIView):
         operation_id="login_auth_login_post",
         tags=["auth"],
         request=LoginRequestSerializer,
-        responses={200: TokenResponseSerializer, 422: ErrorEnvelopeSerializer},
+        responses={200: TokenResponseSerializer, 401: ErrorEnvelopeSerializer, 422: ErrorEnvelopeSerializer},
     )
     def post(self, request):
         serializer = LoginRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return Response({"detail": _STUB_DETAIL}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        auth_service = build_auth_service()
+        pair = async_to_sync(auth_service.login)(
+            serializer.validated_data["email"], serializer.validated_data["password"]
+        )
+        tokens = TokenResponseSerializer({"access_token": pair.access, "refresh_token": pair.refresh})
+        return Response(tokens.data)
 
 
 class RefreshView(APIView):
-    """`POST /auth/refresh` — stub. See `LoginView`."""
+    """`POST /auth/refresh` (Stage 5b, #44) — real handler. Delegates to
+    `AuthService.refresh` — THE rotation-with-reuse-detection state
+    machine (see `_core.py`'s own module docstring and
+    `AuthService.refresh`'s docstring for the full state machine). Raises
+    `InvalidToken` or `TokenReused` (both -> 401 `unauthenticated`,
+    deliberately indistinguishable at the wire — see `TokenReused`'s own
+    docstring and `core/exceptions.py`'s FIX-B section), uncaught here. A
+    `TokenReused` raise has, as a side effect, ALREADY revoked the
+    token's entire family in the DB by the time this handler's caller
+    sees the 401."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -294,35 +340,87 @@ class RefreshView(APIView):
         operation_id="refresh_auth_refresh_post",
         tags=["auth"],
         request=RefreshRequestSerializer,
-        responses={200: TokenResponseSerializer, 422: ErrorEnvelopeSerializer},
+        responses={200: TokenResponseSerializer, 401: ErrorEnvelopeSerializer, 422: ErrorEnvelopeSerializer},
     )
     def post(self, request):
         serializer = RefreshRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return Response({"detail": _STUB_DETAIL}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        auth_service = build_auth_service()
+        pair = async_to_sync(auth_service.refresh)(serializer.validated_data["refresh_token"])
+        tokens = TokenResponseSerializer({"access_token": pair.access, "refresh_token": pair.refresh})
+        return Response(tokens.data)
+
+
+class LogoutView(APIView):
+    """`POST /auth/logout` (Stage 5b, #44) — real handler. Delegates to
+    `AuthService.logout` — best-effort and idempotent by design (see that
+    method's own docstring): an already-invalid, unknown, or
+    already-revoked refresh token still returns 204, never an error.
+    Revokes the entire token family, not just the presented token.
+    Deliberately given no error `responses=` entry beyond 422 (see
+    `app/api/routers/auth.py`'s identical, documented choice for its own
+    `logout` route) — it's 204 and idempotent by design, never raises an
+    error a client needs to handle."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="logout_auth_logout_post",
+        tags=["auth"],
+        request=RefreshRequestSerializer,
+        responses={204: None, 422: ErrorEnvelopeSerializer},
+    )
+    def post(self, request):
+        serializer = RefreshRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        auth_service = build_auth_service()
+        async_to_sync(auth_service.logout)(serializer.validated_data["refresh_token"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MeView(APIView):
-    """`GET /auth/me` — stub, the bearer-scheme seam. `permission_classes
-    = [AllowAny]` deliberately: mirrors backend/fastapi's
-    `get_current_principal` dependency, which unconditionally raises 501
-    (`auto_error=False` on its own `HTTPBearer` instance) rather than
-    gating behind a real auth check that doesn't exist yet — see that
-    dependency's own docstring ("fails closed with a 501, not yet a
-    401/403, because the check itself doesn't exist yet").
+    """`GET /auth/me` (Stage 5b, #44) — real handler, the bearer-scheme
+    seam. `permission_classes = [AllowAny]`/`authentication_classes = []`
+    stay unchanged from the Stage 4 stub — this view enforces
+    authentication itself, via `resolve_principal` below, rather than
+    through DRF's own `IsAuthenticated`/`authentication_classes` machinery
+    (which would reject a missing/malformed bearer with DRF's own 403/401
+    shape, bypassing this block's `ErrorEnvelope` — see
+    `core/security/auth/django.py`'s `resolve_principal` docstring: a
+    missing or malformed `Authorization` header raises `_core.InvalidToken`
+    directly, the identical exception a present-but-invalid token raises,
+    so both land on the SAME 401 `unauthenticated` envelope via
+    `core/exceptions.py`'s `AuthError` branch).
 
-    Stage 4 Step 4 (#27): the `HTTPBearer` security scheme is now
-    registered (`config/settings.py`'s `SPECTACULAR_SETTINGS
-    ["APPEND_COMPONENTS"]`) and this view opts into it via
-    `@extend_schema(auth=[{"HTTPBearer": []}])` below (drf-spectacular's
-    `auth` kwarg overrides `AutoSchema.get_auth()`, which is what actually
-    populates the operation's `security` key) — an exact match with
-    `openapi.json`'s own `security: [{"HTTPBearer": []}]` on this
-    operation. Still no real `authentication_classes` entry to
-    auto-derive it from (`permission_classes = [AllowAny]`/
-    `authentication_classes = []` are unchanged from Step 2) — this is a
-    documented, opted-in security requirement on an otherwise-open stub,
-    not a real enforcement gate; Stage 5 (#28) is what wires the latter."""
+    `resolve_principal` (async, bridged via `async_to_sync`) already
+    verified the bearer access token and resolved it to `AccessClaims`
+    before this method's body does anything else — a missing/malformed/
+    expired token never reaches the `DjangoUserStore` lookup below at all.
+
+    `AccessClaims` carries `sub` (the user id) and `roles`, but not
+    `email` — this handler does one direct `DjangoUserStore.get_by_id`
+    lookup to fill in `PrincipalOut.email`, independent of `AuthService`
+    (which has no "fetch a profile" method — see `_core.py`'s `UserStore`
+    Protocol; it's a storage seam for `AuthService`'s own register/login/
+    refresh flows, not a general user-lookup API this view reaches for) —
+    identical to `app/api/routers/auth.py`'s own `me` handler.
+
+    The user having been deleted BETWEEN minting the access token and this
+    request (a real, if narrow, race — access tokens are not individually
+    revocable) is treated as `InvalidToken` (401), matching
+    `AuthService.refresh`'s identical "row valid but the user it points to
+    is gone" handling — NOT a 404, since the token itself is what's no
+    longer trustworthy, not a missing resource the caller asked for by
+    id.
+
+    Stage 4 Step 4 (#27): the `HTTPBearer` security scheme is registered
+    (`config/settings.py`'s `SPECTACULAR_SETTINGS["APPEND_COMPONENTS"]`)
+    and this view opts into it via `@extend_schema(auth=[{"HTTPBearer":
+    []}])` below (drf-spectacular's `auth` kwarg overrides `AutoSchema.
+    get_auth()`, which is what actually populates the operation's
+    `security` key) — an exact match with `openapi.json`'s own `security:
+    [{"HTTPBearer": []}]` on this operation."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -330,8 +428,14 @@ class MeView(APIView):
     @extend_schema(
         operation_id="me_auth_me_get",
         tags=["auth"],
-        responses={200: PrincipalOutSerializer},
+        responses={200: PrincipalOutSerializer, 401: ErrorEnvelopeSerializer},
         auth=[{"HTTPBearer": []}],
     )
     def get(self, request):
-        return Response({"detail": _STUB_DETAIL}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        auth_service = build_auth_service()
+        claims = async_to_sync(resolve_principal)(request, auth_service)
+        user = async_to_sync(DjangoUserStore().get_by_id)(claims.sub)
+        if user is None:
+            raise InvalidToken("This token no longer maps to an active user.")
+        principal = PrincipalOutSerializer({"id": uuid.UUID(user.id), "email": user.email})
+        return Response(principal.data)

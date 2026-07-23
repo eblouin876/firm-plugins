@@ -102,13 +102,26 @@ class ReadinessStatusSerializer(serializers.Serializer):
     status = serializers.CharField()
 
 
+class RegisterRequestSerializer(serializers.Serializer):
+    """Stage 5b (#44) `POST /auth/register` request shape — matches
+    `openapi.json`'s `RegisterRequest` exactly: `email`/`password`, each
+    `min_length=1`, both required. Same strictness posture as
+    `LoginRequestSerializer` immediately below (a plain `Serializer`, not
+    `ModelSerializer` — this never round-trips straight to `core.models.
+    User`, `core.security.auth.stores.DjangoUserStore.create` owns that
+    mapping, including the Argon2id hash `AuthService.register` computes
+    from `password` before any DB write)."""
+
+    email = serializers.CharField(min_length=1)
+    password = serializers.CharField(min_length=1)
+
+
 class LoginRequestSerializer(serializers.Serializer):
-    """Stage 5 (#28) auth-stub request shape — matches `openapi.json`'s
-    `LoginRequest`. Defined now, like backend/fastapi's `app/schemas/
+    """`POST /auth/login` request shape — matches `openapi.json`'s
+    `LoginRequest`. Defined alongside backend/fastapi's `app/schemas/
     auth.py`, so the wire contract (and the `HTTPBearer` security scheme
-    a real OpenAPI schema view documents in a later step) is locked in
-    even though every `/auth/*` handler (`core/views.py`) is a plain 501
-    stub until Stage 5 implements it for real."""
+    a real OpenAPI schema view documents) is locked in identically on
+    both tracks."""
 
     email = serializers.CharField(min_length=1)
     password = serializers.CharField(min_length=1)

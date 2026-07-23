@@ -466,3 +466,22 @@ SPECTACULAR_SETTINGS = {
 from core.contract.secret_store import get_secret as _get_secret  # noqa: E402  (after CORS/rate-limit env reads, matching this module's env-driven top-to-bottom layout)
 
 JWT_SIGNING_KEY: str | None = _get_secret("JWT_SIGNING_KEY", required=False)
+
+# ---------------------------------------------------------------------------
+# Auth (Stage 5b, #44): the vendored auth component's TokenService/
+# AuthService, constructed in core/security/auth/stores.py:get_token_service()/
+# build_auth_service() from JWT_SIGNING_KEY above plus the three fields below
+# -- the Django-track counterpart to backend/fastapi's app/core/config.py
+# `jwt_issuer`/`jwt_access_ttl_seconds`/`jwt_refresh_ttl_seconds` fields (same
+# names, same defaults, same rationale -- see that module's own docstrings
+# for the full "why 900s / why 1_209_600s" reasoning this mirrors). Plain
+# env-driven module-level settings, matching every other value in this file,
+# rather than a pydantic Settings subclass -- this block has no such seam
+# (see settings/README.md's "a project SUBCLASSES AppSettings" pattern,
+# which is FastAPI-track-specific; this block reads os.environ directly
+# throughout, as established at the top of this file).
+# ---------------------------------------------------------------------------
+
+JWT_ISSUER: str = os.environ.get("JWT_ISSUER", "app")
+JWT_ACCESS_TTL_SECONDS: int = int(os.environ.get("JWT_ACCESS_TTL_SECONDS", "900"))
+JWT_REFRESH_TTL_SECONDS: int = int(os.environ.get("JWT_REFRESH_TTL_SECONDS", "1209600"))

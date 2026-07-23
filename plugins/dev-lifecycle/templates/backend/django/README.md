@@ -480,6 +480,87 @@ which backend track a materialized project actually has and calling the
 right export command — is flagged as a Stage 12 item (backend-agnostic
 client regeneration), not built here.
 
+### Conformance / Auth (Stage 5b, #44)
+
+**All five `/auth/*` operations now carry real behavior and are in the
+STRICT wire-surface comparison** — `tests/test_schema_conformance.py`'s
+`_PENDING_PARITY_OPS` (Stage 5a → Stage 5b's own tracking constant,
+carried over unchanged from the Step 4 section above) is now the empty
+set, kept declared (not deleted) as the documented seam a future
+in-flight-parity effort would reuse the same way. `test_wire_surface_is_
+identical_to_the_frozen_contract` passes with `POST /auth/register`, `POST
+/auth/login`, `POST /auth/refresh`, `POST /auth/logout`, and `GET
+/auth/me` all fully compared against `openapi.json` — **zero new
+`_KNOWN_DIVERGENCES` entries were needed**: every documented status code
+and request/response body shape matches byte-for-byte after the same
+honest normalization Step 4 already established (nullable-representation
+collapse, cosmetic-key stripping, validation-strictness-key stripping —
+see that section above; no auth-specific normalizer change was made).
+`test_operation_id_and_component_name_parity_report` confirms
+`operationId` parity is now FULL across all 12 documented operations
+(the 7 from Step 4 plus these 5), not just best-effort — `RegisterRequest`
+joins the "component names in both, exact match" list too (11 shared
+component names became 12).
+
+**Real handlers, thin wire-shape mapping only.** `core/views.py`'s
+`RegisterView`/`LoginView`/`RefreshView`/`LogoutView`/`MeView` each:
+validate the request body via the matching `core/serializers.py`
+serializer (`RegisterRequestSerializer`/`LoginRequestSerializer`/
+`RefreshRequestSerializer`), build a fresh `AuthService` via
+`core.security.auth.stores.build_auth_service()`, and bridge into that
+service's `async def` methods with `asgiref.sync.async_to_sync(...)` —
+every view stays an ordinary SYNC DRF `APIView` method, matching this
+block's locked "DRF dispatch is sync, the auth core is async, bridge at
+the call site" decision (`core/security/auth/stores.py`'s own module
+docstring). `MeView` enforces authentication itself via
+`core.security.auth.django.resolve_principal` (never DRF's own
+`IsAuthenticated`, which would 403 instead of 401 on a missing bearer) —
+`permission_classes = [AllowAny]`/`authentication_classes = []` stay as
+they were even for this real handler, deliberately.
+
+**The `AuthError` → `ErrorEnvelope` mapping (`core/exceptions.py`)**
+reproduces `backend/fastapi`'s Stage 5a FIX B exactly: an
+`isinstance(exc, AuthError)` branch, placed before the generic
+`APIException`/catch-all branches, looks up `core.security.auth.django.
+AUTH_ERROR_HTTP` and emits a SINGLE fixed `"Authentication failed."`
+message for the entire `unauthenticated` (401) bucket regardless of
+`str(exc)` — so `TokenReused` (whose own message names exactly what
+happened) is byte-indistinguishable, at the wire, from any other
+invalid-refresh-token failure. `conflict` (409)/`permission_denied` (403)
+keep echoing `str(exc)`. An unmapped `AuthError` subclass fails safe-
+closed to 401. `AuthNotConfiguredError` (a plain `RuntimeError`, an unset
+`JWT_SIGNING_KEY`) is confirmed NOT caught by this branch — it falls
+through to the generic catch-all, rendering `internal_error` at 500, never
+a misleading `unauthenticated`/401. `tests/test_exceptions.py` unit-tests
+this branch directly (every concrete `AuthError` subclass, including
+`InsufficientRole`, which has no dedicated route to exercise it via HTTP
+at all).
+
+**`tests/test_auth.py`** (18 tests, `@pytest.mark.django_db
+(transaction=True)` throughout — required for the same two reasons
+`tests/test_auth_stores.py`'s own docstring documents: genuine autocommit
+durability and avoiding async-ORM-under-rolled-back-`atomic()` flakiness)
+ports every scenario `backend/fastapi`'s own `tests/test_auth.py`
+exercises, over `rest_framework.test.APIClient` against the real routes:
+register → login → me; email normalization; duplicate register → 409;
+bad login → 401; refresh rotation; refresh-token reuse detected AND the
+WHOLE token family revoked (including the still-live rotated tip, not
+just the reused row); reuse vs. an ordinary invalid token byte-identical
+on the wire; soft-deleted user denied login/refresh; logout → 204 then
+refresh → 401; idempotent logout; `/auth/me` unauthenticated/garbage/
+refresh-token-as-bearer → 401; `JWT_SIGNING_KEY` unset (`django.test.
+override_settings`) fails closed to 500, never a misleading 401;
+`HTTPBearer` declared in the generated schema.
+
+**Real PostgreSQL 16 verification** (the sandbox's available cluster —
+same documented PostgreSQL-18.x-in-the-compatibility-matrix gap the
+"Database & migrations" section below already carries): see that
+section's own "Stage 5b" subsection for the full transcript — this is the
+`0002_user_refreshtoken` migration's first real-database run (Stage 5b's
+own migration-authoring commit only verified it against hermetic sqlite;
+Step 4's real-Postgres pass above predates the `users`/`refresh_tokens`
+tables existing at all).
+
 ## Security
 
 ### Security composition (Stage 4 Step 3, #27)
@@ -636,6 +717,102 @@ merely untested against a real one. Cluster stopped and the scratch
 role/database dropped afterward — no DB artifacts, `.venv`, or `uv.lock`
 committed (see this repo's root `.gitignore` plus this block's own, both
 already covering `.venv/`/`*.sqlite3`/`uv.lock`).
+
+**Stage 5b (#44): `core.0002_user_refreshtoken`'s first real-PostgreSQL
+run**, plus a full end-to-end auth transcript over HTTP — same posture as
+Step 4's own pass above, and mirroring `backend/fastapi`'s own
+`alembic/versions/0002_create_auth_tables.py` real-database verification
+(see that block's README). The sandbox's already-running PostgreSQL 16
+cluster (`pg_lsclusters` — no `pg_ctlcluster ... start`/Docker container
+needed this time, the cluster was already online) was used directly: a
+scratch role + same-named database, `manage.py migrate --no-input` under
+`DJANGO_SETTINGS_MODULE=config.settings` (the real-DB settings module),
+then a full `rest_framework.test.APIClient` round-trip against the REAL
+connection (`ALLOWED_HOSTS=testserver` set for the duration, since
+`config.settings`'s real posture has no default host allowlist the way
+`config.settings_test` doesn't need either).
+
+Schema verified column-for-column against `alembic/versions/
+0002_create_auth_tables.py`'s own Postgres-native result: `users.email`
+UNIQUE (`users_email_key`), `refresh_tokens.token_hash` UNIQUE
+(`refresh_tokens_token_hash_key`), `refresh_tokens.family_id` indexed
+(`refresh_tokens_family_id_814ef118`), `refresh_tokens.user_id` indexed +
+FK to `users(id)` (`refresh_tokens_user_id_b02a6331[_fk_users_id]`),
+`used_at` nullable, `revoked` NOT NULL boolean — an exact match, modulo
+the two already-documented nuances noted on the models themselves
+(app-level `PROTECT` vs. DB-level `RESTRICT`; no `created_at`/`updated_at`
+on `refresh_tokens`).
+
+**The transcript, driven directly against that real database (not sqlite
+standing in for it):**
+
+```
+register("pgproof@example.com", ...)        -> 201, email normalized (lowercase+stripped)
+login(...)                                    -> 200, access+refresh pair
+GET /auth/me  Bearer <access>                -> 200, email matches
+register(same email again)                   -> 409 conflict
+refresh(refresh_token)                        -> 200, ROTATED pair (both tokens differ)
+refresh(ORIGINAL refresh_token)  # REPLAY     -> 401 unauthenticated
+  -> response body contains none of "reuse"/"revoked"/"family"
+refresh(ROTATED refresh_token)   # the tip,
+  never itself reused                         -> 401 unauthenticated
+  -- proves WHOLE-FAMILY revocation, not just the replayed row
+-- direct DB read (bypassing the API): both refresh_tokens rows for
+   this user's one family have revoked = true in Postgres itself
+register("softdel@example.com", ...) -> 201; login -> 200 (tokens issued)
+User.mark_deleted() + save()                  # soft-delete via the ORM
+login("softdel@example.com", ...)             -> 401 unauthenticated
+refresh(pre-deletion refresh_token)           -> 401 unauthenticated
+  -- direct DB read: row still present via User.all_objects, invisible
+     via User.objects (the default, not-deleted-scoped manager)
+logout(rotated refresh_token)                 -> 204
+refresh(that same token, post-logout)         -> 401 unauthenticated
+```
+
+Every line passed against the real Postgres 16 connection. `manage.py
+spectacular --format openapi-json` was also re-run under `config.settings`
+(real-DB) and diffed byte-identical against the hermetic-settings export —
+confirming, same as Step 4's own pass, that schema generation genuinely
+never touches the database. The exported schema's five `/auth/*`
+operations were independently diffed against `packages/api-client/
+openapi.json` (operationId + documented status-code set) and matched
+exactly. Scratch role/database dropped afterward; the already-running
+cluster itself was left as it was found (not stopped, since it wasn't
+started by this verification pass) — no DB artifacts, `.venv`, or
+`uv.lock` committed.
+
+**Operational note — persistent connections and the async-ORM bridge.**
+The `/auth/*` views are synchronous DRF views that reach the async auth
+core via `async_to_sync(...)`, and `DjangoRefreshTokenStore` runs its
+writes through Django's async ORM (`.acreate()`/`.aupdate()`). Django runs
+that async ORM SQL in a thread-sensitive executor thread, which interacts
+awkwardly with `CONN_MAX_AGE > 0` persistent connections (the default here
+is `conn_max_age=600`): a persistent connection opened in the executor
+thread can outlive the request that opened it, surfacing as intermittent
+"connection already closed" errors under load. This does **not** affect
+auth *correctness* — the reuse-detection durability guarantee holds because
+every store write autocommits (no `ATOMIC_REQUESTS`, no wrapping
+`transaction.atomic()`), verified above. It is purely a connection-
+*lifecycle* concern for a real multi-worker deployment: set
+`CONN_HEALTH_CHECKS=True` (Django 4.1+, cheap liveness check on reuse) or
+`CONN_MAX_AGE=0` behind the bridge (best paired with an external pooler
+such as PgBouncer, the usual ECS/Fargate posture) if you observe it.
+Tracked for a kit-wide hardening pass rather than changed here.
+
+**Regenerating/diffing the exported schema against the frozen contract**
+(same command Step 4's own "Conformance" section documents, now covering
+the five `/auth/*` operations too):
+
+```sh
+manage.py spectacular --format openapi-json --file /tmp/django_schema.json
+diff <(jq -S . /tmp/django_schema.json) <(jq -S . packages/api-client/openapi.json)
+```
+
+(a raw `diff` will show plenty of expected, accepted divergences —
+`title`/cosmetic keys, component-naming choices, framework-level
+metadata — the same ones `tests/test_schema_conformance.py`'s normalizer
+already narrows away for the actual pass/fail gate; use that test, not a
+raw `diff`, as the source of truth for wire-contract identity.)
 
 ## Dev run (Docker)
 

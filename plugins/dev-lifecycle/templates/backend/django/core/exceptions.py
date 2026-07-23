@@ -7,6 +7,7 @@ backend/fastapi's `app/main.py` (`_validation_exception_handler` +
 | Exception                                        | ErrorCode           | status            |
 |---------------------------------------------------|---------------------|-------------------|
 | `core.contract.errors.AppError` subclass           | `exc.code`          | `exc.status_code` |
+| `core.security.auth.AuthError` subclass            | via `AUTH_ERROR_HTTP` (below) | via `AUTH_ERROR_HTTP` (below) |
 | `rest_framework.exceptions.ValidationError`        | `validation_failed` | 422               |
 | `NotFound` / `django.http.Http404`                 | `not_found`         | 404               |
 | `NotAuthenticated`                                 | `unauthenticated`   | 401               |
@@ -43,6 +44,54 @@ negotiation errors, not documented operations).
 this handler's `ValidationError` branch does (constructs the `Response`
 itself rather than reusing DRF's default handler's status).
 
+**`core.security.auth.AuthError` (Stage 5b, #44)**: the vendored auth
+component (`core/security/auth/_core.py`) raises its OWN exception
+hierarchy (`InvalidCredentials`, `InvalidToken`, `TokenReused`,
+`EmailAlreadyExists` — plus that same component's Django adapter's own
+`InsufficientRole`, `core/security/auth/django.py`, which also subclasses
+`AuthError`), never `core.contract.errors.AppError`. This handler's
+`isinstance(exc, AuthError)` branch — placed BEFORE the generic
+`APIException`/catch-all branches below, mirroring `app/main.py`'s
+`_auth_error_handler` registration order relative to FastAPI's own
+catch-alls — looks up `AUTH_ERROR_HTTP.get(type(exc), (401,
+"unauthenticated"))` (the vendored Django adapter's own exception ->
+`(status, ErrorCode string)` table, `core/security/auth/django.py`) to
+pick the status and code; an unmapped `AuthError` subclass (shouldn't
+happen — every concrete subclass this app can raise has an entry) still
+fails SAFELY CLOSED to 401 `unauthenticated`, never a 500 that would leak
+"this specific auth exception type wasn't wired up."
+
+FIX B (ported from backend/fastapi's Stage 5a whole-PR review, reproduced
+here rather than rediscovered): the `unauthenticated` (401) bucket emits
+a SINGLE fixed, generic client message ("Authentication failed."), never
+`str(exc)` — see `_core.py`'s `TokenReused` docstring: "A client must not
+be able to distinguish 'reuse was detected and your whole session was
+killed' from 'this token was simply invalid' from the wire response
+alone." `_core.py` raises genuinely distinct messages within that same
+401 bucket (`TokenReused("...reuse detected -- the token family has been
+revoked.")` vs `InvalidToken("Refresh token has expired.")`, etc.) —
+echoing `str(exc)` straight to the client would let an attacker replaying
+a stolen refresh token read "reuse detected" in the response body and
+confirm their token was burned, directly violating that contract. Every
+401 auth failure (bad password, unknown/expired/revoked/malformed token,
+AND reuse) is therefore byte-identical on the wire. `conflict` (409,
+`EmailAlreadyExists`) and `permission_denied` (403, `InsufficientRole`)
+keep echoing `str(exc)` — neither carries a secret the way a
+refresh-token failure's exact cause does. `str(exc)` remains available
+server-side (it's still on `exc`, and this branch does NOT log it —
+a client-caused 4xx auth failure is expected traffic, matching this
+handler's own "Logging" section below) for anyone who needs it; this only
+changes what reaches the CLIENT.
+
+**`AuthNotConfiguredError` is deliberately NOT caught here.** It is a
+plain `RuntimeError` subclass (`core/security/auth/stores.py`'s own
+docstring explains why: a SERVER misconfiguration — an unset
+`JWT_SIGNING_KEY` — not a client-caused auth failure), not part of the
+`AuthError` hierarchy this branch matches on. It therefore falls straight
+through every branch below to the final catch-all, rendering the generic
+`internal_error` envelope at 500 — fail-closed, without this handler ever
+having to special-case it.
+
 **NEVER leak `str(exc)`**: no branch — including the `APIException` branch
 and the final catch-all — ever includes the original exception's raw
 message/type in the client-facing envelope for a genuinely unhandled bug;
@@ -76,6 +125,7 @@ from rest_framework import exceptions as drf_exceptions
 from rest_framework.response import Response
 
 from core.contract.errors import AppError, ErrorBody, ErrorCode, ErrorDetail, ErrorEnvelope
+from core.security.auth import AUTH_ERROR_HTTP, AuthError
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +170,29 @@ def exception_handler(exc: Exception, context: dict) -> Response:
     if isinstance(exc, AppError):
         envelope = exc.to_envelope()
         return Response(envelope.model_dump(mode="json"), status=exc.status_code)
+
+    if isinstance(exc, AuthError):
+        # See this module's docstring, "core.security.auth.AuthError
+        # (Stage 5b, #44)", for the full rationale -- placed BEFORE the
+        # generic APIException/catch-all branches below (AuthError shares
+        # no base class with drf_exceptions.APIException, so ordering
+        # relative to THOSE specific branches doesn't change dispatch, but
+        # this mirrors app/main.py's own registration-order posture and
+        # keeps every AuthError subclass, present or future, handled here
+        # rather than falling through to a generic 500).
+        auth_status, auth_code_str = AUTH_ERROR_HTTP.get(type(exc), (401, ErrorCode.UNAUTHENTICATED.value))
+        auth_code = ErrorCode(auth_code_str)
+        # FIX B: a single, fixed, generic message for the whole
+        # `unauthenticated` (401) bucket -- NEVER str(exc) -- so reuse
+        # detection (TokenReused) is byte-indistinguishable from any other
+        # invalid-refresh-token failure at the wire. 409 (conflict) and 403
+        # (permission_denied) keep echoing str(exc): neither carries a
+        # secret the way a refresh-token failure's exact cause does.
+        auth_message = (
+            "Authentication failed." if auth_code is ErrorCode.UNAUTHENTICATED else (str(exc) or "Authentication failed.")
+        )
+        auth_envelope = ErrorEnvelope(error=ErrorBody(code=auth_code, message=auth_message, details=None))
+        return Response(auth_envelope.model_dump(mode="json"), status=auth_status)
 
     if isinstance(exc, drf_exceptions.ValidationError):
         envelope = ErrorEnvelope(
