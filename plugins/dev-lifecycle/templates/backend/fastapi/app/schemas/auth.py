@@ -9,7 +9,13 @@ STRICT (`extra="forbid"`) like every other wire schema in this catalog.
 before. `PrincipalOut` stays `{id, email}` only — no `roles` on the wire in
 this stage; RBAC's wire surface is Stage 5d, deliberately out of scope
 here even though `_core.AccessClaims`/`UserRecord` already carry roles
-internally."""
+internally.
+
+Stage 5c (#45) adds `VerifyEmailRequest`/`RequestPasswordResetRequest`/
+`ResetPasswordRequest` for the three new account-lifecycle endpoints —
+`POST /auth/verify-email`, `POST /auth/request-password-reset`, `POST
+/auth/reset-password` (`app/api/routers/auth.py`), against the vendored
+`AccountService`."""
 
 from __future__ import annotations
 
@@ -60,3 +66,34 @@ class PrincipalOut(BaseModel):
 
     id: uuid.UUID
     email: str
+
+
+# --- Account lifecycle (Stage 5c, #45): verify-email / request-password-reset
+# / reset-password wire shapes. Same STRICT (`extra="forbid"`) posture as
+# every schema above -- the raw single-use token these carry is opaque to
+# this layer (`_core.SingleUseTokenService.consume` does the only real
+# validation of it; a `min_length=1` here just rejects an empty string
+# before it ever reaches that layer). -----------------------------------
+
+
+class VerifyEmailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1)
+
+
+class RequestPasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=1)
+
+
+class ResetPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1)
+    # Matches RegisterRequest.password's own policy above (min_length=1 --
+    # no further complexity policy enforced at this layer; see that
+    # field's own comment on why: real strength requirements are a
+    # separate, not-yet-built concern, not something this stage invents).
+    new_password: str = Field(min_length=1)
