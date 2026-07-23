@@ -432,16 +432,13 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # (`app/api/routers/blog_public.py`) -- and extended the frozen contract
 # with these two new operations. Django parity (`core/serializers.py`'s
 # `PublicBlogPostSummaryOutSerializer`/`PublicBlogPostOutSerializer`/
-# `derive_excerpt`, `core/views.py`'s new public blog views, `core/
-# urls.py`'s new routes) lands in the SAME change -- these two entries are
-# a QUARANTINE placeholder only for the brief window between this commit
-# (FastAPI side) and the Django-parity commit that follows it in the same
-# PR; removed (this set goes back to empty) once that lands with a
-# wire-shape that matches the frozen contract exactly.
-_PENDING_PARITY_OPS: set[tuple[str, str]] = {
-    ("/blog/posts", "get"),
-    ("/blog/posts/{param}", "get"),
-}
+# `derive_excerpt`, `core/views.py`'s new `PublicBlogPostListView`/
+# `PublicBlogPostDetailView`, `core/urls.py`'s new routes) landed in a
+# follow-up commit in the same PR with a wire-shape that matches the
+# frozen contract exactly -- proven by the strict comparison above, which
+# now includes both. EMPTY, not deleted -- same posture every prior
+# stage's own comment (above) already documents.
+_PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 
 def test_wire_surface_is_identical_to_the_frozen_contract() -> None:
