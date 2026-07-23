@@ -1,0 +1,41 @@
+{
+  "name": "mobile",
+  "version": "0.0.0",
+  "private": true,
+  "//main": "Expo Router boots from its own entry rather than an App.tsx — do not change.",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "dev": "expo start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "//build": "`expo export` bundles the JS for all platforms (no native toolchain); the hermetic JS proof is typecheck + lint + test — see README's verification boundary.",
+    "build": "expo export"
+  },
+  "//dependencies": "Expo-SDK-governed versions resolved via `npx expo install` from Expo SDK 57 (expo@57.0.7 bundledNativeModules.json) — see references/compatibility-matrix.md. Do not hand-bump off the SDK; upgrade the SDK and run `npx expo install --fix`.",
+  "dependencies": {
+    "@repo/api-client": "workspace:*",
+    "@tanstack/react-query": "5.101.3",
+    "expo": "~57.0.7",
+    "expo-constants": "~57.0.6",
+    "expo-linking": "~57.0.3",
+    "expo-router": "~57.0.7",
+    "expo-secure-store": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.0",
+    "eslint": "10.7.x",
+    "prettier": "3.9.x",
+    "typescript": "6.0.x",
+    "typescript-eslint": "8.65.x",
+    "vitest": "4.1.x"
+  }
+}
