@@ -63,9 +63,28 @@ type ApiClientConfig = {
    * mode). See this module's header and the README's "Cookie mode (web)"
    * section. */
   cookieMode?: boolean;
+  /** Optional access-token getter (default-off). When supplied AND a request
+   * does not already carry its own `Authorization` header, the mutator
+   * injects `Authorization: Bearer ${getAccessToken()}` — but only when the
+   * getter returns a non-empty string (a `null`/`""` return injects
+   * nothing). This is the seam a consumer that keeps the short-lived access
+   * token in memory (e.g. `@repo/web-shared`'s `AuthProvider`, which wires
+   * its in-memory token ref's getter in here) uses so the token rides every
+   * generated call in BOTH bearer and cookie mode, without any generated
+   * hook or call site having to thread the header through by hand. It never
+   * clobbers a caller-supplied `Authorization` header, so an explicit
+   * per-call override still wins. Omitted (the default) = the mutator sets
+   * no `Authorization` header itself, exactly as before. */
+  getAccessToken?: () => string | null;
 };
 
-let config: Required<ApiClientConfig> = { baseUrl: "", cookieMode: false };
+const NO_TOKEN = (): string | null => null;
+
+let config: Required<ApiClientConfig> = {
+  baseUrl: "",
+  cookieMode: false,
+  getAccessToken: NO_TOKEN,
+};
 
 /**
  * Configure the shared api-client. Call once at app startup, before any
@@ -79,6 +98,7 @@ export const configureApiClient = (next: ApiClientConfig): void => {
   config = {
     baseUrl: next.baseUrl.replace(/\/+$/, ""),
     cookieMode: next.cookieMode ?? false,
+    getAccessToken: next.getAccessToken ?? NO_TOKEN,
   };
 };
 
@@ -104,6 +124,14 @@ export const customFetch = async <T>(url: string, options: RequestInit = {}): Pr
   const headers = new Headers(options.headers);
   if (options.body != null && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+
+  // Access-token injection (default-off): only when a getter was configured,
+  // the caller didn't already set Authorization, and the getter returns a
+  // non-empty token. Runs in both bearer and cookie mode.
+  if (!headers.has("Authorization")) {
+    const token = config.getAccessToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
   const init: RequestInit = { ...options, headers };

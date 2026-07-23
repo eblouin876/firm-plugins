@@ -18,3 +18,10 @@ allowBuilds:
   # under pnpm 11's build-script gate (native binary install). Trusted,
   # scoped to esbuild only — not a blanket allow.
   esbuild: true
+  # msw (a devDependency of @repo/web-shared, Stage 6) ships a build script
+  # that generates its BROWSER service worker — which the kit's tests never
+  # use (they run msw/node's `setupServer`, no worker needed). Marked `false`
+  # so pnpm 11's build gate treats it as an explicit, non-erroring skip rather
+  # than an unresolved "ignored build" that fails every later `pnpm install`
+  # (and thus every `pnpm run`) with ERR_PNPM_IGNORED_BUILDS.
+  msw: false

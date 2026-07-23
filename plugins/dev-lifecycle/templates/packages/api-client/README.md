@@ -21,6 +21,7 @@ The shared typed API client every frontend/mobile block imports instead of hand-
 - How `client-generate` works
 - Configuration
 - Cookie mode (web)
+- Access-token injection (`getAccessToken`)
 - Bundler-only package
 - The mutator's response shape
 - Dep vs peerDep
@@ -94,6 +95,27 @@ configureApiClient({
 3. **Double-submit CSRF echo on `POST /auth/refresh` and `POST /auth/logout`** — the mutator reads the non-HttpOnly `csrf_token` cookie from `document.cookie` and sends its value back as the `X-CSRF-Token` header, which the backend checks equals the cookie. It won't clobber a caller-supplied `X-CSRF-Token`.
 
 **Security note.** The split is deliberate: the **access token stays in memory** and travels in the `Authorization` header (same as bearer mode); the **refresh token is never readable by JS** (it's in the `HttpOnly` cookie), which is what neutralizes token theft via XSS. CSRF is the tradeoff a cookie brings — the browser attaches the refresh cookie automatically on any same-site request — so the state-changing cookie-auth endpoints are protected by the **double-submit** check: an attacker's forged cross-site request can't read the `csrf_token` cookie to echo it in the header, and `SameSite=Lax` blocks it besides. Reading `csrf_token` needs `document`, so the echo is a **safe no-op under SSR / React Native** (no `document`) — correct, because those are bearer-mode targets that never receive a CSRF cookie. Cookie mode also requires the backend's CORS to name **explicit origins with credentials enabled — never a `*` wildcard** (a wildcard origin is incompatible with `credentials: "include"`); see `references/security/secure-baseline.md` and the auth component's README.
+
+## Access-token injection (`getAccessToken`)
+Both modes send the short-lived access token as an `Authorization: Bearer` header — but by **default** the client sets that header for no one: it forwards whatever `Authorization` the caller passes and nothing more (bearer mode's original behavior). A consumer that keeps the access token in memory can instead register a getter once, and the mutator injects the header on every generated call automatically:
+
+```ts
+// The token lives in the consumer's memory (e.g. @repo/web-shared's
+// AuthProvider updates a ref; getAccessToken reads it). Wire it once:
+import { configureApiClient } from "@repo/api-client";
+import { getAccessToken } from "@repo/web-shared";
+configureApiClient({
+  baseUrl: import.meta.env.VITE_API_BASE_URL ?? "",
+  cookieMode: true,       // web posture
+  getAccessToken,         // () => string | null
+});
+```
+
+Semantics (see `src/mutator.ts`'s `ApiClientConfig.getAccessToken`):
+- **Default-off.** Omit it and the mutator sets no `Authorization` header itself — byte-for-byte the prior behavior, so mobile/Expo (which sets its own bearer header from SecureStore) and every existing call site are unchanged.
+- **Injects only a real token.** The getter returning `null` or `""` injects nothing (logged-out state).
+- **Never clobbers a caller header.** A per-call `Authorization` still wins, so an explicit override (or a different token for one request) is always honored.
+- **Independent of `cookieMode`.** It runs in both modes; cookie mode governs the *refresh* token transport and CSRF, this governs the *access* token header. `@repo/web-shared`'s `AuthProvider` is the intended producer of the getter — see that package's README.
 
 ## Bundler-only package
 `dist/` (this package's build output) uses extensionless relative imports, matching what orval generates — not the explicit `.js`-suffixed imports Node's own ESM loader (`NodeNext` resolution) requires. That's intentional (see "Materialized-location paths" below) and it means this package only resolves correctly under a bundler with Node-style extensionless resolution — Vite, Metro, webpack — not `node dist/index.js` directly. Don't add a build step to emit extensions; consume it from a bundler-based app as designed.

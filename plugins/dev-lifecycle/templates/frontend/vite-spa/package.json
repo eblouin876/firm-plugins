@@ -1,0 +1,49 @@
+{
+  "name": "web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "//scripts": "Wires this app into the project-root justfile's standard targets (dev/build/lint/typecheck/test) — `pnpm -r --if-present` fans out to these. `build` typechecks first (tsc --noEmit), then Vite bundles to dist/; there is no tsc emit step because Vite owns the app bundle (unlike the library packages, which tsc-emit their dist/).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@repo/api-client": "workspace:*",
+    "@repo/web-shared": "workspace:*",
+    "@headlessui/react": "2.2.10",
+    "@hookform/resolvers": "5.4.0",
+    "@tanstack/react-query": "5.101.3",
+    "react": "19.2.x",
+    "react-dom": "19.2.x",
+    "react-hook-form": "7.82.0",
+    "react-router": "7.18.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/jest-dom": "6.10.0",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "24.x",
+    "@types/react": "19.2.x",
+    "@types/react-dom": "19.2.x",
+    "@vitejs/plugin-react": "6.0.4",
+    "eslint": "10.7.x",
+    "jsdom": "29.1.1",
+    "msw": "2.15.0",
+    "prettier": "3.9.x",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.x",
+    "typescript-eslint": "8.65.x",
+    "vite": "8.1.x",
+    "vitest": "4.1.x"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

@@ -110,6 +110,56 @@ describe("customFetch", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.com/health", expect.anything());
   });
 
+  describe("access-token injection (getAccessToken seam)", () => {
+    const headersOf = (fetchMock: ReturnType<typeof vi.fn>) => {
+      const call = fetchMock.mock.calls[0];
+      expect(call).toBeDefined();
+      return new Headers(((call as unknown[])[1] as RequestInit).headers);
+    };
+
+    it("injects Authorization: Bearer when a getter is configured and returns a token", async () => {
+      configureApiClient({ baseUrl: "", getAccessToken: () => "access-123" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/me");
+
+      expect(headersOf(fetchMock).get("Authorization")).toBe("Bearer access-123");
+    });
+
+    it("is default-off: sends no Authorization header when no getter is configured", async () => {
+      configureApiClient({ baseUrl: "" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/me");
+
+      expect(headersOf(fetchMock).has("Authorization")).toBe(false);
+    });
+
+    it("injects nothing when the getter returns null or an empty string", async () => {
+      for (const value of [null, ""] as const) {
+        configureApiClient({ baseUrl: "", getAccessToken: () => value });
+        const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        await customFetch("/auth/me");
+
+        expect(headersOf(fetchMock).has("Authorization")).toBe(false);
+      }
+    });
+
+    it("does not clobber a caller-supplied Authorization header", async () => {
+      configureApiClient({ baseUrl: "", getAccessToken: () => "from-getter" });
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await customFetch("/auth/me", { headers: { Authorization: "Bearer caller-token" } });
+
+      expect(headersOf(fetchMock).get("Authorization")).toBe("Bearer caller-token");
+    });
+  });
+
   describe("cookie mode (web seam)", () => {
     // Small helpers to read what the mutator actually put on the wire.
     const initOf = (fetchMock: ReturnType<typeof vi.fn>) => {

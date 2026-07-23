@@ -1,0 +1,56 @@
+{
+  "name": "@repo/web-shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Framework-portable React building blocks shared by every web frontend that imports @repo/api-client: the cookie-mode AuthProvider + route guards, a QueryClient factory, error/JWT helpers, and zod form helpers. No router, no bundler globals, no SSR-unsafe module-load side effects — imports cleanly into a Vite SPA or a Next.js client component alike.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "//exports": "Bundler-only package: dist/ uses extensionless relative imports (no NodeNext-style .js suffixes), so it resolves under Vite/Metro/webpack but not Node's own ESM loader. Same posture as @repo/api-client — see that package's README's \"Bundler-only package\" note.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@hookform/resolvers": "^5.0.0",
+    "@tanstack/react-query": "^5.101.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-hook-form": "^7.0.0",
+    "zod": "^4.0.0"
+  },
+  "dependencies": {
+    "@repo/api-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@hookform/resolvers": "5.4.0",
+    "@tanstack/react-query": "5.101.3",
+    "@testing-library/jest-dom": "6.10.0",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "24.x",
+    "@types/react": "19.2.x",
+    "@types/react-dom": "19.2.x",
+    "eslint": "10.7.x",
+    "jsdom": "29.1.1",
+    "msw": "2.15.0",
+    "prettier": "3.9.x",
+    "react": "19.2.x",
+    "react-dom": "19.2.x",
+    "react-hook-form": "7.82.0",
+    "typescript": "6.0.x",
+    "typescript-eslint": "8.65.x",
+    "vitest": "4.1.x",
+    "zod": "4.4.3"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}
