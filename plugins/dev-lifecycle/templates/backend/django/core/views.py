@@ -35,9 +35,11 @@ from __future__ import annotations
 import uuid
 
 from asgiref.sync import async_to_sync
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection
 from django.db.utils import Error as DjangoDBError
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny
@@ -46,8 +48,18 @@ from rest_framework.views import APIView
 
 from core.contract.errors import NotFoundError
 from core.models import Item
-from core.security.auth import InvalidToken, resolve_principal
-from core.security.auth.stores import DjangoUserStore, build_auth_service
+from core.security.auth import AuthService, InvalidToken, resolve_principal
+from core.security.auth.stores import (
+    AuditAuthEventSink,
+    DjangoRefreshTokenStore,
+    DjangoUserStore,
+    build_account_service,
+    build_auth_service,
+    build_lockout_policy,
+    get_password_service,
+    get_token_service,
+    utc_now,
+)
 from core.serializers import (
     ErrorEnvelopeSerializer,
     HealthStatusSerializer,
@@ -59,8 +71,52 @@ from core.serializers import (
     ReadinessStatusSerializer,
     RefreshRequestSerializer,
     RegisterRequestSerializer,
+    RequestPasswordResetRequestSerializer,
+    ResetPasswordRequestSerializer,
     TokenResponseSerializer,
+    VerifyEmailRequestSerializer,
 )
+
+
+def _build_login_auth_service() -> AuthService:
+    """Stage 5c (#45): the LOGIN-GATED `AuthService` — same store/service
+    composition `core.security.auth.stores.build_auth_service()` uses
+    (fresh `DjangoUserStore`/`DjangoRefreshTokenStore`, the process-wide
+    `get_password_service()`, a fresh `get_token_service()`, `utc_now` as
+    the shared clock), PLUS `lockout=build_lockout_policy()`,
+    `require_verification=settings.AUTH_REQUIRE_EMAIL_VERIFICATION`, and
+    `events=AuditAuthEventSink()` — mirroring `backend/fastapi`'s
+    `app/api/deps.py:get_auth_service`'s own Stage 5c wiring exactly.
+
+    Built here at the view call site, not inside `build_auth_service()`
+    itself (Agent A's factory — deliberately left unchanged this stage;
+    see that function's own docstring: "wiring `AuthService`'s own new
+    keyword parameters into `LoginView`/`RegisterView` ... is Agent B's
+    job"). `build_lockout_policy()` is called fresh here — same
+    `DjangoLockoutStore`-backed table `core.security.auth.stores.
+    build_account_service()`'s own `lockout=build_lockout_policy()` call
+    reads/writes (Django's async ORM has no per-request session object to
+    share the way `backend/fastapi`'s `AsyncSession` does — see
+    `build_lockout_policy`'s own docstring — so "the same policy" here
+    means "the same underlying table", which is what actually matters:
+    a lockout `LoginView` records is visible to, and can be lifted by, a
+    later `AccountService.reset_password` call built from a completely
+    separate `build_lockout_policy()` invocation).
+
+    `RegisterView` deliberately does NOT use this — `AuthService.register`
+    never consults `lockout`/`require_verification`/`events` at all (see
+    `_core.AuthService.register`'s own docstring), so the plain, unwired
+    `build_auth_service()` remains the right (and simpler) choice there."""
+    return AuthService(
+        users=DjangoUserStore(),
+        refresh_tokens=DjangoRefreshTokenStore(),
+        passwords=get_password_service(),
+        tokens=get_token_service(),
+        now=utc_now,
+        lockout=build_lockout_policy(),
+        require_verification=settings.AUTH_REQUIRE_EMAIL_VERIFICATION,
+        events=AuditAuthEventSink(),
+    )
 
 # Stage 4 Step 4 (#27): every `operation_id`/`tags` value below is set to
 # the EXACT string `packages/api-client/openapi.json` (the frozen FastAPI
@@ -267,12 +323,44 @@ class ReadinessCheckView(APIView):
 
 
 class RegisterView(APIView):
-    """`POST /auth/register` (Stage 5b, #44) — real handler, the DRF
-    counterpart to `app/api/routers/auth.py`'s `register`. Delegates
-    straight to `AuthService.register` — raises `EmailAlreadyExists` (->
-    409 `conflict`, via `core.exceptions.exception_handler`'s `AuthError`
-    branch) for a duplicate normalized email, uncaught here (see this
-    module's own docstring)."""
+    """`POST /auth/register` (Stage 5b, #44; account-lifecycle side effect
+    Stage 5c, #45) — real handler, the DRF counterpart to `app/api/
+    routers/auth.py`'s `register`. Delegates straight to `AuthService.
+    register` — raises `EmailAlreadyExists` (-> 409 `conflict`, via
+    `core.exceptions.exception_handler`'s `AuthError` branch) for a
+    duplicate normalized email, uncaught here (see this module's own
+    docstring).
+
+    Stage 5c: on success, additionally (a) sends a verification email
+    (`AccountService.request_email_verification(user)` — the freshly
+    created `UserRecord` `AuthService.register` just returned, no extra
+    lookup needed) and (b) emits an `auth.register` audit event. Neither
+    changes this endpoint's response shape (still 201 `PrincipalOut`) —
+    a project whose `settings.AUTH_REQUIRE_EMAIL_VERIFICATION` is `True`
+    (the secure default) needs the caller to actually consume the emailed
+    link (`POST /auth/verify-email`) before `LoginView`'s gated
+    `AuthService.login` will let this account in.
+
+    `request_email_verification` is wrapped in `try/except Exception` —
+    the user row is already durably committed by the time this runs
+    (`AuthService.register` returned successfully), so a verification-
+    email failure here (SMTP outage, bounced address) must NEVER turn
+    into a 500: the account already exists, a retry would just 409 on
+    the duplicate email, `require_verification=True` means the account
+    can't log in either way, and the wire caller (whoever showed the
+    registration form) has no way to "undo" or recover a 500 here — it
+    would brick a just-created account with no path forward. Register
+    stays 201 regardless of whether the email actually went out; the
+    failure is only logged/audited (`auth.register.
+    verification_email_failed`, no PII/token in the event), never
+    surfaced to the caller. The recovery path for an account whose
+    verification email never arrived is `POST /auth/request-password-
+    reset` -> `POST /auth/reset-password` — `AccountService.
+    reset_password` also marks the email verified (see that method's own
+    docstring, `_core.py`), so a user who never got their verification
+    link can still get into their account. Byte-for-byte the same
+    rationale as `app/api/routers/auth.py`'s own `register` handler
+    (adversarial-review fix M2 there)."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -290,16 +378,159 @@ class RegisterView(APIView):
         user = async_to_sync(auth_service.register)(
             serializer.validated_data["email"], serializer.validated_data["password"]
         )
+        account_service = build_account_service()
+        try:
+            async_to_sync(account_service.request_email_verification)(user)
+        except Exception:
+            # M2 (ported from app/api/routers/auth.py's register handler):
+            # never let a verification-email delivery failure 500 an
+            # already-committed registration -- see this view's own
+            # docstring above. No PII/token in this event -- just that it
+            # happened, for a human to notice and, if needed, resend by
+            # hand.
+            async_to_sync(AuditAuthEventSink().emit)(
+                "auth.register.verification_email_failed", actor=user.id, outcome="failure"
+            )
+        async_to_sync(AuditAuthEventSink().emit)("auth.register", actor=user.id, outcome="success")
         principal = PrincipalOutSerializer({"id": uuid.UUID(user.id), "email": user.email})
         return Response(principal.data, status=status.HTTP_201_CREATED)
 
 
+class VerifyEmailView(APIView):
+    """`POST /auth/verify-email` (Stage 5c, #45) — real handler, the DRF
+    counterpart to `app/api/routers/auth.py`'s `verify_email`. Delegates
+    to `AccountService.verify_email` — raises `InvalidSingleUseToken`
+    (-> 401 `unauthenticated`, generic and wire-identical to every other
+    single-use-token rejection reason — see that exception's own
+    docstring) for an unknown/expired/already-used/wrong-purpose token,
+    uncaught here (see this module's own docstring). On success, marks
+    the token's owning user's email verified — see `LoginView`'s
+    `require_verification` gate (`_build_login_auth_service`, above) for
+    why that matters: with `settings.AUTH_REQUIRE_EMAIL_VERIFICATION=True`
+    (the default), login for this account was refused (generically, as
+    `InvalidCredentials`) until this endpoint succeeds."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="verify_email_auth_verify_email_post",
+        tags=["auth"],
+        request=VerifyEmailRequestSerializer,
+        responses={204: None, 401: ErrorEnvelopeSerializer, 422: ErrorEnvelopeSerializer},
+    )
+    def post(self, request):
+        serializer = VerifyEmailRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account_service = build_account_service()
+        async_to_sync(account_service.verify_email)(serializer.validated_data["token"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class RequestPasswordResetView(APIView):
+    """`POST /auth/request-password-reset` (Stage 5c, #45) — real handler,
+    the DRF counterpart to `app/api/routers/auth.py`'s
+    `request_password_reset`. Delegates to `AccountService.
+    request_password_reset` — that method NEVER raises and never reveals
+    whether `email` has an account (see its own docstring on the anti-
+    user-enumeration defense this mirrors from `AuthService.login`'s own
+    `InvalidCredentials`), so this view ALWAYS returns 202 with a
+    genuinely EMPTY body (`Response(status=202)` with no data — DRF
+    sends no content body at all when a view returns no `data`, matching
+    `app/api/routers/auth.py`'s own explicit `Response(..., content=b"")`
+    — a byte-identical, content-free response is the strongest form of
+    "this endpoint reveals nothing" for a known email and an unknown one
+    alike), never a 404/409 that would leak account existence. A `422`
+    (declared below) is the one response shape this endpoint CAN still
+    send, for a request body that fails `RequestPasswordResetRequestSerializer`'s
+    own schema validation (e.g. an empty `email` string) before this
+    view's body ever runs."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="request_password_reset_auth_request_password_reset_post",
+        tags=["auth"],
+        request=RequestPasswordResetRequestSerializer,
+        # `202: OpenApiTypes.ANY` (`build_basic_type(OpenApiTypes.ANY) ==
+        # {}`), not `None` -- matches `packages/api-client/openapi.json`'s
+        # own documented 202 exactly: FastAPI's `Response(status_code=202,
+        # content=b"")` (no `response_model`) still documents a
+        # `application/json` media type with an empty (`{}`, "unspecified
+        # shape") schema, NOT an absent `content` key the way a genuinely
+        # bodiless `None` response (`LogoutView`'s 204, below) does. A raw
+        # `{}` dict here is NOT equivalent -- `drf_spectacular.openapi.
+        # AutoSchema._get_response_for_code`'s `if not serializer:` falsy
+        # check fires for an empty dict BEFORE its `isinstance(serializer,
+        # dict)` raw-schema branch is ever reached, collapsing it to "No
+        # response body" (no `content` key at all) instead -- `OpenApiTypes.
+        # ANY` is `is_basic_type`, so it reaches `build_basic_type` instead,
+        # which is what actually produces the `{}` schema this needs. See
+        # tests/test_schema_conformance.py's strict wire-surface proof,
+        # which this documents.
+        responses={202: OpenApiTypes.ANY, 422: ErrorEnvelopeSerializer},
+    )
+    def post(self, request):
+        serializer = RequestPasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account_service = build_account_service()
+        async_to_sync(account_service.request_password_reset)(serializer.validated_data["email"])
+        return Response(status=status.HTTP_202_ACCEPTED)
+
+
+class ResetPasswordView(APIView):
+    """`POST /auth/reset-password` (Stage 5c, #45) — real handler, the DRF
+    counterpart to `app/api/routers/auth.py`'s `reset_password`.
+    Delegates to `AccountService.reset_password` — raises
+    `InvalidSingleUseToken` (-> 401 `unauthenticated`, generic — see
+    `VerifyEmailView`'s docstring above for the identical rationale) for
+    an unknown/expired/already-used/wrong-purpose reset token, uncaught
+    here. On success, revokes EVERY refresh-token family the user has
+    (every device/session is logged out, not just the one that requested
+    the reset — see `AccountService.reset_password`'s own docstring,
+    `_core.py`) and, if a lockout policy is wired, lifts any failed-login
+    lockout on the account — the same underlying `DjangoLockoutStore`
+    table `LoginView`'s own `_build_login_auth_service()` records
+    against, so the reset account can log in with its new password
+    immediately."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="reset_password_auth_reset_password_post",
+        tags=["auth"],
+        request=ResetPasswordRequestSerializer,
+        responses={204: None, 401: ErrorEnvelopeSerializer, 422: ErrorEnvelopeSerializer},
+    )
+    def post(self, request):
+        serializer = ResetPasswordRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account_service = build_account_service()
+        async_to_sync(account_service.reset_password)(
+            serializer.validated_data["token"], serializer.validated_data["new_password"]
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class LoginView(APIView):
-    """`POST /auth/login` (Stage 5b, #44) — real handler. Delegates to
-    `AuthService.login` — raises `InvalidCredentials` (-> 401
-    `unauthenticated`) identically for an unknown email or a wrong
-    password (see that exception's own docstring on the deliberate
-    user-enumeration defense), uncaught here."""
+    """`POST /auth/login` (Stage 5b, #44; verification + lockout + audit
+    gate Stage 5c, #45) — real handler. Delegates to `AuthService.login`
+    — raises `InvalidCredentials` (-> 401 `unauthenticated`) identically
+    for an unknown email, a wrong password, an account locked out from
+    too many recent failures, AND (as of Stage 5c) an account whose email
+    isn't verified yet — all four are wire-BYTE-IDENTICAL, uncaught here
+    (see that exception's own docstring on the deliberate
+    user-enumeration defense, and `_core.AuthService.login`'s own
+    docstring for the full 6-step state machine this now runs through
+    `_build_login_auth_service()`'s wiring).
+
+    Stage 5c: `auth_service` is now built via `_build_login_auth_service()`
+    (this module, above) instead of the plain `build_auth_service()` every
+    other `/auth/*` view still uses — the SAME `lockout`/
+    `require_verification`/`events` wiring `backend/fastapi`'s
+    `app/api/deps.py:get_auth_service` applies to its own `AuthService`."""
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -313,7 +544,7 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        auth_service = build_auth_service()
+        auth_service = _build_login_auth_service()
         pair = async_to_sync(auth_service.login)(
             serializer.validated_data["email"], serializer.validated_data["password"]
         )

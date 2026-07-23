@@ -216,6 +216,22 @@ class User(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+    # Stage 5c (#45): back `_core.UserRecord.email_verified` and
+    # `UserStore.mark_email_verified` (see `core/security/auth/stores.py`'s
+    # `DjangoUserStore.mark_email_verified`) -- set once `AccountService.
+    # verify_email` successfully consumes a `"verify"` single-use token for
+    # this user. `default=False` at the Python/ORM level (every row this app
+    # inserts supplies it explicitly, same as every other field on this
+    # model) -- migration 0003 additionally gives the DB column a
+    # `db_default=False` so the migration itself backfills any pre-existing
+    # row to a real, non-NULL `false` rather than leaving it undefined, the
+    # same `server_default`-vs-`default` distinction `app/models/user.py`'s
+    # own docstring documents for the SQLAlchemy side (see that module's
+    # docstring, cross-referenced in migration 0003's own docstring).
+    # Column-for-column match to `app/models/user.py`'s `email_verified`/
+    # `verified_at` pair.
+    email_verified = models.BooleanField(default=False, db_default=False)
+    verified_at = models.DateTimeField(null=True, blank=True, default=None)
 
     objects = UserManager()
     all_objects = models.Manager()
@@ -314,3 +330,130 @@ class RefreshToken(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return f"RefreshToken(jti={self.jti})"
+
+
+# ---------------------------------------------------------------------------
+# Stage 5c (#45): account-lifecycle tables -- the SingleUseToken/LoginAttempt
+# the vendored auth component's SingleUseTokenStore/LockoutStore protocols
+# (core/security/auth/_core.py) are implemented against (see
+# core/security/auth/stores.py). Column-for-column match to backend/fastapi's
+# app/models/{single_use_token,login_attempt}.py, cross-checked against
+# alembic/versions/0003_stage5c_account_lifecycle.py -- see each model's own
+# docstring for the exact shape mirrored and any intentional nuance. Not
+# vendored files -- this block's own app code, same as Item/User/RefreshToken
+# above.
+# ---------------------------------------------------------------------------
+
+
+class SingleUseToken(models.Model):
+    """One row per issued email-verification or password-reset token -- the
+    `SingleUseToken` the vendored auth component's `SingleUseTokenStore`
+    protocol (`core/security/auth/_core.py`) is implemented against (see
+    `core/security/auth/stores.py`'s `DjangoSingleUseTokenStore`), persisted
+    exactly as `_core.SingleUseTokenRecord` describes: `token_hash` (never the
+    raw token -- see `_core.hash_token`'s own docstring) is the lookup key,
+    `used_at` implements the single-use/reuse-rejection state
+    (`_core.SingleUseTokenService.consume`'s docstring is THE reference for
+    what this table's rows mean at each state). Column-for-column match to
+    `backend/fastapi`'s `app/models/single_use_token.py` `SingleUseToken` and
+    `alembic/versions/0003_stage5c_account_lifecycle.py`'s
+    `single_use_tokens` table.
+
+    `user` uses `on_delete=models.PROTECT` -- the SAME app-level (Django ORM)
+    enforcement `RefreshToken.user` uses above (see that class's own
+    docstring, nuance 1), for the identical reason applied here: Alembic
+    0003's `single_use_tokens.user_id` FK is left at its DB-level default
+    `ondelete` (RESTRICT), and `PROTECT` is the Django-ORM expression of that
+    same "don't silently lose a security-relevant token-issuance history"
+    intent -- deleting a `User` row while it still has outstanding/consumed
+    single-use token rows is refused rather than silently cascading away that
+    history. Neither this app nor `backend/fastapi` ever hard-deletes a
+    `User` row today (both use `User.mark_deleted` / `SoftDeleteMixin`
+    instead), so this divergence from CASCADE isn't exercised in practice.
+
+    `created_at`/`expires_at`/`used_at` are each explicit,
+    application-supplied columns (set from a `SingleUseTokenRecord` built by
+    `SingleUseTokenService.issue`/`consume` against its OWN injected `now()`
+    -- exactly how `RefreshToken.issued_at`/`expires_at`/`used_at` above are
+    handled), so this model deliberately does NOT use `auto_now_add`/
+    `auto_now` for `created_at` (which would set it from the DB/request
+    clock, not `SingleUseTokenService`'s own injected, test-deterministic
+    `now`) -- matching `app/models/single_use_token.py`'s own docstring on
+    why it composes `UUIDPrimaryKey` only, no `TimestampMixin`. A single-use
+    token is never soft-deleted either -- its lifecycle is fully captured by
+    `used_at`, the same "retain, don't delete" posture `RefreshToken`'s own
+    docstring documents."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # UNIQUE — the lookup key `SingleUseTokenStore.get_by_hash` queries by
+    # (SHA-256 hex digest of the raw token, per `_core.hash_token`).
+    token_hash = models.CharField(max_length=64, unique=True)
+    # INDEXED (not unique) — a user can have more than one outstanding
+    # single-use token (e.g. a verify token and a reset token at once).
+    # PROTECT, not CASCADE — see this class's own docstring.
+    user = models.ForeignKey(User, on_delete=models.PROTECT, db_index=True)
+    # "verify" or "reset" today — `_core.py` does not enumerate the allowed
+    # values as a closed set (see `SingleUseTokenRecord`'s own docstring), so
+    # this stays a plain CharField rather than a DB-level enum/CHECK
+    # constraint.
+    purpose = models.CharField(max_length=32)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    class Meta:
+        db_table = "single_use_tokens"
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"SingleUseToken(purpose={self.purpose})"
+
+
+class LoginAttempt(models.Model):
+    """One row per account currently being tracked for failed-login lockout
+    bookkeeping -- the `LoginAttempt` the vendored auth component's
+    `LockoutStore` protocol (`core/security/auth/_core.py`) is implemented
+    against (see `core/security/auth/stores.py`'s `DjangoLockoutStore`),
+    persisted exactly as `_core.AttemptRecord` describes (`_core.
+    LockoutPolicy`'s own docstring is THE reference for what this table's
+    `failure_count`/`first_failure_at`/`last_failure_at`/`locked_until`
+    columns mean at each state -- ALL of the counting/threshold/
+    rolling-window logic lives in `LockoutPolicy`, not here; this model is
+    dumb persistence for whatever `AttemptRecord` it's handed). Column-for-
+    column match to `backend/fastapi`'s `app/models/login_attempt.py`
+    `LoginAttempt` and `alembic/versions/0003_stage5c_account_lifecycle.py`'s
+    `login_attempts` table.
+
+    `account_key` stores the id `_core.AuthService.login` passes AS TEXT (a
+    plain `CharField`, not a `UUIDField` `ForeignKey`) -- `_core.
+    LockoutStore`'s own docstring notes a framework adapter is free to key it
+    some other way than a bare user id (e.g. `f"{user_id}:{client_ip}"`); a
+    plain `CharField`, UNIQUE (one row per `account_key`, matching
+    `LockoutPolicy`'s "the one row per account" contract -- see
+    `DjangoLockoutStore.upsert`) keeps this table correct for either keying
+    scheme without assuming `account_key` is always a `User.id`. This table
+    has NO foreign key to `User` -- deliberately decoupled at the DB level,
+    matching `app/models/login_attempt.py`'s own module docstring and
+    `alembic/versions/0003_stage5c_account_lifecycle.py`'s own note on the
+    same point.
+
+    No `auto_now_add`/`auto_now`/`TimestampMixin`-style bookkeeping here,
+    same reasoning `SingleUseToken` above documents: `first_failure_at`/
+    `last_failure_at`/`locked_until` are each already explicit,
+    application-supplied columns (`LockoutPolicy`'s own injected `now()`),
+    and a lockout row is deleted outright by `clear()` (`_core.
+    LockoutPolicy.clear` -> `LockoutStore.clear`), never soft-deleted --
+    there is no "tombstone" state worth keeping around for spent lockout
+    bookkeeping the way there is for a used refresh/single-use token."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account_key = models.CharField(max_length=320, unique=True)
+    failure_count = models.IntegerField()
+    first_failure_at = models.DateTimeField()
+    last_failure_at = models.DateTimeField()
+    locked_until = models.DateTimeField(null=True, blank=True, default=None)
+
+    class Meta:
+        db_table = "login_attempts"
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"LoginAttempt(account_key={self.account_key})"

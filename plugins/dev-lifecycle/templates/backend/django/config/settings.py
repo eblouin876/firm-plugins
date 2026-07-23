@@ -485,3 +485,74 @@ JWT_SIGNING_KEY: str | None = _get_secret("JWT_SIGNING_KEY", required=False)
 JWT_ISSUER: str = os.environ.get("JWT_ISSUER", "app")
 JWT_ACCESS_TTL_SECONDS: int = int(os.environ.get("JWT_ACCESS_TTL_SECONDS", "900"))
 JWT_REFRESH_TTL_SECONDS: int = int(os.environ.get("JWT_REFRESH_TTL_SECONDS", "1209600"))
+
+# ---------------------------------------------------------------------------
+# Account lifecycle (Stage 5c, #45): core/security/auth/stores.py's
+# build_lockout_policy()/build_account_service() wire against these -- the
+# Django-track counterpart to backend/fastapi's app/core/config.py's
+# identically-named (lowercase) Stage 5c fields; same names, same defaults,
+# same rationale -- see that module's own docstrings for the full "why
+# 5 / 900 / 900 / True / 86400 / 3600" reasoning this mirrors. Plain
+# env-driven module-level constants, matching JWT_ISSUER/JWT_ACCESS_TTL_
+# SECONDS above, not a pydantic Settings subclass (this block has no such
+# seam -- see the JWT block's own comment above).
+#
+# NOT yet wired into build_auth_service()/login itself -- that's the next
+# Django-parity stage's (Agent B's) endpoint work; these fields exist so
+# this stage's store/factory layer (core/security/auth/stores.py) has real
+# config to build against, the identical "inert until the next stage wires
+# it" posture app/core/config.py's own Stage 5c fields document.
+# ---------------------------------------------------------------------------
+
+AUTH_REQUIRE_EMAIL_VERIFICATION: bool = _env_bool("AUTH_REQUIRE_EMAIL_VERIFICATION", True)
+AUTH_LOCKOUT_ENABLED: bool = _env_bool("AUTH_LOCKOUT_ENABLED", True)
+AUTH_LOCKOUT_MAX_FAILURES: int = int(os.environ.get("AUTH_LOCKOUT_MAX_FAILURES", "5"))
+AUTH_LOCKOUT_DURATION_SECONDS: int = int(os.environ.get("AUTH_LOCKOUT_DURATION_SECONDS", "900"))
+AUTH_LOCKOUT_WINDOW_SECONDS: int = int(os.environ.get("AUTH_LOCKOUT_WINDOW_SECONDS", "900"))
+
+# --- Email (Stage 5c, #45): core/security/auth/stores.py's DjangoEmailSender
+# delegates its actual transport entirely to Django's own pluggable
+# django.core.mail EMAIL_BACKEND -- see that class's own docstring for why
+# this Django track needs only ONE sender class where backend/fastapi needs
+# two (ConsoleEmailSender/SmtpEmailSender). EMAIL_BACKEND/EMAIL_HOST/
+# EMAIL_PORT/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD/EMAIL_USE_TLS are Django's
+# OWN standard setting names -- django.core.mail.backends.smtp.EmailBackend
+# reads them automatically, so this app never hand-rolls an smtplib client
+# the way SmtpEmailSender (backend/fastapi) does. EMAIL_HOST/EMAIL_HOST_USER/
+# EMAIL_HOST_PASSWORD route through secret_store (get_secret) -- the SAME
+# "don't invent a secret" and AWS-Secrets-Manager-layered posture
+# JWT_SIGNING_KEY documents (see that line's own comment, below) --
+# EMAIL_PORT/EMAIL_USE_TLS/EMAIL_BACKEND/EMAIL_FROM are plain, non-secret
+# config and stay ordinary os.environ.get() reads, matching JWT_ISSUER's own
+# treatment above.
+#
+# DEPLOYMENT REQUIREMENT, mirroring app/core/config.py's own smtp_host
+# comment: when AUTH_REQUIRE_EMAIL_VERIFICATION is True (the default), a
+# real EMAIL_BACKEND (django.core.mail.backends.smtp.EmailBackend) plus
+# EMAIL_HOST/etc. MUST be configured in every production deployment, or
+# get_email_sender() silently falls back to Django's own console backend --
+# no delivery ever happens, and the console backend logs raw verify/reset
+# tokens to this process's own stdout, a real secret leak if that ever runs
+# in production. This is a REQUIRED DEPLOY STEP, not a code-level guard --
+# unlike JWT_SIGNING_KEY (which fails closed at the point of use via
+# AuthNotConfiguredError), EMAIL_BACKEND deliberately has no equivalent
+# fail-closed check here, for the identical "a fragile runtime prod-
+# detection check is easy to get wrong" reasoning app/core/config.py's own
+# smtp_host comment gives.
+# ---------------------------------------------------------------------------
+
+EMAIL_BACKEND: str = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST: str | None = _get_secret("EMAIL_HOST", required=False)
+EMAIL_PORT: int = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER: str | None = _get_secret("EMAIL_HOST_USER", required=False)
+EMAIL_HOST_PASSWORD: str | None = _get_secret("EMAIL_HOST_PASSWORD", required=False)
+EMAIL_USE_TLS: bool = _env_bool("EMAIL_USE_TLS", True)
+EMAIL_FROM: str = os.environ.get("EMAIL_FROM", "no-reply@example.com")
+
+# --- Frontend link target (Stage 5c, #45): AccountService builds
+# verify-email/reset-password links against this origin -- see
+# core.security.auth._core.AccountService's own docstring on the
+# '#token=...' fragment placement. ------------------------------------
+FRONTEND_BASE_URL: str = os.environ.get("FRONTEND_BASE_URL", "http://localhost:5173")
+AUTH_VERIFY_TTL_SECONDS: int = int(os.environ.get("AUTH_VERIFY_TTL_SECONDS", "86400"))
+AUTH_RESET_TTL_SECONDS: int = int(os.environ.get("AUTH_RESET_TTL_SECONDS", "3600"))
