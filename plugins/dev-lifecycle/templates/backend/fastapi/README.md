@@ -809,6 +809,99 @@ successful login across the transcript) with exactly 2 `revoked = true`
 (the two `reset-password` calls each revoked every refresh token that
 existed for the user at that point via `revoke_all_for_user`).
 
+### Stage 5d (#46) real-PG16 verification: cookie mode + RBAC admin example
+
+No new migration this stage (no model changes) — this run reused the
+`0003 (head)` schema from the transcript above, against the same live
+PostgreSQL 16 cluster, via the REAL app (`app.main.create_app()`'s actual
+`lifespan`, not the hermetic sqlite test lifespan) and `asyncpg`.
+`AUTH_REQUIRE_EMAIL_VERIFICATION=false` for this run — email verification
+was already proven against real PG16 in the 0003 transcript above; this
+run isolates cookie mode and RBAC instead of re-proving that gate.
+
+Proves, over real HTTP against the live database: cookie login (cookie
+flags + empty `refresh_token` in the body) → cookie refresh without CSRF
+(403) → cookie refresh with valid CSRF (200, both cookies rotated) →
+replaying the rotated-out refresh cookie (401, reuse detection fires on
+the cookie path exactly as it already does on the bearer path) → cookie
+logout without CSRF (403, cookies untouched) → cookie logout with valid
+CSRF (204, both cookies cleared, idempotent on replay) → bearer login is
+still byte-for-byte unchanged (real `refresh_token` in the body, no
+`Set-Cookie` at all) → `GET /admin/ping` for a `seed_admin()`-provisioned
+admin (200), an authenticated non-admin (403), and an unauthenticated
+caller (401):
+
+```
+== register (regular user) ==
+201 {'id': '9fb01d1a-26ba-4a55-85fb-913a3399f0da', 'email': 'pg16cookieverify@example.com'}
+== cookie login ==
+200 {'access_token': 'eyJhbGciOi...<truncated>', 'refresh_token': '', 'token_type': 'bearer'}
+refresh Set-Cookie: refresh_token=eyJhbGciOi...<truncated>; HttpOnly; Max-Age=1209600; Path=/auth; SameSite=lax; Secure
+csrf Set-Cookie: csrf_token=zWi50BsO7PZ5Jyu8p_3lJnIy7s9LNSontXoS8216pA4; Max-Age=1209600; Path=/auth; SameSite=lax; Secure
+COOKIE FLAGS VERIFIED (HttpOnly+Secure+SameSite=Lax+Path=/auth on refresh; non-HttpOnly on csrf)
+== cookie refresh WITHOUT X-CSRF-Token (expect 403) ==
+403 {'error': {'code': 'permission_denied', 'message': 'CSRF validation failed: the X-CSRF-Token header is missing, blank, or does not match the csrf_token cookie.', 'details': None}}
+== cookie refresh WITH valid X-CSRF-Token (expect 200, rotate) ==
+200 {'access_token': 'eyJhbGciOi...<truncated>', 'refresh_token': '', 'token_type': 'bearer'}
+BOTH COOKIES ROTATED (refresh + csrf values changed)
+== replay the ROTATED-OUT refresh cookie (expect 401, whole family revoked) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Authentication failed.', 'details': None}}
+== cookie logout WITHOUT X-CSRF-Token (expect 403, cookies untouched) ==
+403 {'error': {'code': 'permission_denied', 'message': 'CSRF validation failed: the X-CSRF-Token header is missing, blank, or does not match the csrf_token cookie.', 'details': None}}
+== cookie logout WITH valid X-CSRF-Token (expect 204, both cookies cleared) ==
+204
+BOTH COOKIES CLEARED
+== cookie logout again, no cookie left (idempotent, falls to bearer path, expect 204) ==
+204
+== bearer login (unchanged -- no X-Auth-Mode header) ==
+200 {'access_token': 'eyJhbGciOi...<truncated>', 'refresh_token': '<redacted, non-empty>', 'token_type': 'bearer'}
+BEARER LOGIN UNCHANGED (real refresh_token in body, no Set-Cookie)
+== admin ping: seeded admin (expect 200) ==
+200 {'status': 'ok'}
+== admin ping: authenticated non-admin (expect 403) ==
+403 {'error': {'code': 'permission_denied', 'message': 'This action requires a role the current principal does not have.', 'details': None}}
+== admin ping: unauthenticated (expect 401) ==
+401 {'error': {'code': 'unauthenticated', 'message': 'Authentication failed.', 'details': None}}
+
+ALL PG16 STAGE 5D ASSERTIONS PASSED
+```
+
+Direct-DB proof (a fresh `asyncpg` connection, independent of the HTTP
+client above):
+
+```
+== direct-DB proof (fresh asyncpg connection, independent of the HTTP client above) ==
+users row (regular): {'id': UUID('9fb01d1a-26ba-4a55-85fb-913a3399f0da'), 'email': 'pg16cookieverify@example.com', 'roles': '[]'}
+users row (admin): {'id': UUID('4ba94903-2d0a-43fd-8353-824b09871e50'), 'email': 'pg16adminverify@example.com', 'roles': '["admin"]'}
+refresh_tokens rows for the regular user (3 total):
+  {'family_id': 'e063378880a64553b3be823fbea51c79', 'used': True, 'revoked': True}
+  {'family_id': 'e063378880a64553b3be823fbea51c79', 'used': False, 'revoked': True}
+  {'family_id': '3ee972945fb34c6e88b903ec754bc114', 'used': False, 'revoked': False}
+DB PROOF: the cookie-mode refresh-token family is revoked=True after reuse detection
+          (the separate, later bearer-login family is untouched -- proves reuse detection
+          only ever kills the ONE family it fired on); admin row has roles=['admin'].
+```
+
+The regular user's two refresh-token families: the FIRST (`e0633788...`,
+the cookie-mode login → one rotation → the replayed-cookie reuse
+detection) is wholly `revoked = true` — both rows, including the tip that
+was itself never reused, matching `AuthService.refresh`'s documented
+"kill the whole family, not just the reused token" behavior (`_core.py`).
+The SECOND (`3ee97294...`, the later, unrelated bearer-mode login this
+same transcript also drives) is untouched — proving reuse detection only
+ever kills the ONE family it actually fired on, never a caller's other,
+unrelated sessions. The admin row's `roles` column is `'["admin"]'`
+(Postgres `json`, round-tripped through `asyncpg` as a JSON-text string,
+not auto-decoded — parsed with `json.loads` in the verification script,
+not compared as a raw string) — proving `seed_admin()` is the real,
+working admin-provisioning path against a live database, not just the
+hermetic sqlite suite.
+
+Verification script: written ad hoc for this run (not committed — this
+block's own `tests/test_cookie_auth.py`, hermetic against sqlite, is the
+durable, CI-running proof of this exact behavior; this transcript is the
+one-time real-PG16 confirmation the task's "Verify" step calls for).
+
 ## Dev run (Docker)
 
 `Dockerfile` + `docker-compose.yml` (this directory) boot this block for
