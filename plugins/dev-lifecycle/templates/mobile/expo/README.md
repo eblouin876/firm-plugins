@@ -67,5 +67,18 @@ The app's `package.json` defines `typecheck` (`tsc --noEmit`), `lint` (`eslint .
 - **Hermetic** (run in CI / in-sandbox): `pnpm install`, `tsc --noEmit`, `eslint`, and **`vitest` on the auth-engine logic** (fake SecureStore + stubbed client — asserts login stores the token, Bearer is attached, a 401 triggers exactly one refresh + retry, rotation overwrites storage, a refresh-401 clears + logs out, and logout clears storage).
 - **Documented-manual** (NOT run here — no simulator/toolchain in-sandbox): `npx expo prebuild`, `npx expo run:ios`/`run:android`, EAS builds, and live auth against a running backend. Verify these on a real dev machine before shipping.
 
+### Recorded in-sandbox results (Stage 8 authoring)
+Run at authoring time (2026-07-23) against the pinned versions:
+
+| Check | Tool | Result |
+| --- | --- | --- |
+| `vitest run` (auth-engine suite) | vitest 4.1.10 | **12/12 pass** — every asserted behavior (login stores token / Bearer attached / 401→one refresh+retry / single-flight / rotation overwrites storage / refresh-401→clear+logout / logout idempotent / bootstrap / proactive refresh). |
+| `tsc --noEmit` (auth engine + test) | TypeScript **6.0** (matrix pin) | **clean** — `types: []`, `strict`, `verbatimModuleSyntax`. |
+| `tsc --noEmit` (full app shell: `app/` + `src/`) | TypeScript 5.9.3 | **clean** against the real Expo SDK 57 / RN 0.86 / React 19.2 / `@tanstack/react-query` 5.101 types (5.9 used only because `expo/tsconfig.base` resolves most cleanly on it; the engine layer is independently proven on TS 6.0 above). The generated `@repo/api-client` surface was supplied by a faithful `.d.ts` shim mirroring the template's `src/generated/endpoints/{auth,admin}.ts` signatures, since the workspace package isn't materialized in-sandbox. |
+| `eslint` (`app/` + `src/`) | ESLint 10.7.0 + typescript-eslint 8.65.0 | **clean** (0 problems). |
+| dependency resolution | npm (551 packages) | The pinned Expo/RN/React/react-query set **installs and resolves** in-sandbox. |
+
+**Not run in-sandbox (flagged, needs verification):** a full **`pnpm install` of a materialized monorepo** under the kit's `minimumReleaseAge: 1440` gate (the deps were resolved via npm to obtain real types; the pnpm-workspace-level install with the supply-chain window and any native postinstall was not exercised), and everything in the documented-manual list above (`expo prebuild` / device / simulator / EAS / live backend auth).
+
 ## Version pins
 All versions are governed by `references/compatibility-matrix.md`'s Mobile + Frontend/web + Kit-wide sections — this block does not restate them. The Expo-SDK-governed packages (`expo`, `expo-router`, `expo-secure-store`, `react-native`, `react-native-screens`, `react-native-safe-area-context`, `react`) are resolved via `npx expo install` from Expo SDK 57 (`expo@57.0.7`'s `bundledNativeModules.json`); `typescript`, `eslint`, `typescript-eslint`, `prettier`, and `vitest` follow the kit-wide pins. Never hand-bump an SDK-governed package off the SDK — upgrade the SDK.
