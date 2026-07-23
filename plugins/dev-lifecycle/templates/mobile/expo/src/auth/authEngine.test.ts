@@ -5,9 +5,12 @@ import { createAuthEngine, type TokenResult, type TokenStorage } from "./authEng
 // --- helpers ----------------------------------------------------------------
 
 /** Build a JWT-shaped token so the engine's payload decoder can read `roles`
- * and `exp`. Only the payload segment matters — the signature is ignored. */
+ * and `exp`. Only the payload segment matters — the signature is ignored.
+ * Uses `btoa` (a global in Node 16+ and Hermes, DOM-typed) rather than
+ * `Buffer`, so the block's `types: []` typecheck stays node-types-free. */
 function makeJwt(payload: Record<string, unknown>): string {
-  const b64url = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url");
+  const b64url = (obj: unknown) =>
+    btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url(payload)}.signature`;
 }
 
@@ -38,21 +41,17 @@ function makeStorage(initial: string | null = null) {
  * AuthApi structurally, so it plugs straight into the engine. */
 function makeApi() {
   return {
-    login: vi.fn(
-      async (_email: string, _password: string): Promise<TokenResult> => ({
-        status: 200,
-        accessToken: ACCESS_1,
-        refreshToken: "r1",
-      }),
-    ),
-    refresh: vi.fn(
-      async (_refreshToken: string): Promise<TokenResult> => ({
-        status: 200,
-        accessToken: ACCESS_2,
-        refreshToken: "r2",
-      }),
-    ),
-    logout: vi.fn(async (_refreshToken: string): Promise<void> => {}),
+    login: vi.fn<(email: string, password: string) => Promise<TokenResult>>(async () => ({
+      status: 200,
+      accessToken: ACCESS_1,
+      refreshToken: "r1",
+    })),
+    refresh: vi.fn<(refreshToken: string) => Promise<TokenResult>>(async () => ({
+      status: 200,
+      accessToken: ACCESS_2,
+      refreshToken: "r2",
+    })),
+    logout: vi.fn<(refreshToken: string) => Promise<void>>(async () => {}),
   };
 }
 
