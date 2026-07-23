@@ -94,6 +94,7 @@ AUTH_ERROR_HTTP: dict[type[Exception], tuple[int, str]] = {
     _core.InvalidToken: (401, "unauthenticated"),
     _core.TokenReused: (401, "unauthenticated"),
     _core.EmailAlreadyExists: (409, "conflict"),
+    _core.InvalidSingleUseToken: (401, "unauthenticated"),
     InsufficientRole: (403, "permission_denied"),
 }
 

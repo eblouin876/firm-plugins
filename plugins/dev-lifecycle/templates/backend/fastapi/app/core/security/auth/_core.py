@@ -50,6 +50,8 @@ merely able to present.
 from __future__ import annotations
 
 import hashlib
+import logging
+import secrets
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -133,6 +135,27 @@ class TokenReused(AuthError):
 class EmailAlreadyExists(AuthError):
     """`AuthService.register` was called with an email that already has
     an account. Maps to `ErrorCode.CONFLICT` (409)."""
+
+
+class InvalidSingleUseToken(AuthError):
+    """A single-use token (email-verification or password-reset) presented
+    to `SingleUseTokenService.consume` could not be accepted. Maps to
+    `ErrorCode.UNAUTHENTICATED` (401).
+
+    Deliberately ONE exception for every rejection reason -- unknown hash
+    (never issued, or issued by a different environment), already
+    `used_at` (single-use token presented a second time), expired
+    (`expires_at` has passed), and purpose mismatch (a `"verify"` token
+    presented to a reset flow, or vice versa) all collapse to this SAME
+    type with the SAME generic message. This mirrors `InvalidCredentials`
+    and the `InvalidToken`/`TokenReused` pairing above: the wire response
+    for "this link is bad" must not let a caller distinguish "already
+    used" (which would confirm the token was once valid and consumed --
+    useful to an attacker who intercepted an old email) from "expired"
+    from "never existed". A server-side audit event (via `AuthEventSink`,
+    emitted by `AccountService`) is where the real reason is recorded for
+    a human to investigate, exactly as `TokenReused`'s own docstring
+    describes for refresh-token reuse."""
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +531,21 @@ class RefreshTokenStore(Protocol):
 
     async def revoke_family(self, family_id: str) -> None: ...
 
+    async def revoke_all_for_user(self, user_id: str) -> None:
+        """Revokes EVERY refresh-token family belonging to `user_id` --
+        not just one family (`revoke_family` above), all of them, across
+        every device/session the user is currently logged in on. Added
+        for `AccountService.reset_password`: changing a password after a
+        reset must kill every existing session, since the old password
+        (and whatever refresh tokens were minted while it was live) can no
+        longer be trusted to have been the only thing protecting the
+        account -- this is the same "kill everything, force a fresh
+        login" posture `AuthService.refresh`'s reuse-detection step 4
+        takes for a single family, generalized to all of them. Same
+        durable-commit contract as `add`/`mark_used`/`revoke_family`
+        above."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # User store: Protocol + record
@@ -526,6 +564,15 @@ class UserRecord:
     email: str
     password_hash: str
     roles: tuple[str, ...]
+    email_verified: bool = False
+    """Whether `AccountService.verify_email` has ever successfully consumed
+    a `"verify"` single-use token for this user. Defaults to `False` so
+    every existing call site that constructs a `UserRecord` positionally
+    or with just the original four fields keeps working unchanged --
+    added for `AuthService.login`'s optional `require_verification` gate
+    (see that method's docstring) and set by `UserStore.
+    mark_email_verified` below, never assigned to directly by
+    `AuthService`/`AccountService`."""
 
 
 class UserStore(Protocol):
@@ -538,6 +585,400 @@ class UserStore(Protocol):
     async def get_by_id(self, id: str) -> UserRecord | None: ...
 
     async def create(self, email: str, password_hash: str, roles: Sequence[str]) -> UserRecord: ...
+
+    async def mark_email_verified(self, user_id: str, at: datetime) -> None:
+        """Sets `UserRecord.email_verified` to `True` for `user_id` (and,
+        typically, records `at` as a `verified_at` timestamp in the
+        adapter's own schema, even though that timestamp isn't part of
+        `UserRecord` itself). Called by `AccountService.verify_email`
+        after a `"verify"` single-use token consumes successfully -- never
+        called directly by `AuthService`."""
+        ...
+
+    async def set_password_hash(self, user_id: str, new_hash: str) -> None:
+        """Overwrites `user_id`'s stored password hash with `new_hash` (an
+        Argon2id hash already produced by `PasswordService.hash` -- this
+        method never hashes anything itself, matching `UserStore.create`'s
+        own contract of receiving an already-hashed value). Called by
+        `AccountService.reset_password`; the plaintext new password is
+        never passed to this method or persisted."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Email seam
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EmailMessage:
+    """A plain-text (never HTML -- no templating engine or injection
+    surface to worry about here) email, as `EmailSender.send` receives
+    it. `AccountService` is the only thing in this module that builds
+    one -- it is the sole caller of `EmailSender.send`."""
+
+    to: str
+    subject: str
+    body: str
+
+
+class EmailSender(Protocol):
+    """The email-delivery seam `AccountService` sends verification/reset
+    messages through -- a framework adapter (or a project's own thin
+    wrapper around SES/Postmark/SMTP/whatever) implements this. `async`
+    for the same reason every storage `Protocol` in this module is:
+    `send` almost always crosses a network boundary in a real
+    implementation. This module ships exactly one implementation
+    (`ConsoleEmailSender` below) -- a real one is application/
+    infrastructure code, not part of this framework-neutral core."""
+
+    async def send(self, message: EmailMessage) -> None: ...
+
+
+class ConsoleEmailSender:
+    """**DEV-ONLY.** Logs `message` -- INCLUDING its body, which for
+    `AccountService`'s verify/reset emails contains the raw single-use
+    token -- to a passed-in or module `logging.Logger`, instead of
+    actually delivering it anywhere. Its entire purpose is to surface the
+    token somewhere a developer running the app locally can see it and
+    complete the verify/reset flow by hand, with zero email
+    infrastructure (SMTP credentials, a transactional-email provider
+    account) required to exercise auth locally or in CI.
+
+    This deliberately logs a secret. That does NOT contradict this
+    module's "tokens never appear in logs" posture elsewhere (the
+    `AUDIT` log `AuthEventSink` feeds, and this component's guidance for
+    PRODUCTION logging generally) -- that rule governs logs a real
+    deployment ships to a log aggregator that other people (support,
+    on-call, an attacker who compromises log storage) can read after the
+    fact. This class is not that: it is a **dev-environment stand-in for
+    an email provider**, not a log statement embedded in the normal
+    request-handling path, and it must NEVER be constructed in a
+    production wiring -- a project's own settings/environment branch is
+    what enforces that (see this component's README's "app wiring"
+    note), not anything in this class itself. `AccountService`'s own
+    audit events (via `AuthEventSink`), by contrast, never carry a raw
+    token -- see `AccountService.verify_email`/`request_password_reset`/
+    `reset_password`'s docstrings."""
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger or logging.getLogger("auth.email.console")
+
+    async def send(self, message: EmailMessage) -> None:
+        self._logger.info(
+            "DEV EMAIL to=%s subject=%s\n%s",
+            message.to,
+            message.subject,
+            message.body,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Single-use tokens (email verification, password reset)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SingleUseTokenRecord:
+    """One persisted single-use-token row -- the same hash-at-rest shape
+    as `RefreshRecord` above, and for the identical reason (see
+    `hash_token`'s docstring): `token_hash` is the lookup key, the raw
+    token is never stored. `purpose` (`"verify"` or `"reset"`, though
+    this module does not enumerate the allowed values as a closed set --
+    a project could add its own) scopes a token to exactly the flow it
+    was issued for; `SingleUseTokenService.consume` rejects a token
+    presented for any purpose other than the one it was issued with (see
+    `InvalidSingleUseToken`'s docstring on why that collapses to the same
+    generic exception as every other rejection reason). `used_at` is
+    `None` until `consume` succeeds, at which point it's set and the row
+    is RETAINED -- exactly `RefreshRecord`'s "retain, don't delete"
+    posture, so a second presentation of an already-consumed token is
+    recognized as reuse (`used_at is not None`) rather than simply
+    treated as unknown."""
+
+    token_hash: str
+    user_id: str
+    purpose: str
+    expires_at: datetime
+    used_at: datetime | None
+    created_at: datetime
+
+
+class SingleUseTokenStore(Protocol):
+    """The storage seam `SingleUseTokenService` runs against -- a
+    framework adapter implements this against its own ORM/session,
+    typically one table shared by both `"verify"` and `"reset"` purposes
+    (distinguished by the `purpose` column), though a project could split
+    them into two tables if it prefers.
+
+    Implementations MUST make `add`/`mark_used` durable (committed)
+    before returning -- the SAME durable-commit contract
+    `RefreshTokenStore`'s own docstring documents, and for the identical
+    reason: `SingleUseTokenService.consume` relies on `mark_used` having
+    taken effect before it returns, so a concurrent second presentation
+    of the just-consumed token sees the updated `used_at` and is
+    correctly rejected as reuse rather than racing past this
+    implementation's own write."""
+
+    async def add(self, record: SingleUseTokenRecord) -> None: ...
+
+    async def get_by_hash(self, token_hash: str) -> SingleUseTokenRecord | None: ...
+
+    async def mark_used(self, token_hash: str, used_at: datetime) -> None: ...
+
+
+class SingleUseTokenService:
+    """Mints and consumes single-use tokens for `AccountService`'s
+    verify-email and reset-password flows. `now` is injected the same
+    way `TokenService`'s and `AuthService`'s are (required, no default),
+    so expiry is deterministic under test."""
+
+    def __init__(self, store: SingleUseTokenStore, now: Callable[[], datetime]) -> None:
+        self._store = store
+        self._now = now
+
+    async def issue(self, user_id: str, purpose: str, ttl: timedelta) -> str:
+        """Mints a fresh raw token (`secrets.token_urlsafe(32)` -- 32
+        bytes, ~256 bits of entropy from a CSPRNG, base64url-encoded),
+        hashes it (`hash_token`, the SAME SHA-256-hex scheme
+        `RefreshTokenStore` uses, and for the same reason: this is a
+        high-entropy, module-generated value, not a low-entropy secret a
+        human chose, so a fast cryptographic hash is the right tool, not
+        a slow password KDF), persists a `SingleUseTokenRecord` with
+        `expires_at = now() + ttl`, and returns the RAW token. The raw
+        token is NEVER stored -- only its hash -- so a read-only
+        compromise of this store's rows does not hand out live,
+        directly-usable tokens, exactly `RefreshRecord`'s own posture."""
+        raw = secrets.token_urlsafe(32)
+        current = self._now()
+        record = SingleUseTokenRecord(
+            token_hash=hash_token(raw),
+            user_id=user_id,
+            purpose=purpose,
+            expires_at=current + ttl,
+            used_at=None,
+            created_at=current,
+        )
+        await self._store.add(record)
+        return raw
+
+    async def consume(self, raw: str, purpose: str) -> str:
+        """Hashes `raw` and looks it up. Raises `InvalidSingleUseToken`
+        if: no row matches the hash; the row's `used_at` is already set
+        (reuse); the row's `purpose` does not match the `purpose`
+        argument; or the row is expired (`expires_at <= now()`) -- see
+        `InvalidSingleUseToken`'s own docstring for why all four
+        collapse to the identical exception type and message. On
+        success, marks the row used (`mark_used(token_hash, now())`, so
+        it can never validate again) and returns `record.user_id` -- the
+        principal the caller (`AccountService`) should act on."""
+        token_hash = hash_token(raw)
+        record = await self._store.get_by_hash(token_hash)
+        if record is None:
+            raise InvalidSingleUseToken("This link is invalid or has expired.")
+        if record.used_at is not None:
+            raise InvalidSingleUseToken("This link is invalid or has expired.")
+        if record.purpose != purpose:
+            raise InvalidSingleUseToken("This link is invalid or has expired.")
+        if record.expires_at <= self._now():
+            raise InvalidSingleUseToken("This link is invalid or has expired.")
+        await self._store.mark_used(token_hash, self._now())
+        return record.user_id
+
+
+# ---------------------------------------------------------------------------
+# Per-account lockout
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AttemptRecord:
+    """One account's current failed-login bookkeeping, as `LockoutStore`
+    persists it. `account_key` is typically the user's id (what
+    `AuthService.login` passes below) -- a framework adapter is free to
+    key it some other way (e.g. `f"{user_id}:{client_ip}"`) as long as it
+    is consistent between `is_locked`/`record_failure`/`clear` calls for
+    the same logical account. `failure_count` and `first_failure_at`
+    reset together whenever `LockoutPolicy.record_failure` observes the
+    rolling window has elapsed since `last_failure_at` -- see that
+    method's own docstring. `locked_until` is `None` until
+    `failure_count` first reaches the configured threshold."""
+
+    account_key: str
+    failure_count: int
+    first_failure_at: datetime
+    last_failure_at: datetime
+    locked_until: datetime | None
+
+
+class LockoutStore(Protocol):
+    """Dumb persistence for `AttemptRecord` rows -- ALL of the counting,
+    threshold, and rolling-window logic lives in `LockoutPolicy` below,
+    not here; this `Protocol` only reads and writes whatever
+    `AttemptRecord` `LockoutPolicy` hands it. A framework adapter
+    implements this against its own ORM/session, or even a fast
+    key-value store (Redis) given lockout state has no need for
+    relational structure.
+
+    Unlike `RefreshTokenStore`/`SingleUseTokenStore`, this `Protocol`
+    does NOT document a strict single-transaction durability
+    requirement -- see `LockoutPolicy`'s own docstring for the
+    (deliberate, accepted) relaxation and why it can never compromise an
+    account."""
+
+    async def get(self, account_key: str) -> AttemptRecord | None: ...
+
+    async def upsert(self, record: AttemptRecord) -> None: ...
+
+    async def clear(self, account_key: str) -> None: ...
+
+
+class LockoutPolicy:
+    """Pure counting/threshold logic over `LockoutStore`'s dumb
+    persistence: after `max_failures` consecutive failed logins for one
+    account within a rolling `window`, the account is locked for
+    `lockout_duration`. `now` is injected the same way every other clock
+    in this module is (required, no default) so lockout timing is
+    deterministic under test.
+
+    **Accepted non-atomic relaxation, by design -- contrast with
+    `AuthService.refresh`'s reuse detection.** `record_failure` below
+    does a read (`store.get`), computes the next state in Python, then
+    writes it back (`store.upsert`) -- a read-modify-write with no
+    transactional guarantee that a concurrent call against the SAME
+    `account_key` can't interleave between the read and the write. That
+    is DELIBERATELY not hardened into a single atomic store operation:
+    the refresh-token reuse-detection state machine cannot tolerate this
+    relaxation because a race there can let a stolen token slip past
+    detection entirely (a correctness AND security failure). A lockout
+    race, by contrast, at absolute worst lets an attacker's concurrent
+    guesses land a request or two beyond the configured threshold before
+    the lock takes visible effect -- it can NEVER let a WRONG password
+    succeed (that still requires `PasswordService.verify` to return
+    `True`, which lockout racing has no influence over at all) and can
+    NEVER compromise the account by itself; it only ever delays exactly
+    when the lock becomes effective by a small, bounded amount. Given
+    that ceiling, spending the operational complexity of a single-
+    transaction compare-and-swap store implementation for every project
+    that vendors this component is not worth it for what it would buy."""
+
+    def __init__(
+        self,
+        store: LockoutStore,
+        *,
+        max_failures: int,
+        lockout_duration: timedelta,
+        window: timedelta,
+        now: Callable[[], datetime],
+    ) -> None:
+        self._store = store
+        self._max_failures = max_failures
+        self._lockout_duration = lockout_duration
+        self._window = window
+        self._now = now
+
+    async def is_locked(self, account_key: str) -> bool:
+        """`True` iff `account_key` currently has a `locked_until` in the
+        future. `False` for an account with no record at all, a record
+        that never crossed the threshold, or one whose `locked_until` has
+        already passed -- this method does NOT itself clear an expired
+        lock's bookkeeping (that happens naturally the next time
+        `record_failure` observes the rolling window has elapsed, or via
+        an explicit `clear`); it only reports current lock status."""
+        record = await self._store.get(account_key)
+        if record is None or record.locked_until is None:
+            return False
+        return self._now() < record.locked_until
+
+    async def record_failure(self, account_key: str) -> bool:
+        """Records one more failed login for `account_key` and returns
+        `True` iff THIS failure is the one that just crossed
+        `max_failures` (i.e. the count was below the threshold before
+        this call and is at the threshold now) -- `False` on every other
+        call, including calls before the threshold and calls after an
+        account is already locked. This lets a caller (`AuthService.
+        login`) emit a distinct `auth.lockout.triggered` audit event
+        exactly once per lock, rather than once per failed attempt.
+
+        **Rolling window:** if no record exists yet, or the existing
+        record's `last_failure_at` is older than `window`, the count
+        starts fresh at 1 (as if this were the account's first-ever
+        failure) rather than accumulating onto a stale streak -- a
+        failure from three days ago should not still count towards
+        today's threshold. Otherwise the count increments from the
+        existing record.
+
+        Once `failure_count` reaches `max_failures`, `locked_until` is
+        (re)set to `now() + lockout_duration` on this and every
+        subsequent call that still lands within the same (non-reset)
+        streak -- an account that keeps failing while already locked
+        stays locked at least `lockout_duration` from its MOST RECENT
+        failure, not just its first."""
+        current = self._now()
+        existing = await self._store.get(account_key)
+        reset = existing is None or (current - existing.last_failure_at) > self._window
+        if reset:
+            new_count = 1
+            first_failure_at = current
+        else:
+            new_count = existing.failure_count + 1
+            first_failure_at = existing.first_failure_at
+        just_crossed = new_count == self._max_failures
+        locked_until = current + self._lockout_duration if new_count >= self._max_failures else None
+        await self._store.upsert(
+            AttemptRecord(
+                account_key=account_key,
+                failure_count=new_count,
+                first_failure_at=first_failure_at,
+                last_failure_at=current,
+                locked_until=locked_until,
+            )
+        )
+        return just_crossed
+
+    async def clear(self, account_key: str) -> None:
+        """Clears `account_key`'s failure bookkeeping entirely (via
+        `LockoutStore.clear`) -- called by `AuthService.login` on a
+        successful login, so a legitimate login after some earlier failed
+        attempts (but before ever crossing the threshold) resets the
+        streak, matching the everyday expectation that "you eventually
+        got it right" shouldn't count against a future unrelated string
+        of typos."""
+        await self._store.clear(account_key)
+
+
+# ---------------------------------------------------------------------------
+# Audit seam
+# ---------------------------------------------------------------------------
+
+
+class AuthEventSink(Protocol):
+    """Lets `AuthService`/`AccountService` emit auth events (login
+    success/failure/denial, lockout triggering, email verification,
+    password reset) WITHOUT this module importing the audit-logging
+    component (`templates/components/security/audit-logging/`) --
+    keeping `_core.py`'s "stdlib + PyJWT + argon2-cffi only, zero
+    framework/app import" posture intact. A project wires a thin adapter
+    around this `Protocol` that calls that component's own
+    `audit_event(action, actor=actor, resource=..., outcome=outcome,
+    **extra)` (or an equivalent audit sink), rather than this module
+    depending on it directly.
+
+    `action` is a short verb phrase (`"auth.login"`,
+    `"auth.lockout.triggered"`, `"auth.password.reset_completed"`),
+    `actor` an identifier string (a user id, `"anonymous"` for an
+    unauthenticated caller, or `"user:unknown"` for a password-reset
+    request against an email with no account -- see `AccountService.
+    request_password_reset`'s own docstring on why that path never uses
+    the submitted email as the actor), `outcome` one of `"success"`,
+    `"failure"`, `"denied"` (matching the audit-logging component's own
+    closed set), and `**extra` anything else worth recording. Every
+    caller in this module treats `events` as OPTIONAL (`None` is a
+    valid, no-op default) -- a project that hasn't wired an audit sink
+    yet still gets a fully working `AuthService`/`AccountService`, just
+    without the audit trail."""
+
+    async def emit(self, action: str, *, actor: str, outcome: str, **extra: object) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +994,28 @@ class AuthService:
     rotation state machine's expiry comparison (`refresh`, step 5 below),
     independently of whatever `now` the `TokenService` instance it was
     constructed with also uses; a caller normally passes the SAME
-    callable to both."""
+    callable to both.
+
+    Three OPTIONAL, keyword-only constructor parameters extend `login`
+    (see that method's own docstring for the exact flow) without
+    changing its signature or touching `register`/`refresh`/`logout`/
+    `resolve_access`/`_mint_and_persist` at all -- every one of those
+    stays byte-for-byte what it was before this component grew an email
+    seam, single-use tokens, and lockout:
+
+    - `lockout`: an optional `LockoutPolicy` -- when provided, `login`
+      consults it to reject a locked account (generically, before
+      spending a real Argon2 verify) and to record failures/successes.
+      `None` (the default) reproduces the exact prior behavior: no
+      lockout is ever consulted or recorded.
+    - `require_verification`: when `True`, `login` additionally rejects
+      an otherwise-correct login for a user whose `email_verified` is
+      still `False` -- generically, the same `InvalidCredentials` as
+      every other login failure. `False` (the default) reproduces the
+      exact prior behavior: `email_verified` is never consulted.
+    - `events`: an optional `AuthEventSink` -- when provided, `login`
+      emits `auth.login`/`auth.lockout.triggered` events. `None` (the
+      default) reproduces the exact prior behavior: nothing is emitted."""
 
     def __init__(
         self,
@@ -562,12 +1024,19 @@ class AuthService:
         passwords: PasswordService,
         tokens: TokenService,
         now: Callable[[], datetime],
+        *,
+        lockout: LockoutPolicy | None = None,
+        require_verification: bool = False,
+        events: AuthEventSink | None = None,
     ) -> None:
         self._users = users
         self._refresh_tokens = refresh_tokens
         self._passwords = passwords
         self._tokens = tokens
         self._now = now
+        self._lockout = lockout
+        self._require_verification = require_verification
+        self._events = events
 
     @staticmethod
     def _normalize_email(email: str) -> str:
@@ -599,21 +1068,74 @@ class AuthService:
         refresh token pair in it, persists the refresh token's
         `RefreshRecord`, and returns the pair.
 
-        On failure -- unknown email OR wrong password -- raises
-        `InvalidCredentials` identically either way (see that exception's
-        own docstring on why). The unknown-email path additionally calls
-        `PasswordService.dummy_verify()` before raising, so it costs
-        roughly the same wall-clock time as the wrong-password path
-        (which calls the real `verify()`) -- an attacker timing this
-        endpoint cannot use response latency to tell "no such account"
-        apart from "account exists, password wrong"."""
+        Every failure path -- unknown email, wrong password, a locked
+        account, or (with `require_verification=True`) an unverified
+        email -- raises the SAME `InvalidCredentials`, with the SAME
+        generic message, so a client (or an attacker probing the
+        endpoint) can never distinguish any of these from any other (see
+        `InvalidCredentials`'s own docstring on why that matters for
+        "unknown email" vs "wrong password"; the same logic extends to
+        "locked" and "unverified" here -- revealing that an account
+        exists-but-is-locked, or exists-but-is-unverified, is exactly the
+        kind of account-existence signal this exception has always
+        existed to deny). Every path also spends exactly ONE Argon2id
+        operation (a real `verify()` or a `dummy_verify()`), so response
+        latency carries no timing signal either. In order:
+
+        1. Normalize the email and look up the user.
+        2. **Unknown email** -> `dummy_verify()` (the timing defense --
+           unchanged from before this method grew lockout/verification);
+           emit `auth.login` `outcome="failure"` (`actor="anonymous"`,
+           since there is no user id to attach the event to); raise.
+        3. **User found AND `lockout` is set AND the account is
+           currently locked** -> `dummy_verify()` (uniform timing -- the
+           real password is deliberately never checked for a locked
+           account, so a correct guess against a locked account costs
+           the identical time and yields the identical outcome as a
+           wrong one); emit `auth.login` `outcome="denied"`; raise.
+        4. **Wrong password** -> if `lockout` is set, record the failure
+           (`LockoutPolicy.record_failure`); if that failure JUST crossed
+           the lockout threshold, additionally emit
+           `auth.lockout.triggered`; emit `auth.login`
+           `outcome="failure"`; raise.
+        5. **`require_verification=True` AND the user's `email_verified`
+           is `False`** -> emit `auth.login` `outcome="denied"`; raise.
+           (The one real Argon2 verify already happened in step 4's
+           successful `verify()` call above, so this step spends no
+           additional Argon2 time and stays timing-uniform with every
+           other path.)
+        6. **Success** -> if `lockout` is set, clear its bookkeeping for
+           this account (`LockoutPolicy.clear`); emit `auth.login`
+           `outcome="success"`; mint and persist a new token pair in a
+           brand-new family, exactly as before."""
         normalized = self._normalize_email(email)
         user = await self._users.get_by_email(normalized)
         if user is None:
             self._passwords.dummy_verify()
+            if self._events is not None:
+                await self._events.emit("auth.login", actor="anonymous", outcome="failure")
+            raise InvalidCredentials("Invalid email or password.")
+        if self._lockout is not None and await self._lockout.is_locked(user.id):
+            self._passwords.dummy_verify()
+            if self._events is not None:
+                await self._events.emit("auth.login", actor=user.id, outcome="denied")
             raise InvalidCredentials("Invalid email or password.")
         if not self._passwords.verify(user.password_hash, password):
+            if self._lockout is not None:
+                just_locked = await self._lockout.record_failure(user.id)
+                if just_locked and self._events is not None:
+                    await self._events.emit("auth.lockout.triggered", actor=user.id, outcome="denied")
+            if self._events is not None:
+                await self._events.emit("auth.login", actor=user.id, outcome="failure")
             raise InvalidCredentials("Invalid email or password.")
+        if self._require_verification and not user.email_verified:
+            if self._events is not None:
+                await self._events.emit("auth.login", actor=user.id, outcome="denied")
+            raise InvalidCredentials("Invalid email or password.")
+        if self._lockout is not None:
+            await self._lockout.clear(user.id)
+        if self._events is not None:
+            await self._events.emit("auth.login", actor=user.id, outcome="success")
         family_id = uuid.uuid4().hex
         return await self._mint_and_persist(user, family_id)
 
@@ -747,3 +1269,203 @@ class AuthService:
         )
         await self._refresh_tokens.add(record)
         return TokenPair(access=access, refresh=refresh_token)
+
+
+# ---------------------------------------------------------------------------
+# AccountService: email verification + password reset, composed alongside
+# AuthService (does NOT subclass it)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_email_for_account(email: str) -> str:
+    """The identical normalization `AuthService._normalize_email` applies
+    (strip + lowercase), duplicated here as a free function rather than
+    calling that staticmethod, so `AccountService` has zero coupling to
+    `AuthService`'s internals -- the two are explicitly composed
+    ALONGSIDE each other, not one built on the other (see
+    `AccountService`'s own docstring), and this module's stated
+    contract for `AuthService` is that only `__init__`/`login` change for
+    this stage; this helper keeps that true by never touching
+    `AuthService` at all for `AccountService`'s own normalization need."""
+    return email.strip().lower()
+
+
+class AccountService:
+    """Orchestrates email verification and password reset:
+    `UserStore`, `SingleUseTokenService`, `EmailSender`, `PasswordService`,
+    and `RefreshTokenStore` composed into `request_email_verification`/
+    `verify_email`/`request_password_reset`/`reset_password`. Composed
+    ALONGSIDE `AuthService` -- constructed and used independently, NOT a
+    subclass and NOT required to use `AuthService` at all -- a project
+    wires both against the same underlying stores.
+
+    `now` is injected the same way every other clock in this module is
+    (required, no default). `events` is an optional `AuthEventSink`,
+    exactly like `AuthService`'s own -- `None` is a valid, no-op default.
+
+    `frontend_base_url` (e.g. `"https://app.example.com"`, no trailing
+    slash) is the SPA/site origin `request_email_verification`/
+    `request_password_reset` build a link against: `{frontend_base_url}/
+    verify-email#token=<raw>` and `{frontend_base_url}/reset-password#
+    token=<raw>` respectively. The raw token is placed in the URL
+    FRAGMENT (`#token=...`), never a query string, DELIBERATELY: a
+    fragment is never sent to the server by the browser (it's a
+    client-side-only part of the URL) and is typically excluded from
+    `Referer` headers and most access/proxy logs, whereas a query string
+    routinely ends up in exactly those places -- so a fragment keeps a
+    single-use, highly sensitive token (equivalent to a bearer credential
+    until consumed) out of server logs, proxy logs, and any third-party
+    `Referer` a page on that route might send a request to, purely via
+    where in the URL it's placed. The SPA's own client-side routing reads
+    `window.location.hash` and POSTs the token to the backend directly --
+    this module has no opinion on how; that is app-layer wiring.
+
+    `verify_ttl`/`reset_ttl` default to 24 hours / 1 hour respectively --
+    a verification link tolerates sitting unread in an inbox far longer
+    than a password-reset link should remain valid, since an unconsumed
+    reset link is a more immediately sensitive thing to have floating
+    around (whoever holds it can take over the account, whereas an
+    unconsumed verify link only grants "mark this email verified")."""
+
+    def __init__(
+        self,
+        users: UserStore,
+        tokens: SingleUseTokenService,
+        email: EmailSender,
+        passwords: PasswordService,
+        refresh_tokens: RefreshTokenStore,
+        now: Callable[[], datetime],
+        *,
+        events: AuthEventSink | None = None,
+        frontend_base_url: str,
+        verify_ttl: timedelta = timedelta(hours=24),
+        reset_ttl: timedelta = timedelta(hours=1),
+    ) -> None:
+        self._users = users
+        self._tokens = tokens
+        self._email = email
+        self._passwords = passwords
+        self._refresh_tokens = refresh_tokens
+        self._now = now
+        self._events = events
+        self._frontend_base_url = frontend_base_url.rstrip("/")
+        self._verify_ttl = verify_ttl
+        self._reset_ttl = reset_ttl
+
+    async def request_email_verification(self, user: UserRecord) -> None:
+        """Issues a `"verify"` single-use token (ttl `verify_ttl`, ~24h
+        by default) for `user` and emails a verification link containing
+        it (fragment-encoded -- see this class's own docstring). Emits
+        `auth.email.verify_requested`. Takes a full `UserRecord` (not
+        just an email) since the caller -- typically right after
+        `AuthService.register` succeeds -- already has one; this method
+        never looks a user up itself."""
+        raw = await self._tokens.issue(user.id, "verify", self._verify_ttl)
+        link = f"{self._frontend_base_url}/verify-email#token={raw}"
+        body = (
+            "Verify your email address by opening this link:\n\n"
+            f"{link}\n\n"
+            f"Or enter this code if your client stripped the link: {raw}\n"
+        )
+        await self._email.send(EmailMessage(to=user.email, subject="Verify your email address", body=body))
+        if self._events is not None:
+            await self._events.emit("auth.email.verify_requested", actor=user.id, outcome="success")
+
+    async def verify_email(self, raw_token: str) -> None:
+        """Consumes `raw_token` as a `"verify"` token (`SingleUseTokenService.
+        consume` -- raises `InvalidSingleUseToken` on any of the reasons
+        that method's own docstring lists) and, on success, marks the
+        token's owning user's email verified (`UserStore.
+        mark_email_verified`, timestamped `now()`). Emits
+        `auth.email.verified` on success, `auth.email.verify_failed`
+        (actor `"unknown"` -- an invalid/expired/reused token carries no
+        trustworthy user id) on failure, either way re-raising
+        `InvalidSingleUseToken` unchanged so the caller's wire mapping
+        (401, generic) is untouched by this method existing."""
+        try:
+            user_id = await self._tokens.consume(raw_token, "verify")
+        except InvalidSingleUseToken:
+            if self._events is not None:
+                await self._events.emit("auth.email.verify_failed", actor="unknown", outcome="failure")
+            raise
+        await self._users.mark_email_verified(user_id, self._now())
+        if self._events is not None:
+            await self._events.emit("auth.email.verified", actor=user_id, outcome="success")
+
+    async def request_password_reset(self, email: str) -> None:
+        """Never raises and never reveals whether `email` has an
+        account -- the caller (an HTTP route) always returns 202 either
+        way, exactly the same user-enumeration defense `AuthService.
+        login`'s `InvalidCredentials` applies to login, extended here to
+        the "forgot password" flow (which has historically been an even
+        more common enumeration vector than login itself, since a
+        "no account with that email" message is such a natural thing to
+        want to show).
+
+        **Found:** issues a `"reset"` single-use token (ttl `reset_ttl`,
+        ~1h by default), emails a reset link containing it (fragment-
+        encoded).
+
+        **Not found:** computes a throwaway token
+        (`secrets.token_urlsafe(32)`) and hashes it (`hash_token`) --
+        discarding both immediately, never persisting or sending
+        anything -- so this path spends comparable CPU/allocation cost
+        to the found path's `SingleUseTokenService.issue` (itself a
+        `secrets.token_urlsafe` + `hash_token`), keeping the two paths
+        close in timing even though this method's overall cost is
+        dominated by whatever the caller's own response latency looks
+        like (unlike `AuthService.login`, there's no slow Argon2 op
+        gating either path here, so an exact single-Argon2-op timing
+        match isn't the goal -- the CPU-comparable throwaway op is a
+        best-effort match, not a formal guarantee, since network email
+        delivery latency on the found path already dwarfs anything this
+        method could equalize in Python).
+
+        Either way, emits `auth.password.reset_requested` with
+        `actor=user.id` (found) or `actor="user:unknown"` (not found) --
+        **never the submitted email itself**, in either branch, so the
+        audit trail cannot be grepped for "which email addresses did
+        someone try resetting" even by someone with access to it."""
+        normalized = _normalize_email_for_account(email)
+        user = await self._users.get_by_email(normalized)
+        if user is None:
+            throwaway_raw = secrets.token_urlsafe(32)
+            hash_token(throwaway_raw)  # discarded -- comparable-cost, not persisted/sent
+            if self._events is not None:
+                await self._events.emit("auth.password.reset_requested", actor="user:unknown", outcome="success")
+            return
+        raw = await self._tokens.issue(user.id, "reset", self._reset_ttl)
+        link = f"{self._frontend_base_url}/reset-password#token={raw}"
+        body = (
+            "Reset your password by opening this link:\n\n"
+            f"{link}\n\n"
+            f"Or enter this code if your client stripped the link: {raw}\n"
+        )
+        await self._email.send(EmailMessage(to=user.email, subject="Reset your password", body=body))
+        if self._events is not None:
+            await self._events.emit("auth.password.reset_requested", actor=user.id, outcome="success")
+
+    async def reset_password(self, raw_token: str, new_password: str) -> None:
+        """Consumes `raw_token` as a `"reset"` token, hashes
+        `new_password` (`PasswordService.hash` -- the plaintext is never
+        persisted or passed to `UserStore`, matching `AuthService.
+        register`'s own posture), overwrites the user's stored hash
+        (`UserStore.set_password_hash`), then revokes EVERY refresh-token
+        family the user has (`RefreshTokenStore.revoke_all_for_user`) --
+        killing every existing logged-in session everywhere, since
+        whatever was true about the account's security under the OLD
+        password can no longer be assumed once it's been reset. Emits
+        `auth.password.reset_completed` on success, `auth.password.
+        reset_failed` (actor `"unknown"`) on a bad/expired/reused token,
+        re-raising `InvalidSingleUseToken` unchanged either way."""
+        try:
+            user_id = await self._tokens.consume(raw_token, "reset")
+        except InvalidSingleUseToken:
+            if self._events is not None:
+                await self._events.emit("auth.password.reset_failed", actor="unknown", outcome="failure")
+            raise
+        new_hash = self._passwords.hash(new_password)
+        await self._users.set_password_hash(user_id, new_hash)
+        await self._refresh_tokens.revoke_all_for_user(user_id)
+        if self._events is not None:
+            await self._events.emit("auth.password.reset_completed", actor=user_id, outcome="success")
