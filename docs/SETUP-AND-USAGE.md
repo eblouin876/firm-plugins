@@ -66,7 +66,7 @@ The firm authenticates with a Claude subscription token (OAuth), not an Anthropi
 ### A repo you own → `scaffolding`
 > "Scaffold this repo" / "set up a new project for X"
 
-It detects (or defaults to Python back / TypeScript front), lays down structure and tooling, writes a **lean `CLAUDE.md`** (the thing that keeps every later task cheap), and wires the pipeline: the Claude Action (from the firm's workflow templates — plugin loaded and OAuth auth), CI gates, branch protection requiring CI + a review, and a committed `.claude/settings.json` the cloud/Action agents inherit.
+It detects (or defaults to Python back / TypeScript front), lays down structure and tooling, writes a **lean `CLAUDE.md`** (the thing that keeps every later task cheap), and wires the pipeline: the Claude Action (from the firm's workflow templates — plugin loaded and OAuth auth), CI gates, branch protection requiring CI + a review, and a committed `.claude/settings.json` the cloud/Action agents inherit. Scaffolding now **composes a runnable monorepo** from the starter kit in the same pass — blocks, catalog components, and their doc fragments, not just bare structure — see `docs/STARTER-KIT.md` for the full catalog.
 
 ### A repo you don't own → `onboarding` (guest mode)
 > "Onboard this client repo without touching it"
@@ -112,7 +112,7 @@ References are **per-library and version-aware**, loaded only when that library 
 **Three ways the library grows/stays fresh** (all land as PRs to the plugin repo that *you* review and merge — nothing enters canon silently, and everything is grounded in current official docs, never recall):
 - **Onboarding** inventories a repo's significant dependencies and generates any missing references in a batch.
 - **Build-time** fills a gap on the spot if a skill meets a library with no reference.
-- **The weekly freshness audit** compares each reference's `versions-covered` / `last-verified` header against the library's current release and flags stale ones in a tracking issue.
+- **The weekly freshness audit** compares each reference's `versions-covered` / `last-verified` header against the library's current release and flags stale ones in a tracking issue. Its remit now extends past references to the whole starter kit — template blocks/components, feature recipes, the compatibility matrix, and doc-fragment drift (`just docs-check`) — so staleness anywhere in the kit is caught the same way. See `docs/STARTER-KIT.md` ("How it stays fresh") for the full breakdown.
 
 ---
 
@@ -205,4 +205,4 @@ Commit a `.claude/settings.json` (which *does* carry into cloud sessions, unlike
 ## What's not done yet
 
 - **Testing pass:** each skill should get the skill-creator trigger-eval in Claude Code before you rely on it heavily, and the `${CLAUDE_PLUGIN_ROOT}/shared/...` reference paths should be confirmed to resolve once the plugin is installed (fallback: copy shared files into each skill's folder).
-- The `release.yml` semver logic and `freshness-audit.yml` prompt are solid v1s to refine in practice.
+- The `release.yml` semver logic is a solid v1 to refine in practice. The `freshness-audit.yml` prompt's extension from references-only to the whole starter kit (templates, recipes, the matrix, doc drift — see `docs/STARTER-KIT.md`) lands this stage, closing out that part of the v1 gap.

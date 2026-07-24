@@ -51,7 +51,7 @@ firm-plugins/
         ├── claude-review.reusable.yml       # reusable (workflow_call): the review Action (incl. @claude/@owner routing), called by each repo's claude-review.yml stub
         ├── validate.yml                     # runs the validator on every push/PR (merge gate)
         ├── release.yml                      # semver bump + exact tag + moving Action-contract tag (@v1) on merged PR
-        ├── freshness-audit.yml              # weekly: existing references gone stale → tracking issue
+        ├── freshness-audit.yml              # weekly: references, templates/components, recipes, the matrix, and doc drift gone stale → tracking issue
         └── coverage-audit.yml               # weekly: fleet libraries with no reference → PR (reads .github/fleet-repos.txt)
 ```
 
@@ -87,6 +87,8 @@ Two further artifact types extend the library into runnable starter code, alongs
 - **Feature recipes** (`references/recipes/<name>.md`) — portable how-tos that wire an already-authored block/component into one feature (Stripe checkout, S3 uploads, an auth provider) without inventing new infrastructure — see `references/recipes/_RECIPE-TEMPLATE.md`. Authored via the `recipe-author` skill.
 
 Both carry the same kind of metadata header as a reference (`last-verified`, `provenance`, plus their own fields — `needs`/`exposes`/`versions-pinned-to` for a block, `applies-to` for a recipe) and pin to `references/compatibility-matrix.md`, the keystone pinned version set every block/component is built against. Both must clear **four acceptance bars** before they ship — composition-contract present, documented, version-pinned, secure-by-default (per `references/security/secure-baseline.md`) — enforced by their authoring skill, not left to review to catch. Documentation is co-located and portable: every block/component/recipe ships a doc fragment that aggregates into a scaffolded project's root README, per `references/authoring/documentation-standard.md`.
+
+`docs/STARTER-KIT.md` is the index of the whole kit — every block, catalog component, recipe, and wiring ref, enumerated with what it materializes to and what it needs/exposes.
 
 ## Releases (semver)
 
