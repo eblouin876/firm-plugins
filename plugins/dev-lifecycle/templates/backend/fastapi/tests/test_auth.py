@@ -260,6 +260,43 @@ def test_duplicate_register_returns_409_conflict_envelope(auth_client: TestClien
     assert body["error"]["message"]
 
 
+def test_reregistering_a_soft_deleted_email_returns_409_not_500(auth_client: TestClient) -> None:
+    """#48, L1 -- regression test for the security fix (see `app/core/
+    security/auth/stores.py:SqlAlchemyUserStore.create`'s own docstring):
+    `get_by_email` is soft-delete-scoped, so a soft-deleted account's email
+    reads as "free" at that lookup, but `users.email`'s DB-level UNIQUE
+    constraint is full-table (by DECISION -- the email stays reserved, not
+    freed for re-registration). Before the fix, re-registering that email
+    hit the constraint's `IntegrityError` uncaught, surfacing as a raw 500
+    AND a weak enumeration oracle (soft-deleted -> 500 vs. active -> 409 vs.
+    free -> 201 were three distinguishable wire signatures). After the fix,
+    it must return the SAME 409 `conflict` envelope the active-duplicate
+    path returns -- byte-identical, no enumeration signal, no 500."""
+    _register(auth_client)
+    asyncio.run(_soft_delete_user_by_email("alice@example.com"))
+
+    soft_deleted_response = auth_client.post(
+        "/auth/register", json={"email": "alice@example.com", "password": "a different password"}
+    )
+    assert soft_deleted_response.status_code == 409
+    soft_deleted_body = soft_deleted_response.json()
+    assert soft_deleted_body["error"]["code"] == "conflict"
+
+    # Byte-identical to the active-duplicate-email 409 (same email, same
+    # request shape -- only the account's soft-delete state differs) -- no
+    # enumeration distinction between "active" and "soft-deleted" is
+    # observable on the wire.
+    active_duplicate_response = auth_client.post(
+        "/auth/register", json={"email": "bob@example.com", "password": "correct horse battery staple"}
+    )
+    assert active_duplicate_response.status_code == 201
+    duplicate_of_active_response = auth_client.post(
+        "/auth/register", json={"email": "bob@example.com", "password": "a different password"}
+    )
+    assert duplicate_of_active_response.status_code == 409
+    assert duplicate_of_active_response.json() == soft_deleted_body
+
+
 # ---------------------------------------------------------------------------
 # bad login -> 401 envelope
 # ---------------------------------------------------------------------------

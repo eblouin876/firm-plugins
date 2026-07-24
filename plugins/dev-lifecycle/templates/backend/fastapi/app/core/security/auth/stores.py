@@ -228,9 +228,46 @@ class SqlAlchemyUserStore:
         return _user_to_record(user) if user is not None else None
 
     async def create(self, email: str, password_hash: str, roles: Sequence[str]) -> UserRecord:
+        """Raises `EmailAlreadyExists` (the SAME exception `AuthService.
+        register`'s own `get_by_email`-then-`create` sequence raises when
+        its prior read finds an active duplicate) if the `INSERT` violates
+        `users.email`'s DB-level UNIQUE constraint.
+
+        SECURITY (#48, L1 -- soft-deleted-email re-registration): that
+        UNIQUE index is full-table, NOT partial on `deleted_at IS NULL` --
+        by DECISION, a soft-deleted account's email stays reserved (letting
+        someone claim a deleted user's identity is a security risk, and the
+        account may still be restorable), so the index is deliberately
+        never narrowed to free it up. But `get_by_email` (this store, above)
+        IS soft-delete-scoped (`User.not_deleted()`), so re-registering a
+        soft-deleted user's email reads as "free" at that lookup, and
+        without this `try/except` the `INSERT` below would raise a raw
+        `IntegrityError` straight through `AuthService.register` to the
+        FastAPI catch-all `Exception` handler -- a 500, AND a weak
+        enumeration oracle (soft-deleted email -> 500, free email -> 201,
+        active-duplicate email -> 409 -- three distinct wire signatures for
+        three states an attacker should not be able to tell apart). Routing
+        the `IntegrityError` here to the SAME `EmailAlreadyExists` the
+        active-duplicate path raises makes the response byte-identical
+        (409 `conflict`) for "active email", "soft-deleted email", and a
+        genuine concurrent duplicate-registration race (this store's own
+        class docstring already documents that race is caught at the DB
+        level -- this is that catch actually being handled instead of left
+        to surface as a 500).
+
+        `rollback()` before raising -- same posture `SqlAlchemyLockoutStore.
+        upsert` already uses after its own `IntegrityError` catch: a failed
+        flush leaves the session's transaction in SQLAlchemy's "pending
+        rollback" state, where any further use of this session (even just
+        letting the request finish) would raise `PendingRollbackError`
+        instead of the intended `EmailAlreadyExists`/409."""
         user = User(email=email, password_hash=password_hash, roles=list(roles))
         self._session.add(user)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            raise EmailAlreadyExists("An account with this email already exists.") from exc
         await self._session.refresh(user)
         return _user_to_record(user)
 

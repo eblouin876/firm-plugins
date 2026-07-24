@@ -64,6 +64,7 @@ from core.security.auth import (
     AccountService,
     AttemptRecord,
     AuthService,
+    EmailAlreadyExists,
     EmailMessage,
     EmailSender,
     LockoutPolicy,
@@ -220,7 +221,55 @@ class DjangoUserStore:
         return _user_to_record(user) if user is not None else None
 
     async def create(self, email: str, password_hash: str, roles: Sequence[str]) -> UserRecord:
-        user = await User.objects.acreate(email=email, password_hash=password_hash, roles=list(roles))
+        """Raises `EmailAlreadyExists` (the SAME exception `AuthService.
+        register`'s own `get_by_email`-then-`create` sequence raises when
+        its prior read finds an active duplicate) if `.acreate()` violates
+        `core.models.User.email`'s DB-level `unique=True` constraint.
+
+        SECURITY (#48, L1 -- soft-deleted-email re-registration): that
+        UNIQUE constraint is full-table, NOT partial on `deleted_at
+        IS NULL` -- by DECISION, a soft-deleted account's email stays
+        reserved (letting someone claim a deleted user's identity is a
+        security risk, and the account may still be restorable), so the
+        constraint is deliberately never narrowed to free it up. But
+        `get_by_email` (this store, above) queries through `User.objects`,
+        which IS soft-delete-scoped (`UserManager.get_queryset`), so
+        re-registering a soft-deleted user's email reads as "free" at that
+        lookup, and without this `try/except` `.acreate()` below would
+        raise a raw `django.db.IntegrityError` straight through
+        `AuthService.register`, through the `async_to_sync` bridge
+        `RegisterView.post` calls it under, to `core.exceptions.
+        exception_handler`'s catch-all `Exception` branch -- a 500, AND a
+        weak enumeration oracle (soft-deleted email -> 500, free email ->
+        201, active-duplicate email -> 409 -- three distinct wire
+        signatures for three states an attacker should not be able to tell
+        apart). Routing the `IntegrityError` here to the SAME
+        `EmailAlreadyExists` the active-duplicate path raises makes the
+        response byte-identical (409 `conflict`) for "active email",
+        "soft-deleted email", and a genuine concurrent duplicate-
+        registration race (this class's own docstring already documents
+        that race is caught at the DB level -- this is that catch actually
+        being handled instead of left to surface as a 500).
+
+        Caught HERE, inside this `async def`, before the exception ever
+        crosses the `async_to_sync` boundary -- `EmailAlreadyExists` is
+        what propagates out to `RegisterView.post` instead, and
+        `async_to_sync` re-raises whatever the wrapped coroutine raised
+        unchanged in the calling (sync view) thread, so `core.exceptions.
+        exception_handler`'s existing `AuthError` branch maps it to 409
+        `conflict` exactly as it already does for the active-duplicate
+        path -- no separate handling needed on the sync side of that
+        bridge. No `rollback()` call needed here (unlike the SQLAlchemy
+        reference's own equivalent fix) -- this block's locked posture is
+        no session/transaction object for this store to hold at all (see
+        this module's own docstring), so there is no failed-transaction
+        state left behind for a subsequent query to trip over the way
+        `SqlAlchemyUserStore.create`'s `AsyncSession` would without its own
+        explicit `rollback()`."""
+        try:
+            user = await User.objects.acreate(email=email, password_hash=password_hash, roles=list(roles))
+        except IntegrityError as exc:
+            raise EmailAlreadyExists("An account with this email already exists.") from exc
         return _user_to_record(user)
 
     async def mark_email_verified(self, user_id: str, at: datetime) -> None:
