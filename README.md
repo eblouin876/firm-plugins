@@ -21,7 +21,7 @@ firm-plugins/
 ├── plugins/dev-lifecycle/
 │   ├── .claude-plugin/plugin.json       # plugin manifest (semver)
 │   ├── skills/<skill>/SKILL.md          # one folder per skill, incl. template-author, recipe-author
-│   ├── assets/workflows/                # thin caller stubs copied into each repo (implement + review) that `uses:` the reusable workflows below, plus epic-checkoff (ticks an epic's box on stage-issue close)
+│   ├── assets/workflows/                # workflows copied into each repo: thin caller stubs (implement + review) that `uses:` the reusable workflows below, epic-checkoff (ticks an epic's box on stage-issue close), and security.yml (the self-contained CI security gate — SAST/secret/dep-CVE/IaC/image scans)
 │   ├── assets/scripts/                  # operator one-shots — retrofit-epic.sh backfills a pre-existing epic so epic-checkoff works on it
 │   ├── assets/pr/                       # shippable templates `scaffolding` copies into project repos, e.g. pull_request_template.md
 │   ├── shared/                          # cross-skill references
@@ -36,10 +36,12 @@ firm-plugins/
 │       ├── frontend/  {react,typescript,tailwind,material-ui,htmx}.md
 │       ├── backend/   {fastapi,sqlalchemy,postgres,pydantic,django,drf,celery,redis,stripe,pandas,websockets,anthropic,slack-bolt}.md
 │       ├── devops/    {cicd,containers,deploy-operate,kubernetes,uv}.md
+│       ├── mobile/    {expo,react-native,navigation,native-modules}.md
 │       ├── testing/ · debugging/ · docs/ · infra/ · review/
 │       ├── security/     {secure-baseline,attack-surfaces,secrets-management,payments-security,data-protection,owasp}.md — the firm security standard every block/recipe inherits
 │       ├── authoring/    {documentation-standard}.md — the co-located-doc-fragment model templates/recipes ship, and its aggregation into a project's root README + CLAUDE.md
 │       ├── recipes/      <name>.md — feature recipes (e.g. stripe-checkout) that wire existing blocks/components into one capability; _RECIPE-TEMPLATE.md is the schema exemplar
+│       ├── wiring/       {api-client-generation,auth-end-to-end,frontend-backend-contract,infra-app,mobile-backend}.md — cross-artifact seams no single block's README fully owns
 │       ├── compatibility-matrix.md      # the keystone pinned version set every template block and component pins to
 │       └── _TEMPLATE.md                 # house format + metadata header
 ├── docs/adr/                            # numbered, immutable Architecture Decision Records (see project-docs.md)

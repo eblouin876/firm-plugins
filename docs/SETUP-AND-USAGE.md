@@ -13,7 +13,7 @@ A Claude Code plugin marketplace (`firm-plugins`) containing one plugin (`dev-li
 - **24 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` / `mobile` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging` / `walkthrough` — plus `coding-session`, the conductor that runs the whole plan → build → review → merge loop for you, and `template-author` / `recipe-author`, the two meta-skills for extending the plugin's own starter kit (below).
 - A **self-extending reference library** of per-library, version-aware docs (React, TypeScript, MUI, Tailwind, HTMX, FastAPI, Pydantic, SQLAlchemy, Postgres, Django, plus testing/devops/security/docs/debugging) — now growing a **starter-kit direction** alongside it: composable template blocks and feature recipes that `template-author`/`recipe-author` add, pinned to a shared compatibility matrix and a standardized security baseline (see the root `README.md`'s "Reference library conventions" for the full model).
 - A **token-efficiency doctrine** every skill follows, a **worker-cadence doctrine** for how an orchestrator watches the subagents it dispatches (backstop cadence, not polling — used by `coding-session`), and a shared **definition-of-done** that is the merge-ready bar.
-- Three automations: **semver release** on merge, a weekly **freshness audit** that flags stale references, and **epic checkoff** — a per-project workflow that ticks an epic's checkbox when a stage/feature issue closes on merge.
+- Four automations: **semver release** on merge, a weekly **freshness audit** that flags stale references (and the rest of the starter kit), a weekly **coverage audit** that PRs references for fleet libraries still undocumented, and **epic checkoff** — a per-project workflow that ticks an epic's checkbox when a stage/feature issue closes on merge.
 
 The spine is GitHub: issues are the task queue, PRs are work-in-review, CI is QA, **merge is yours**.
 
@@ -38,7 +38,7 @@ In Claude Code:
 /plugin install dev-lifecycle@firm-plugins
 ```
 
-Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 21 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
+Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 24 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
 
 > **Cloud sessions are different — see [Keeping cloud sessions current](#keeping-cloud-sessions-current).** The `/plugin` UI toggle and `~/.claude/settings.json` don't carry into Claude Code on the web, so cloud sessions can silently pin an old plugin version.
 
@@ -109,10 +109,11 @@ Once a task is dispatched, it runs server-side (a cloud sandbox or the GitHub Ac
 
 References are **per-library and version-aware**, loaded only when that library is detected — so a task pulls in exactly the docs it needs and nothing more.
 
-**Three ways the library grows/stays fresh** (all land as PRs to the plugin repo that *you* review and merge — nothing enters canon silently, and everything is grounded in current official docs, never recall):
+**Four ways the library grows/stays fresh** (all land as PRs to the plugin repo that *you* review and merge — nothing enters canon silently, and everything is grounded in current official docs, never recall):
 - **Onboarding** inventories a repo's significant dependencies and generates any missing references in a batch.
 - **Build-time** fills a gap on the spot if a skill meets a library with no reference.
 - **The weekly freshness audit** compares each reference's `versions-covered` / `last-verified` header against the library's current release and flags stale ones in a tracking issue. Its remit now extends past references to the whole starter kit — template blocks/components, feature recipes, the compatibility matrix, and doc-fragment drift (`just docs-check`) — so staleness anywhere in the kit is caught the same way. See `docs/STARTER-KIT.md` ("How it stays fresh") for the full breakdown.
+- **The weekly coverage audit** reads `.github/fleet-repos.txt`, inventories each fleet repo's significant dependencies, and PRs a grounded reference for any framework in use across the fleet but not yet documented — the automatic backstop to the build-time path. (Requires a `FLEET_READ_TOKEN` secret with read access to the fleet repos.)
 
 ---
 

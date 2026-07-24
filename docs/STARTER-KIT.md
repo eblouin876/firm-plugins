@@ -113,8 +113,10 @@ Every runnable block wires into the project-root `justfile` (materialized from `
 
 | Target | Does |
 |---|---|
+| `install` | Installs the workspace (`pnpm install`), the entry point for a freshly scaffolded repo |
 | `test` | Runs every workspace package's test script (`pnpm -r --if-present run test`) |
 | `lint` | Lints every workspace package |
+| `typecheck` | Type-checks every workspace package |
 | `dev` | Runs every package's dev script in parallel, plus boots the API's Docker Compose stack if one is scaffolded in |
 | `build` | Builds every workspace package |
 | `deploy [env]` | Delegates to the `infra/aws-fargate` block's deploy script; fails loudly if that block isn't scaffolded in |
