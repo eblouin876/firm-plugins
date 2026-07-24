@@ -16,7 +16,11 @@ this middleware itself rather than configure it via settings):
 1.0), `RATE_LIMIT_TRUSTED_HOPS` (default 0) -- see `_core.py`'s
 `client_ip_key` docstring for what that last one actually gates (0 = ignore
 `X-Forwarded-For`, use the real peer address; an ALB directly in front of
-the app is `RATE_LIMIT_TRUSTED_HOPS = 1`).
+the app is `RATE_LIMIT_TRUSTED_HOPS = 1`). `RATE_LIMIT_EXEMPT_PATHS`
+(default `_DEFAULT_EXEMPT_PATHS` below, `{"/health", "/readyz"}`) follows
+the same settings-then-kwarg resolution -- see `RateLimitMiddleware`'s own
+docstring for why a health/readiness probe must never share a client's
+bucket.
 """
 
 from __future__ import annotations
@@ -27,6 +31,14 @@ from typing import Callable
 import _core
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, JsonResponse
+
+# A readiness/liveness probe must never be gated by the same bucket as
+# ordinary traffic: an edge proxy/load balancer polling `/health` far more
+# often than `capacity` allows would otherwise get 429'd under burst and
+# read that as an outage (see `RateLimitMiddleware`'s own docstring on
+# `exempt_paths`). Matches `fastapi.py`'s `_DEFAULT_EXEMPT_PATHS` exactly --
+# same default set, same "bypasses the bucket entirely" semantics.
+_DEFAULT_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/readyz"})
 
 _default_store: _core.BucketStore | None = None
 
@@ -55,7 +67,17 @@ class RateLimitMiddleware:
     `get_response` is read from `django.conf.settings` by default --
     explicit kwargs (used by this component's tests, and available to a
     project wiring the middleware by hand instead of via `MIDDLEWARE=[...]`)
-    override the settings-derived value when passed."""
+    override the settings-derived value when passed.
+
+    `exempt_paths` (settings key `RATE_LIMIT_EXEMPT_PATHS`, default
+    `_DEFAULT_EXEMPT_PATHS` above, `{"/health", "/readyz"}`) is checked
+    BEFORE the key func runs and BEFORE a token is consumed -- an exempt
+    request bypasses the limiter entirely, never touching the bucket,
+    never counted against any other client's budget either. Pass an
+    explicit `frozenset()` (via kwarg or `RATE_LIMIT_EXEMPT_PATHS` setting)
+    to disable the default exemption (e.g. a project that genuinely wants
+    its health endpoint rate-limited); pass a different set to exempt
+    other paths instead of/in addition to the default two."""
 
     def __init__(
         self,
@@ -66,6 +88,7 @@ class RateLimitMiddleware:
         refill_per_second: float | None = None,
         key_func: Callable[[HttpRequest], str] | None = None,
         trusted_hops: int | None = None,
+        exempt_paths: frozenset[str] | None = None,
     ) -> None:
         self.get_response = get_response
         self.store = store if store is not None else _get_default_store()
@@ -82,8 +105,15 @@ class RateLimitMiddleware:
         self.key_func = key_func or (
             lambda request: _default_key_func(request, trusted_hops=resolved_trusted_hops)
         )
+        self.exempt_paths = (
+            exempt_paths
+            if exempt_paths is not None
+            else frozenset(getattr(settings, "RATE_LIMIT_EXEMPT_PATHS", _DEFAULT_EXEMPT_PATHS))
+        )
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
+        if request.path in self.exempt_paths:
+            return self.get_response(request)
         key = self.key_func(request)
         result = _core.check(
             self.store, key, capacity=self.capacity, refill_per_second=self.refill_per_second

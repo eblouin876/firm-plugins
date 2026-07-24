@@ -1017,12 +1017,12 @@ ceiling allows for ordinary traffic — without this exemption, a burst of
 probe traffic (or probe traffic sharing a bucket with real traffic from the
 same untrusted-proxy IP) could 429 the readiness check itself, reading as
 an outage at the load balancer and pulling a healthy instance out of
-rotation. This is a per-app policy decision documented as DRIFT in that
-file, not a change to the canonical `templates/components/security/
-rate-limiting/` component. **`backend/fastapi`'s `RateLimitMiddleware` has
-the same whole-app-including-`/health` gap and is NOT fixed here** — flagged
-as a cross-track follow-up in this PR's decision log, since fixing it there
-is out of this step's scope (this block only touches `backend/django`).
+rotation. **Issue #42:** this exemption has since been promoted to the
+CANONICAL `templates/components/security/rate-limiting/django.py` (and its
+`fastapi.py` sibling) — it is no longer DRIFT specific to this block, and
+`backend/fastapi`'s `RateLimitMiddleware` now carries the identical
+`/health`/`/readyz` exemption by the same default, closing the cross-track
+gap this section used to flag.
 
 **`RATE_LIMIT_MAX_KEYS`** (default `50000`, env-configurable, Stage 4
 review fix, #27) bounds the in-process `InMemoryBucketStore`'s key

@@ -99,3 +99,63 @@ def test_construction_rejects_zero_refill_rate(django_mod, core_mod):
     store = core_mod.InMemoryBucketStore()
     with pytest.raises(ValueError):
         django_mod.RateLimitMiddleware(_get_response, store=store, capacity=1, refill_per_second=0)
+
+
+# --- Issue #42: /health + /readyz exempt from the middleware by default ----
+
+
+def test_health_and_readyz_never_429_under_burst(django_mod, core_mod):
+    """The regression test for issue #42: capacity=1 means the SECOND
+    request of any kind would normally trip the limiter -- /health and
+    /readyz stay 200 across many more requests than that because they
+    never touch the bucket at all (RateLimitMiddleware.exempt_paths'
+    default)."""
+    store = core_mod.InMemoryBucketStore()
+    middleware = django_mod.RateLimitMiddleware(
+        _get_response, store=store, capacity=1, refill_per_second=0.001
+    )
+    factory = RequestFactory()
+
+    for _ in range(10):
+        assert middleware(factory.get("/health", REMOTE_ADDR="203.0.113.5")).status_code == 200
+    for _ in range(10):
+        assert middleware(factory.get("/readyz", REMOTE_ADDR="203.0.113.5")).status_code == 200
+
+
+def test_non_exempt_route_still_429s_under_the_same_burst(django_mod, core_mod):
+    """No regression to the limiter itself: a normal route sharing the SAME
+    middleware instance (and so the same default exempt_paths) as the test
+    above still gets 429 once its bucket is drained -- only /health and
+    /readyz bypass the limiter, not every route."""
+    store = core_mod.InMemoryBucketStore()
+    middleware = django_mod.RateLimitMiddleware(
+        _get_response, store=store, capacity=1, refill_per_second=0.001
+    )
+    factory = RequestFactory()
+
+    assert middleware(factory.get("/health", REMOTE_ADDR="203.0.113.5")).status_code == 200
+    assert middleware(factory.get("/health", REMOTE_ADDR="203.0.113.5")).status_code == 200  # still exempt
+    assert middleware(factory.get("/items", REMOTE_ADDR="203.0.113.5")).status_code == 200  # first token
+    assert middleware(factory.get("/items", REMOTE_ADDR="203.0.113.5")).status_code == 429  # bucket empty
+
+
+def test_default_exempt_paths_is_health_and_readyz(django_mod):
+    assert django_mod._DEFAULT_EXEMPT_PATHS == frozenset({"/health", "/readyz"})
+
+
+def test_exempt_paths_disableable(django_mod, core_mod):
+    """Passing an explicit empty frozenset opts a project back into rate-
+    limiting its own health endpoint, for the rare project that wants
+    that."""
+    store = core_mod.InMemoryBucketStore()
+    middleware = django_mod.RateLimitMiddleware(
+        _get_response,
+        store=store,
+        capacity=1,
+        refill_per_second=0.001,
+        exempt_paths=frozenset(),
+    )
+    factory = RequestFactory()
+
+    assert middleware(factory.get("/health", REMOTE_ADDR="203.0.113.5")).status_code == 200
+    assert middleware(factory.get("/health", REMOTE_ADDR="203.0.113.5")).status_code == 429

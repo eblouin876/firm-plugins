@@ -10,7 +10,7 @@ needs:
 exposes:
   - BucketStore (Protocol), InMemoryBucketStore, RateLimitResult, check(store, key, *, capacity, refill_per_second, now=None), client_ip_key(remote_addr, forwarded_for, *, trusted_hops=0), validate_refill_rate(refill_per_second) -- in _core.py
   - fastapi.py: make_rate_limit_dependency(store, *, capacity, refill_per_second, key_func=None, trusted_hops=0), RateLimitMiddleware (exempt_paths=None, defaulting to _DEFAULT_EXEMPT_PATHS = {"/health", "/readyz"})
-  - django.py: RateLimitMiddleware (settings-configurable: RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL_PER_SECOND, RATE_LIMIT_TRUSTED_HOPS)
+  - django.py: RateLimitMiddleware (settings-configurable: RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL_PER_SECOND, RATE_LIMIT_TRUSTED_HOPS, RATE_LIMIT_EXEMPT_PATHS -- defaulting to _DEFAULT_EXEMPT_PATHS = {"/health", "/readyz"})
   - its co-located doc fragment: docs/fragment.md
 -->
 
@@ -66,8 +66,9 @@ not an app-layer template block.
   `RateLimitMiddleware` (whole-app; `exempt_paths=None`, defaulting to
   `_DEFAULT_EXEMPT_PATHS = {"/health", "/readyz"})`.
 - `django.py`: `RateLimitMiddleware`, configurable via `RATE_LIMIT_CAPACITY`
-  / `RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` settings or
-  direct constructor kwargs.
+  / `RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` /
+  `RATE_LIMIT_EXEMPT_PATHS` (default `_DEFAULT_EXEMPT_PATHS = {"/health",
+  "/readyz"}`) settings or direct constructor kwargs.
 - Its co-located doc fragment: `docs/fragment.md`.
 
 ## The token bucket
@@ -149,20 +150,26 @@ peer address, so a load balancer polling `/health` under burst can 429
 its own health check and get marked unhealthy — an outage the limiter
 itself caused. Pass `exempt_paths=frozenset()` to opt out of the default
 exemption (a project that genuinely wants its health endpoint
-rate-limited); pass a different set to exempt other paths instead.
+rate-limited); pass a different set to exempt other paths instead. The
+Django middleware below carries the identical exemption, keyed the same
+way — this behavior is canonical to BOTH framework adapters, not a
+per-app addition to either.
 
 ## Django: settings-configurable
 
 Django instantiates a `MIDDLEWARE` entry with only `get_response` — there's
 no way to pass constructor kwargs from `settings.MIDDLEWARE` itself — so
 `RateLimitMiddleware` reads `RATE_LIMIT_CAPACITY` /
-`RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` from
-`django.conf.settings` by default, falling back to `capacity=60`,
-`refill_per_second=1.0`, `trusted_hops=0` if unset. Explicit constructor
-kwargs (used throughout this component's own tests) override the
-settings-derived value when passed, for a project wiring the middleware by
-hand. `refill_per_second` is validated (`validate_refill_rate`) at
-construction time regardless of where it came from.
+`RATE_LIMIT_REFILL_PER_SECOND` / `RATE_LIMIT_TRUSTED_HOPS` /
+`RATE_LIMIT_EXEMPT_PATHS` from `django.conf.settings` by default, falling
+back to `capacity=60`, `refill_per_second=1.0`, `trusted_hops=0`,
+`exempt_paths=_DEFAULT_EXEMPT_PATHS` (`{"/health", "/readyz"}`) if unset.
+Explicit constructor kwargs (used throughout this component's own tests)
+override the settings-derived value when passed, for a project wiring the
+middleware by hand. `refill_per_second` is validated
+(`validate_refill_rate`) at construction time regardless of where it came
+from. `exempt_paths`' checked-before-the-bucket semantics are identical to
+`fastapi.py`'s — see the exemption paragraph above.
 
 ## Testing
 
@@ -187,8 +194,11 @@ being disableable via `exempt_paths=frozenset()`). `tests/test_django.py`
 exercises the middleware via `RequestFactory` the same way, plus the
 XFF-ignored-by-default vs. rightmost-entry-honored-when-`trusted_hops=1`
 behavior (including that a spoofed leftmost entry does not bypass the
-limit) against `REMOTE_ADDR`/`HTTP_X_FORWARDED_FOR`, and the same
-construction-time `refill_per_second<=0` rejection.
+limit) against `REMOTE_ADDR`/`HTTP_X_FORWARDED_FOR`, the same
+construction-time `refill_per_second<=0` rejection, and the same
+`/health`/`/readyz`-never-429s-under-burst / non-exempt-route-still-429s /
+default-exemption-disableable coverage `test_fastapi.py` has, proving the
+two adapters' exemption behavior is identical, not just similarly named.
 
 Run:
 ```

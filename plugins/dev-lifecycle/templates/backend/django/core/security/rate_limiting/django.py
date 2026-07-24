@@ -7,24 +7,22 @@
 # directory" line also dropped `fastapi.py` from its file list (this block
 # never vendors the FastAPI adapter) -- declared here, not silently edited,
 # so the freshness audit doesn't misflag it as an undocumented drop.
-# DRIFT (Stage 4 Step 3 review fix, #27): two THIS-APP-SPECIFIC additions
-# below the canonical component body, both flagged inline where they land:
-# (1) `/health`/`/readyz` are exempt from rate limiting (`_DEFAULT_EXEMPT_
-# PATHS`, `__call__`'s early-return) -- a readiness/liveness probe must
-# never be rate-limited into a false-unhealthy signal at a load balancer
-# that polls it far more often than `RATE_LIMIT_CAPACITY` allows (an edge
-# proxy sitting in front of this app at `RATE_LIMIT_TRUSTED_HOPS=0` would
-# 429 its own health checks under burst, reading as an outage). This is a
-# per-app policy choice, not a general component feature -- the canonical
-# `templates/components/security/rate-limiting/django.py` has no such
-# exemption, and `backend/fastapi`'s `RateLimitMiddleware` still rate-limits
-# its own `/health` too (flagged as a cross-track follow-up in this PR's
-# decision log, not fixed there). (2) `RATE_LIMIT_MAX_KEYS` is threaded into
-# the default store's construction (see `_get_default_store` below) --
-# `_core.InMemoryBucketStore` already supports a `max_keys` bound
-# (`_core.py`'s own docstring); this block just wires a Django setting to
-# it so the per-process key cardinality is bounded by default rather than
-# left at the component's own `None` (unbounded, idle-TTL-only) default.
+# DRIFT (Stage 4 Step 3 review fix, #27): one remaining THIS-APP-SPECIFIC
+# addition below the canonical component body, flagged inline where it
+# lands: `RATE_LIMIT_MAX_KEYS` is threaded into the default store's
+# construction (see `_get_default_store` below) -- `_core.InMemoryBucketStore`
+# already supports a `max_keys` bound (`_core.py`'s own docstring); this
+# block just wires a Django setting to it so the per-process key
+# cardinality is bounded by default rather than left at the component's own
+# `None` (unbounded, idle-TTL-only) default.
+# RESOLVED (issue #42): the `/health`+`/readyz` rate-limit exemption used to
+# be flagged here as a second, THIS-APP-ONLY addition -- it has since been
+# promoted to the canonical component itself (`_DEFAULT_EXEMPT_PATHS`,
+# `exempt_paths`, `__call__`'s early-return all now live in
+# `templates/components/security/rate-limiting/django.py`, matching
+# `fastapi.py`'s identical exemption). The copy below carries it as
+# ordinary canonical body, not drift, and needs no per-app comment of its
+# own anymore.
 
 """Django wiring for the rate-limiting component: a MIDDLEWARE class
 returning 429 with a `Retry-After` header on deny. Canon:
@@ -45,8 +43,11 @@ this middleware itself rather than configure it via settings):
 1.0), `RATE_LIMIT_TRUSTED_HOPS` (default 0) -- see `_core.py`'s
 `client_ip_key` docstring for what that last one actually gates (0 = ignore
 `X-Forwarded-For`, use the real peer address; an ALB directly in front of
-the app is `RATE_LIMIT_TRUSTED_HOPS = 1`). `RATE_LIMIT_MAX_KEYS` (default
-50_000) and the `/health`+`/readyz` exemption are this app's own additions,
+the app is `RATE_LIMIT_TRUSTED_HOPS = 1`). `RATE_LIMIT_EXEMPT_PATHS`
+(default `_DEFAULT_EXEMPT_PATHS` below, `{"/health", "/readyz"}`) follows
+the same settings-then-kwarg resolution -- see `RateLimitMiddleware`'s own
+docstring for why a health/readiness probe must never share a client's
+bucket. `RATE_LIMIT_MAX_KEYS` (default 50_000) is this app's own addition,
 not canonical to the component -- see the DRIFT note above.
 """
 
@@ -66,9 +67,12 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 # worst-case memory under a high-cardinality-client burst.
 _DEFAULT_MAX_KEYS = 50_000
 
-# This app's own default -- not a canonical component constant, see the
-# module DRIFT note above. A readiness/liveness probe must never be gated
-# by the same bucket as ordinary traffic.
+# A readiness/liveness probe must never be gated by the same bucket as
+# ordinary traffic: an edge proxy/load balancer polling `/health` far more
+# often than `capacity` allows would otherwise get 429'd under burst and
+# read that as an outage (see `RateLimitMiddleware`'s own docstring on
+# `exempt_paths`). Matches `fastapi.py`'s `_DEFAULT_EXEMPT_PATHS` exactly --
+# same default set, same "bypasses the bucket entirely" semantics.
 _DEFAULT_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/readyz"})
 
 _default_store: _core.BucketStore | None = None
@@ -102,7 +106,17 @@ class RateLimitMiddleware:
     `get_response` is read from `django.conf.settings` by default --
     explicit kwargs (used by this component's tests, and available to a
     project wiring the middleware by hand instead of via `MIDDLEWARE=[...]`)
-    override the settings-derived value when passed."""
+    override the settings-derived value when passed.
+
+    `exempt_paths` (settings key `RATE_LIMIT_EXEMPT_PATHS`, default
+    `_DEFAULT_EXEMPT_PATHS` above, `{"/health", "/readyz"}`) is checked
+    BEFORE the key func runs and BEFORE a token is consumed -- an exempt
+    request bypasses the limiter entirely, never touching the bucket,
+    never counted against any other client's budget either. Pass an
+    explicit `frozenset()` (via kwarg or `RATE_LIMIT_EXEMPT_PATHS` setting)
+    to disable the default exemption (e.g. a project that genuinely wants
+    its health endpoint rate-limited); pass a different set to exempt
+    other paths instead of/in addition to the default two."""
 
     def __init__(
         self,
@@ -132,10 +146,10 @@ class RateLimitMiddleware:
         self.key_func = key_func or (
             lambda request: _default_key_func(request, trusted_hops=resolved_trusted_hops)
         )
-        # `/health`/`/readyz` (this app's readiness/liveness probes) are
-        # never rate-limited -- see the module DRIFT note above for why.
         self.exempt_paths = (
-            exempt_paths if exempt_paths is not None else frozenset(getattr(settings, "RATE_LIMIT_EXEMPT_PATHS", _DEFAULT_EXEMPT_PATHS))
+            exempt_paths
+            if exempt_paths is not None
+            else frozenset(getattr(settings, "RATE_LIMIT_EXEMPT_PATHS", _DEFAULT_EXEMPT_PATHS))
         )
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
