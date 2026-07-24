@@ -9,6 +9,7 @@ this module only owns the shape."""
 from __future__ import annotations
 
 import json
+import re
 
 from rest_framework import serializers
 
@@ -484,6 +485,67 @@ class CommentOutSerializer(serializers.Serializer):
     body = serializers.CharField(allow_blank=True)
     status = serializers.ChoiceField(choices=_COMMENT_STATUS_CHOICES)
     created_at = serializers.DateTimeField()
+
+
+# ---------------------------------------------------------------------------
+# Stage 13d public read (issue #54, the deferred acceptance item) -- the
+# PUBLIC, unauthenticated blog read surface. Matches `app/schemas/blog.py`'s
+# `PublicBlogPostSummaryOut`/`PublicBlogPostOut`/`derive_excerpt` field-for-
+# field / byte-for-byte -- see that module's own docstrings for the full
+# "no status, no body_json, ever" rationale this mirrors.
+# ---------------------------------------------------------------------------
+
+_EXCERPT_MAX_CHARS = 200
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+_SPACE_BEFORE_PUNCTUATION_RE = re.compile(r"\s+([,.;:!?])")
+
+
+def derive_excerpt(body_html: str) -> str | None:
+    """Byte-identical algorithm to `app/schemas/blog.py`'s `derive_excerpt`
+    -- see that function's own docstring for the full rationale (strip
+    tags, collapse whitespace, tidy space-before-punctuation, truncate at
+    a word boundary with a trailing `"…"`, `None` -- never `""` -- for an
+    all-markup body)."""
+    text = _WHITESPACE_RE.sub(" ", _HTML_TAG_RE.sub(" ", body_html)).strip()
+    text = _SPACE_BEFORE_PUNCTUATION_RE.sub(r"\1", text)
+    if not text:
+        return None
+    if len(text) <= _EXCERPT_MAX_CHARS:
+        return text
+    truncated = text[:_EXCERPT_MAX_CHARS].rsplit(" ", 1)[0].rstrip()
+    if not truncated:
+        truncated = text[:_EXCERPT_MAX_CHARS].rstrip()
+    return truncated + "…"
+
+
+class PublicBlogPostSummaryOutSerializer(serializers.Serializer):
+    """The PUBLIC list shape (`GET /blog/posts`) -- matches `app/schemas/
+    blog.py`'s `PublicBlogPostSummaryOut` exactly: NO `status`, NO body
+    fields, `excerpt` computed by `derive_excerpt` above (never a model
+    column -- see `core/views.py`'s public blog views for where this
+    serializer is actually constructed, always from a plain `dict`, never
+    `PublicBlogPostSummaryOutSerializer(post)` straight off the ORM row,
+    since `excerpt` has no matching attribute for DRF to read)."""
+
+    id = serializers.UUIDField()
+    title = serializers.CharField()
+    slug = serializers.CharField()
+    excerpt = serializers.CharField(allow_null=True)
+    published_at = serializers.DateTimeField()
+    author_id = serializers.UUIDField()
+    created_at = serializers.DateTimeField()
+
+
+class PublicBlogPostOutSerializer(PublicBlogPostSummaryOutSerializer):
+    """The PUBLIC single-post shape (`GET /blog/posts/{slug}`) --
+    `PublicBlogPostSummaryOutSerializer` plus `body_html` ONLY -- matches
+    `app/schemas/blog.py`'s `PublicBlogPostOut` exactly. **`body_json` is
+    NEVER a field here, full stop** -- see that schema's own docstring for
+    why rendering it publicly would reopen the stored-XSS hole `core/
+    services/sanitize.py:sanitize_blog_html()` exists to close."""
+
+    body_html = serializers.CharField(allow_blank=True)
 
 
 # ---------------------------------------------------------------------------

@@ -2308,6 +2308,116 @@
         }
       }
     },
+    "/blog/posts": {
+      "get": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "List blog posts (public)",
+        "description": "Newest-first by `published_at` \u2014 NOT `AsyncRepository.list()`\n(which has no ordering hook of its own; see `app/core/db/repository.py`'s\nown docstring), so this builds the `select()` directly and hands it to\n`paginate_select()` (the same internal helper `AsyncRepository.list()`\nitself delegates to) rather than reusing that wrapper. `?page=`/`?size=`\nbounds are `PageParams`'s own (`app/core/db/schema.py`: `size` capped at\n200) \u2014 no separate, looser cap for this public surface.",
+        "operationId": "list_public_blog_posts_blog_posts_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PublicBlogPostSummaryOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/blog/posts/{slug}": {
+      "get": {
+        "tags": [
+          "blog"
+        ],
+        "summary": "Get blog post (public)",
+        "description": "A draft or soft-deleted post's slug 404s IDENTICALLY to an unknown\nslug \u2014 see this module's own docstring, \"no draft-existence oracle\".\n`slug` is a plain `str` path param (not further validated against\n`SLUG_PATTERN` here) \u2014 an invalid-shaped slug simply can never match\nany row's `slug` column, so it falls straight through to the same 404\na well-shaped-but-unknown slug gets; a 422 here would itself leak one\nmore bit of information (shape-valid vs shape-invalid) a public 404\nshould not distinguish.",
+        "operationId": "get_public_blog_post_blog_posts__slug__get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicBlogPostOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blog post not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/flags": {
       "get": {
         "tags": [
@@ -3642,6 +3752,47 @@
         ],
         "title": "Page[ItemOut]"
       },
+      "Page_PublicBlogPostSummaryOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PublicBlogPostSummaryOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Size"
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "pages"
+        ],
+        "title": "Page[PublicBlogPostSummaryOut]"
+      },
       "PrincipalOut": {
         "properties": {
           "id": {
@@ -3661,6 +3812,123 @@
           "email"
         ],
         "title": "PrincipalOut"
+      },
+      "PublicBlogPostOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excerpt"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Author Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "body_html": {
+            "type": "string",
+            "title": "Body Html"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "slug",
+          "excerpt",
+          "published_at",
+          "author_id",
+          "created_at",
+          "body_html"
+        ],
+        "title": "PublicBlogPostOut",
+        "description": "The PUBLIC single-post shape (`GET /blog/posts/{slug}`) \u2014\n`PublicBlogPostSummaryOut` plus the ONE body field a public reader may\never see: `body_html`, always the value `app/services/sanitize.py:\nsanitize_blog_html()` already cleaned at write time (this schema\nre-sanitizes nothing \u2014 see that module's own \"only body_html is ever\nrendered\" render rule). **`body_json` is NEVER a field on this schema,\nfull stop** \u2014 it is the opaque ProseMirror editor source `BlogPostOut`\n(the ADMIN single-post shape) carries for the authenticated editor to\nreload, and rendering it publicly (e.g. via some future ProseMirror-\nto-HTML path that bypasses the sanitizer) would reopen the exact\nstored-XSS hole `sanitize_blog_html()` exists to close \u2014 see that\nmodule's own docstring, \"Any future public-facing blog render endpoint\nMUST render `body_html` and MUST NOT render `body_json`.\""
+      },
+      "PublicBlogPostSummaryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excerpt"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Author Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "slug",
+          "excerpt",
+          "published_at",
+          "author_id",
+          "created_at"
+        ],
+        "title": "PublicBlogPostSummaryOut",
+        "description": "The PUBLIC list shape (`GET /blog/posts`, `app/api/routers/\nblog_public.py`) \u2014 deliberately NOT `BlogPostSummaryOut` (the admin\nlist shape) reused/subclassed: this schema omits `status` entirely (a\npublic reader only ever sees published posts, so the field would be a\nconstant, content-free `\"published\"` on every row \u2014 and, more to the\npoint, echoing status back at all invites a future caller to build UI\nbranching on a value this surface has no business exposing, see this\nstage's own security posture: \"no internal status transitions\") and\nADDS `excerpt` (below), which the admin shape has no need for. NO\n`body_json`, NO `body_html` \u2014 matching the plan's own contract table\n(\"Summary = id, title, slug, excerpt-or-nothing, published_at,\nauthor_id, created_at \u2014 NO body\"). `author_id` only (never an email or\nany other PII) \u2014 same posture `BlogPostSummaryOut` already documents,\njust restated here since this schema doesn't inherit its docstring."
       },
       "ReadinessStatus": {
         "properties": {

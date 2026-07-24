@@ -33,6 +33,8 @@ from core.views import (
     LoginView,
     LogoutView,
     MeView,
+    PublicBlogPostDetailView,
+    PublicBlogPostListView,
     ReadinessCheckView,
     RefreshView,
     RegisterView,
@@ -112,6 +114,18 @@ urlpatterns = [
         AdminBlogCommentDeleteView.as_view(),
         name="admin-blog-comment-delete",
     ),
+    # Stage 13d public read (issue #54, the deferred acceptance item) -- the
+    # PUBLIC, unauthenticated blog read surface. See core/views.py's own
+    # module-level comment for the full design (published + not
+    # soft-deleted + not-yet-`published_at` only, never `body_json`).
+    # `<str:slug>`, a plain string segment (not Django's own converter),
+    # matching every other id-shaped path param in this file's own
+    # convention -- unlike `<str:post_id>`, a slug is never coerced to a
+    # UUID at all (`core/views.py`'s `PublicBlogPostDetailView.get` looks
+    # it up directly), so there's no malformed-id case to special-case
+    # here the way `_get_admin_blog_post` handles one.
+    path("blog/posts", PublicBlogPostListView.as_view(), name="public-blog-post-list"),
+    path("blog/posts/<str:slug>", PublicBlogPostDetailView.as_view(), name="public-blog-post-detail"),
     # Stage 13c: the moderation admin surface -- see core/views.py's own
     # module-level comment for the full design. `<str:flag_id>`, same
     # malformed-id-stays-enveloped rationale as `admin/users/<str:user_id>`

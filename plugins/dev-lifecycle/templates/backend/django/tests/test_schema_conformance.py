@@ -425,6 +425,19 @@ _KNOWN_DIVERGENCES: dict[tuple[tuple[str, str], str], str] = {
 # contract exactly -- proven by the strict comparison above, which now
 # includes every one of them. EMPTY, not deleted -- same posture every
 # prior stage's own comment (above) already documents.
+#
+# Stage 13c -> Stage 13d public read (issue #54, the deferred acceptance
+# item): backend/fastapi implemented the PUBLIC, unauthenticated blog read
+# surface -- `GET /blog/posts`, `GET /blog/posts/{slug}`
+# (`app/api/routers/blog_public.py`) -- and extended the frozen contract
+# with these two new operations. Django parity (`core/serializers.py`'s
+# `PublicBlogPostSummaryOutSerializer`/`PublicBlogPostOutSerializer`/
+# `derive_excerpt`, `core/views.py`'s new `PublicBlogPostListView`/
+# `PublicBlogPostDetailView`, `core/urls.py`'s new routes) landed in a
+# follow-up commit in the same PR with a wire-shape that matches the
+# frozen contract exactly -- proven by the strict comparison above, which
+# now includes both. EMPTY, not deleted -- same posture every prior
+# stage's own comment (above) already documents.
 _PENDING_PARITY_OPS: set[tuple[str, str]] = set()
 
 

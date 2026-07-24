@@ -83,7 +83,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from app.api.routers import admin, auth, blog, health, items, moderation
+from app.api.routers import admin, auth, blog, blog_public, health, items, moderation
 from app.core.config import Settings, get_settings
 from app.core.db import configure_engine
 from app.core.errors import AppError, ErrorBody, ErrorCode, ErrorDetail, ErrorEnvelope
@@ -397,6 +397,14 @@ def create_app(*, lifespan_ctx=lifespan, settings: Settings | None = None) -> Fa
     # it must be registered after admin.router is constructed (import-time
     # dependency, not a request-time ordering concern).
     app.include_router(blog.router)
+    # Stage 13d (issue #54): the PUBLIC, unauthenticated blog read surface --
+    # see app/api/routers/blog_public.py's own module docstring for the
+    # visibility rule and why it deliberately does NOT reuse admin.py's
+    # require_admin_rate_limit. No import-order dependency on admin.router
+    # the way blog.router/moderation.router have (this module imports
+    # nothing from admin.py) -- registered here, right after blog.router,
+    # purely to keep every blog-tagged router adjacent in this list.
+    app.include_router(blog_public.router)
     # Stage 13c: the moderation admin surface -- see app/api/routers/
     # moderation.py's own module docstring; reuses admin.py's
     # require_admin_rate_limit/ban_user/_ensure_not_self, so it must be

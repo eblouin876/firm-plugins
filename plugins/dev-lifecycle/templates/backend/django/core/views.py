@@ -40,6 +40,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection, transaction
 from django.db.utils import Error as DjangoDBError
+from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import generics, status, viewsets
@@ -93,6 +94,8 @@ from core.serializers import (
     ItemUpdateSerializer,
     LoginRequestSerializer,
     PrincipalOutSerializer,
+    PublicBlogPostOutSerializer,
+    PublicBlogPostSummaryOutSerializer,
     ReadinessStatusSerializer,
     RefreshRequestSerializer,
     RegisterRequestSerializer,
@@ -100,6 +103,7 @@ from core.serializers import (
     ResetPasswordRequestSerializer,
     TokenResponseSerializer,
     VerifyEmailRequestSerializer,
+    derive_excerpt,
 )
 from core.services.sanitize import sanitize_blog_html
 
@@ -1747,6 +1751,125 @@ class AdminBlogCommentDeleteView(APIView):
             outcome="success",
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Stage 13d public read (issue #54, the deferred acceptance item) -- the
+# PUBLIC, unauthenticated blog read surface. The DRF counterpart to
+# `app/api/routers/blog_public.py` -- see that module's own docstring for
+# the full design this mirrors handler-for-handler: published + not
+# soft-deleted + `published_at <= now()` only, NEVER `body_json`, a draft/
+# soft-deleted post's slug 404s identically to an unknown one, the general
+# per-IP rate-limiting middleware only (no `enforce_admin_rate_limit`
+# call -- this is deliberately NOT the privileged admin bucket).
+# ---------------------------------------------------------------------------
+
+_PUBLIC_BLOG_POST_NOT_FOUND_RESPONSE = {404: ErrorEnvelopeSerializer}
+
+
+def _public_blog_post_queryset():
+    """The ONE visibility predicate both public blog views share --
+    byte-identical filters to `app/api/routers/blog_public.py`'s own
+    `_visible_filters()` (published, not soft-deleted -- via `BlogPost.
+    objects`'s own soft-delete-scoped default manager, `core/models.py` --
+    and `published_at` set and not in the future). A fresh queryset per
+    call (not a class-level `queryset = ...` constant) since `published_at
+    __lte=timezone.now()` has to be evaluated at REQUEST time, not once at
+    class-definition/import time."""
+    return BlogPost.objects.filter(
+        status="published",
+        published_at__isnull=False,
+        published_at__lte=timezone.now(),
+    ).order_by("-published_at", "-id")
+
+
+def _to_public_summary_dict(post: BlogPost) -> dict:
+    """Explicit field-by-field mapping, NOT
+    `PublicBlogPostSummaryOutSerializer(post)` -- `excerpt` (`core/
+    serializers.py`'s `derive_excerpt`) has no matching `BlogPost`
+    attribute for DRF to read off the ORM row directly, same reason
+    `app/api/routers/blog_public.py`'s own `_to_public_summary_out`
+    constructs its schema by hand rather than via `from_attributes`."""
+    return {
+        "id": post.id,
+        "title": post.title,
+        "slug": post.slug,
+        "excerpt": derive_excerpt(post.body_html),
+        "published_at": post.published_at,
+        "author_id": post.author_id,
+        "created_at": post.created_at,
+    }
+
+
+class PublicBlogPostListView(generics.ListAPIView):
+    """`GET /blog/posts` -- the DRF counterpart to `app/api/routers/
+    blog_public.py`'s `list_public_blog_posts`. Newest-first by
+    `published_at` (`_public_blog_post_queryset`'s own `.order_by(
+    "-published_at", "-id")` -- `-id` as a stable tiebreaker for two posts
+    published at the identical instant, same "deterministic pagination"
+    rationale `ItemViewSet.queryset`'s own comment documents).
+
+    `list()` is fully overridden (not left to `ListModelMixin`'s default),
+    the SAME reason `_to_public_summary_dict`'s own docstring gives: this
+    serializer's `excerpt` field has no ORM attribute of its own to read.
+    Paginated via the SAME `ContractPageNumberPagination`
+    (`DEFAULT_PAGINATION_CLASS`, `config/settings.py`) every other list
+    endpoint in this block uses -- no separate, looser `?size=` cap for
+    this public surface."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+    serializer_class = PublicBlogPostSummaryOutSerializer
+
+    def get_queryset(self):
+        return _public_blog_post_queryset()
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        rows = page if page is not None else queryset
+        serializer = self.get_serializer([_to_public_summary_dict(post) for post in rows], many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+    @extend_schema(
+        operation_id="list_public_blog_posts_blog_posts_get",
+        tags=["blog"],
+        responses={200: PublicBlogPostSummaryOutSerializer, **_BLOG_VALIDATION_RESPONSE},
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class PublicBlogPostDetailView(APIView):
+    """`GET /blog/posts/{slug}` -- the DRF counterpart to `app/api/routers/
+    blog_public.py`'s `get_public_blog_post`. A draft or soft-deleted
+    post's slug 404s IDENTICALLY to an unknown slug (`_public_blog_post_
+    queryset()` already excludes both from the lookup -- there is no
+    separate "found but hidden" branch to accidentally leak a different
+    message from) -- see that FastAPI view's own docstring, "no
+    draft-existence oracle"."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(
+        operation_id="get_public_blog_post_blog_posts__slug__get",
+        tags=["blog"],
+        responses={
+            200: PublicBlogPostOutSerializer,
+            **_PUBLIC_BLOG_POST_NOT_FOUND_RESPONSE,
+            **_BLOG_VALIDATION_RESPONSE,
+        },
+    )
+    def get(self, request, slug):
+        try:
+            post = _public_blog_post_queryset().get(slug=slug)
+        except BlogPost.DoesNotExist:
+            raise NotFoundError(f"Blog post '{slug}' was not found.") from None
+        data = {**_to_public_summary_dict(post), "body_html": post.body_html}
+        return Response(PublicBlogPostOutSerializer(data).data)
 
 
 # ---------------------------------------------------------------------------
