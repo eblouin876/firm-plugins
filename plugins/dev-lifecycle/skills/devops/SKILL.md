@@ -1,6 +1,6 @@
 ---
 name: "devops"
-description: "Set up and maintain infrastructure, containerization, and CI/CD for a web app — gated deployment, the build/test/deploy pipeline, environment and secrets management, and the operational side (migrations on deploy, observability, rollback). Use this skill WHENEVER the work involves Dockerfiles or Compose, a CI/CD pipeline (GitHub Actions and similar), deployment and hosting, environment/secret configuration, or \"how do I ship this / deploy this / containerize this / set up the pipeline / add a deploy gate\". Default stack is Docker + GitHub Actions, with the deployment target right-sized to the project — including the Goatenheim home beta server over Tailscale. It detects existing infra and conforms before changing anything, and never applies state-mutating cloud actions without showing the plan and getting confirmation."
+description: "Set up and maintain infrastructure, containerization, and CI/CD for a web app — gated deployment, the build/test/deploy pipeline, environment and secrets management, and the operational side (migrations on deploy, observability, rollback). Use this skill WHENEVER the work involves Dockerfiles or Compose, a CI/CD pipeline (GitHub Actions and similar), deployment and hosting, environment/secret configuration, or \"how do I ship this / deploy this / containerize this / set up the pipeline / add a deploy gate\". Default stack is Docker + GitHub Actions, with the deployment target right-sized to the project — including a home beta server over Tailscale. It detects existing infra and conforms before changing anything, and never applies state-mutating cloud actions without showing the plan and getting confirmation."
 ---
 
 # DevOps
@@ -25,7 +25,7 @@ Inspect: containerization (Dockerfiles, Compose, base images), CI/CD (`.github/w
 ### 2. Decide the target (greenfield / open-ended only)
 If infra exists, conform. Otherwise pick the tier and say why:
 - **Local dev:** Docker + Compose — app + Postgres (+ Redis/worker), one command up.
-- **Goatenheim (home beta server):** the default target for personal projects and client previews. Docker on the home box, reachable over **Tailscale**. Deploy by building the image and running it there (Compose or a small deploy step); expose it on the tailnet for you, and to a scoped client via **Tailscale Serve** (tailnet-only) or **Funnel** (authenticated public URL) when they need to see it. Managed Postgres or a persistent volume for data. Great for a beta/staging tier at zero hosting cost.
+- **Home beta server:** the default target for personal projects and client previews. Docker on the home box, reachable over **Tailscale**. Deploy by building the image and running it there (Compose or a small deploy step); expose it on the tailnet for you, and to a scoped client via **Tailscale Serve** (tailnet-only) or **Funnel** (authenticated public URL) when they need to see it. Managed Postgres or a persistent volume for data. Great for a beta/staging tier at zero hosting cost.
 - **Small production** (freelance app, low traffic): a container PaaS (Fly.io, Render, Railway) or a single managed host — build/deploy/secrets/rollback bundled.
 - **Scaling production:** managed container service or Kubernetes, only when requirements justify it.
 - CI (build + test + scan gates) lives in GitHub Actions regardless of target.
@@ -39,7 +39,7 @@ Load the reference for the piece:
 Expectations: dev/prod parity (the image that passed CI is the one that ships); migrations as an explicit ordered deploy step; fail safe with working rollback.
 
 ### 4. Agent-testable beta (when relevant)
-When a cloud pipeline agent needs to smoke-test the deployed beta: a cloud sandbox is **not** on your tailnet, so it can't reach a Tailscale-only URL directly. Either expose the beta via **Tailscale Funnel with authentication** for the agent to hit, or run the smoke tests **on Goatenheim itself as a self-hosted runner** (already on the tailnet). Pick per sensitivity; keep heavier integration testing on Goatenheim.
+When a cloud pipeline agent needs to smoke-test the deployed beta: a cloud sandbox is **not** on your tailnet, so it can't reach a Tailscale-only URL directly. Either expose the beta via **Tailscale Funnel with authentication** for the agent to hit, or run the smoke tests **on the home server itself as a self-hosted runner** (already on the tailnet). Pick per sensitivity; keep heavier integration testing on the home server.
 
 ### 5. Hand off
 Summarize what changed (Dockerfile, compose, workflows, IaC) and how to use it: run locally, what CI gates on, how a deploy is triggered, how to roll back. Call out real-world actions (setting a secret, provisioning) and cost implications. The gate the pipeline enforces is `${CLAUDE_PLUGIN_ROOT}/shared/definition-of-done.md`.
@@ -50,6 +50,6 @@ Summarize what changed (Dockerfile, compose, workflows, IaC) and how to use it: 
 ## What this skill does NOT do
 - Apply infra changes that mutate real cloud resources/state without a shown plan and confirmation.
 - Commit secrets or bake them into images.
-- Reach for Kubernetes when a simpler target (Goatenheim, a PaaS) meets the requirement.
+- Reach for Kubernetes when a simpler target (a home server, a PaaS) meets the requirement.
 - Wire a pipeline that deploys when gates fail.
 - Write the application code or its tests — it runs and ships them.

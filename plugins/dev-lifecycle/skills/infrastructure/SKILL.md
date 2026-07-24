@@ -1,6 +1,6 @@
 ---
 name: "infrastructure"
-description: "Provision and maintain the infrastructure that apps run on — cloud (AWS via IaC), a home/beta server (Goatenheim), or a VPS — and keep it healthy over time: networking (Tailscale), backups, monitoring, updates/patching, TLS, access control, and resilience/auto-recovery. Use this skill WHENEVER the work is about the hosting environment rather than the app itself: \"set up the server\", \"provision AWS for this\", \"configure the home box\", \"set up Tailscale\", \"add backups/monitoring\", \"make sure it comes back after a reboot\", \"why is the host unreachable\", \"harden this infrastructure\". It detects existing infra and conforms, and never mutates real infrastructure without showing a plan and getting confirmation. This is the ops/maintenance counterpart to devops, which ships the app."
+description: "Provision and maintain the infrastructure that apps run on — cloud (AWS via IaC), a home/beta server, or a VPS — and keep it healthy over time: networking (Tailscale), backups, monitoring, updates/patching, TLS, access control, and resilience/auto-recovery. Use this skill WHENEVER the work is about the hosting environment rather than the app itself: \"set up the server\", \"provision AWS for this\", \"configure the home box\", \"set up Tailscale\", \"add backups/monitoring\", \"make sure it comes back after a reboot\", \"why is the host unreachable\", \"harden this infrastructure\". It detects existing infra and conforms, and never mutates real infrastructure without showing a plan and getting confirmation. This is the ops/maintenance counterpart to devops, which ships the app."
 
 ---
 
@@ -12,7 +12,7 @@ Stand up the places apps run, and keep them alive. Where `devops` gets the app *
 
 - **Detect before you change, and treat mutations as dangerous.** Read the existing infra first. Anything that provisions, destroys, or mutates real state gets a **plan/dry-run shown and explicit confirmation** before it's applied — this is where outages and data loss happen. Never commit secrets.
 - **Reproducible, not snowflake.** Cloud infra is defined as code (Terraform/OpenTofu/Pulumi/CDK) in version control; host setup is scripted or documented. No undocumented manual changes that can't be recreated.
-- **Right-size to scale and budget.** A beta/personal service on **Goatenheim** or a small VPS; a PaaS or managed cloud when the workload justifies it; managed data stores over self-hosting anything durable. Don't provision a cloud estate for a side project.
+- **Right-size to scale and budget.** A beta/personal service on **a home server** or a small VPS; a PaaS or managed cloud when the workload justifies it; managed data stores over self-hosting anything durable. Don't provision a cloud estate for a side project.
 - **Resilience is designed in.** Backups with a *tested restore path*, monitoring/alerting on what users feel, and recovery so a host comes back on its own after a reboot or power loss (see `${CLAUDE_PLUGIN_ROOT}/references/infra/home-infra.md`).
 - **Least privilege everywhere.** Cloud IAM, host users, and Tailscale ACLs all scoped to what's needed; no long-lived keys where a role/OIDC works.
 - **Work context-efficiently.** Assess from IaC/config and status commands, not by exploring everything. See `${CLAUDE_PLUGIN_ROOT}/shared/token-efficiency.md`.
@@ -20,12 +20,12 @@ Stand up the places apps run, and keep them alive. Where `devops` gets the app *
 ## Workflow
 
 ### 1. Assess current infrastructure
-What exists: cloud resources and IaC, hosts (Goatenheim/VPS), the tailnet, backups, monitoring, TLS, secrets handling. State findings and what you propose before touching anything.
+What exists: cloud resources and IaC, hosts (home server/VPS), the tailnet, backups, monitoring, TLS, secrets handling. State findings and what you propose before touching anything.
 
 ### 2. Choose / right-size the target
 Load the reference for the target:
 - **Cloud (AWS)** → `${CLAUDE_PLUGIN_ROOT}/references/infra/aws.md`.
-- **Home / beta server (Goatenheim)** → `${CLAUDE_PLUGIN_ROOT}/references/infra/home-infra.md`.
+- **Home / beta server** → `${CLAUDE_PLUGIN_ROOT}/references/infra/home-infra.md`.
 - **Networking / access (Tailscale)** → `${CLAUDE_PLUGIN_ROOT}/references/infra/tailscale.md`.
 For deploying an app onto provisioned infra, hand back to `${CLAUDE_PLUGIN_ROOT}/references/devops/deploy-operate.md`.
 
