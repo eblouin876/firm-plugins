@@ -211,6 +211,25 @@ DATABASES = {
     "default": dj_database_url.config(
         env="DATABASE_URL",
         conn_max_age=600,
+        # #48, L2 -- cheap mitigation for intermittent "connection already
+        # closed" errors under load: with CONN_MAX_AGE=600 (persistent
+        # connections) AND async-ORM writes running in a thread-sensitive
+        # executor thread (see core/security/auth/stores.py's own "Async
+        # ORM only" module docstring), a pooled connection can go stale
+        # (closed server-side, e.g. by a proxy/idle timeout) between
+        # requests without Django noticing until the next query fails on
+        # it. CONN_HEALTH_CHECKS=True makes Django run a cheap liveness
+        # check (`SELECT 1`-equivalent) on a REUSED persistent connection
+        # before handing it back out, transparently reconnecting if it's
+        # gone stale, instead of surfacing that staleness as a query
+        # failure. Auth CORRECTNESS was never at risk here (writes
+        # autocommit — see DjangoRefreshTokenStore's own docstring) — this
+        # is purely an availability/reliability hardening, the minimal safe
+        # default for this block's persistent-connection posture. See
+        # README's "Database & migrations" section for the heavier
+        # CONN_MAX_AGE=0-behind-PgBouncer alternative for multi-worker
+        # deploys under sustained heavy load.
+        conn_health_checks=True,
         # Not forced True: a local/dev Postgres often has no TLS listener at
         # all. A production DATABASE_URL should append `?sslmode=require`
         # itself rather than have this block force it kit-wide.

@@ -1146,11 +1146,21 @@ thread can outlive the request that opened it, surfacing as intermittent
 auth *correctness* — the reuse-detection durability guarantee holds because
 every store write autocommits (no `ATOMIC_REQUESTS`, no wrapping
 `transaction.atomic()`), verified above. It is purely a connection-
-*lifecycle* concern for a real multi-worker deployment: set
-`CONN_HEALTH_CHECKS=True` (Django 4.1+, cheap liveness check on reuse) or
-`CONN_MAX_AGE=0` behind the bridge (best paired with an external pooler
-such as PgBouncer, the usual ECS/Fargate posture) if you observe it.
-Tracked for a kit-wide hardening pass rather than changed here.
+*lifecycle* concern for a real multi-worker deployment.
+
+**#48 (L2) — `CONN_HEALTH_CHECKS=True` is now this block's default**
+(`config/settings.py`'s `DATABASES` block, via `dj_database_url.config(...,
+conn_health_checks=True)`) — the cheap mitigation: a liveness check
+(Django 4.1+) runs on a reused persistent connection before it's handed
+back out, transparently reconnecting if it's gone stale, instead of
+surfacing that staleness as a query failure. This is the minimal safe
+config default and is sufficient for most deployments. For a heavy
+multi-worker deployment still observing this under sustained load, the
+heavier alternative is `CONN_MAX_AGE=0` (close the connection at the end
+of every request instead of pooling it in-process) paired with an
+external connection pooler such as PgBouncer in front of Postgres — the
+usual ECS/Fargate posture — rather than relying on Django's own
+per-worker persistent-connection pool at all.
 
 **Regenerating/diffing the exported schema against the frozen contract**
 (same command Step 4's own "Conformance" section documents, now covering

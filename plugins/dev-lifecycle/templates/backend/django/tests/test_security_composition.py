@@ -242,3 +242,32 @@ def test_items_endpoint_is_json_only_no_browsable_api(api_client: APIClient) -> 
     assert response.status_code == 200
     assert response["Content-Type"].startswith("application/json")
     assert b"<html" not in response.content.lower()
+
+
+# ---------------------------------------------------------------------------
+# #48 (L2) -- CONN_HEALTH_CHECKS=True (persistent-connection liveness check)
+# ---------------------------------------------------------------------------
+
+
+def test_conn_health_checks_enabled_in_the_real_settings_module() -> None:
+    """`config/settings.py`'s `DATABASES` block sets `conn_health_checks=
+    True` on `dj_database_url.config(...)` — the cheap mitigation for
+    intermittent "connection already closed" errors under
+    `CONN_MAX_AGE=600` persistent connections combined with the async-ORM
+    thread-sensitive-executor bridge (see that module's own comment, and
+    the README's "Database & migrations" -> "Operational note" section).
+
+    Imports `config.settings` directly (NOT `config.settings_test`, this
+    test run's actual `DJANGO_SETTINGS_MODULE`) because `settings_test.py`
+    overrides `DATABASES` wholesale with a plain sqlite3 dict AFTER `from
+    config.settings import *` (see that module's own docstring) -- so
+    `django.conf.settings.DATABASES` as observed through the normal Django
+    settings object would never show this key during a hermetic test run,
+    even though `config/settings.py` itself does set it. `config.settings`
+    is already imported as a real module by the time any Django test runs
+    (transitively, via `settings_test.py`'s own `import *`), so this is
+    inspecting the same already-loaded module object, not re-executing it
+    or fighting Django's one-settings-module-per-process constraint."""
+    import config.settings as real_settings
+
+    assert real_settings.DATABASES["default"]["CONN_HEALTH_CHECKS"] is True
