@@ -65,9 +65,9 @@ jobs:
           allowed_bots: "claude"
           # plugin_marketplaces takes full git URLs, not owner/repo shorthand.
           plugin_marketplaces: |
-            https://github.com/${{ inputs.owner }}/firm-plugins.git
+            https://github.com/${{ inputs.owner }}/eblouin-plugins.git
           plugins: |
-            dev-lifecycle@firm-plugins
+            dev-lifecycle@eblouin-plugins
           prompt: |
             Use the dev-lifecycle plugin's code-review skill to review this pull
             request against the firm's definition-of-done. The plugin is loaded
@@ -114,4 +114,4 @@ jobs:
           # via gh) and the read/search tools.
           claude_args: |
             --allowedTools "Bash,Read,Glob,Grep,TodoWrite"
-            --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@firm-plugins) is loaded and its skills are available. Use them, and hold the change to the firm definition-of-done."
+            --system-prompt "This repository is built by the development firm. The dev-lifecycle plugin (dev-lifecycle@eblouin-plugins) is loaded and its skills are available. Use them, and hold the change to the firm definition-of-done."

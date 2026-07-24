@@ -8,7 +8,7 @@ This is the operator's manual. The plugin's internal conventions are in the repo
 
 ## What you've got
 
-A Claude Code plugin marketplace (`firm-plugins`) containing one plugin (`dev-lifecycle`) with:
+A Claude Code plugin marketplace (`eblouin-plugins`) containing one plugin (`dev-lifecycle`) with:
 
 - **24 skills** spanning the whole project lifecycle — `technical-proposal` → `product-planning` → `scaffolding` / `onboarding` → `planning` → `ui-exploration` / `design-system` → `backend` / `frontend` / `mobile` → `data` → `copywriting` → `testing` → `code-review` → `devops` / `infrastructure` → `dependency-maintenance` / `security-audit` → `documentation` / `debugging` / `walkthrough` — plus `coding-session`, the conductor that runs the whole plan → build → review → merge loop for you, and `template-author` / `recipe-author`, the two meta-skills for extending the plugin's own starter kit (below).
 - A **self-extending reference library** of per-library, version-aware docs (React, TypeScript, MUI, Tailwind, HTMX, FastAPI, Pydantic, SQLAlchemy, Postgres, Django, plus testing/devops/security/docs/debugging) — now growing a **starter-kit direction** alongside it: composable template blocks and feature recipes that `template-author`/`recipe-author` add, pinned to a shared compatibility matrix and a standardized security baseline (see the root `README.md`'s "Reference library conventions" for the full model).
@@ -25,17 +25,17 @@ The spine is GitHub: issues are the task queue, PRs are work-in-review, CI is QA
 Push this repo to GitHub (private is fine):
 
 ```bash
-cd firm-plugins
+cd eblouin-plugins
 git init && git add . && git commit -m "firm plugin v0.1.0"
-gh repo create <owner>/firm-plugins --private --source=. --push
+gh repo create <owner>/eblouin-plugins --private --source=. --push
 ```
 
 ### 2. Install the plugin
 In Claude Code:
 
 ```
-/plugin marketplace add <owner>/firm-plugins
-/plugin install dev-lifecycle@firm-plugins
+/plugin marketplace add <owner>/eblouin-plugins
+/plugin install dev-lifecycle@eblouin-plugins
 ```
 
 Turn on auto-update in `/plugin` → Marketplaces (or add `extraKnownMarketplaces` with `autoUpdate: true` to settings). Because the plugin is **user-scoped**, all 24 skills now follow you into *every* repo you open — including ones you don't own — with no per-repo install.
@@ -120,7 +120,7 @@ References are **per-library and version-aware**, loaded only when that library 
 ## Maintaining the plugin
 
 The plugin is itself a project in the firm — improve it through the same loop:
-1. A change (new skill, edited reference, freshness fix) comes in as a **PR** to `firm-plugins`.
+1. A change (new skill, edited reference, freshness fix) comes in as a **PR** to `eblouin-plugins`.
 2. CI validates; **you review and merge**.
 3. On merge, `release.yml` bumps the **semver** version (label the PR `release:major|minor|patch`, default patch) and tags it.
 4. Your installs pick it up on auto-update, or run `/plugin marketplace update`.
@@ -141,10 +141,10 @@ There are two independent knobs; use the one that matches the scope:
 Fix the environment's **setup script** so it actually upgrades. `add`/`install` alone don't — add the `update` commands:
 
 ```bash
-claude plugin marketplace add eblouin-development/firm-plugins || true
-claude plugin marketplace update firm-plugins        # pull marketplace → latest main
-claude plugin install dev-lifecycle@firm-plugins || true
-claude plugin update dev-lifecycle@firm-plugins       # upgrade the installed plugin
+claude plugin marketplace add eblouin-development/eblouin-plugins || true
+claude plugin marketplace update eblouin-plugins        # pull marketplace → latest main
+claude plugin install dev-lifecycle@eblouin-plugins || true
+claude plugin update dev-lifecycle@eblouin-plugins       # upgrade the installed plugin
 ```
 
 Editing the setup script **is** what un-sticks the current stale snapshot (it forces one rebuild). This is the low-effort fleet-wide fix: **you do not copy anything per-repo** — every project that runs in that default environment picks up the new version, with staleness bounded to the ~7-day cache window.
@@ -155,15 +155,15 @@ Commit a `.claude/settings.json` (which *does* carry into cloud sessions, unlike
 ```json
 {
   "extraKnownMarketplaces": {
-    "firm-plugins": {
-      "source": { "source": "github", "repo": "eblouin-development/firm-plugins" },
+    "eblouin-plugins": {
+      "source": { "source": "github", "repo": "eblouin-development/eblouin-plugins" },
       "autoUpdate": true
     }
   },
   "hooks": {
     "SessionStart": [
-      { "matcher": "startup", "hooks": [ { "type": "command", "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update firm-plugins && claude plugin update dev-lifecycle@firm-plugins; } >/dev/null 2>&1 || true", "timeout": 120 } ] },
-      { "matcher": "resume",  "hooks": [ { "type": "command", "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update firm-plugins && claude plugin update dev-lifecycle@firm-plugins; } >/dev/null 2>&1 || true", "timeout": 120 } ] }
+      { "matcher": "startup", "hooks": [ { "type": "command", "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update eblouin-plugins && claude plugin update dev-lifecycle@eblouin-plugins; } >/dev/null 2>&1 || true", "timeout": 120 } ] },
+      { "matcher": "resume",  "hooks": [ { "type": "command", "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update eblouin-plugins && claude plugin update dev-lifecycle@eblouin-plugins; } >/dev/null 2>&1 || true", "timeout": 120 } ] }
     ]
   }
 }

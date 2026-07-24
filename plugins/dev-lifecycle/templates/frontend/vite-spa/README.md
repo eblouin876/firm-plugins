@@ -133,7 +133,7 @@ and a subsequent protected call (`GET /admin/ping`) carries
 are written as `../../<file>` — correct for the **materialized** location
 (`<project>/apps/web/`, two levels below the project root), exactly as
 `@repo/api-client` and `@repo/web-shared` do it. Don't "fix" them to be
-firm-plugins-relative. `tsconfig.json` also overrides the base's `NodeNext`
+eblouin-plugins-relative. `tsconfig.json` also overrides the base's `NodeNext`
 module resolution to `bundler` (this app is Vite-bundled and imports the
 extensionless workspace-package builds) and sets `noEmit` (Vite owns the bundle;
 tsc is a pure typechecker here).

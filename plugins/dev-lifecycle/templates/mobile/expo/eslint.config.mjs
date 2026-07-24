@@ -2,7 +2,7 @@
 // how packages/api-client does it (the base is JS-only; TS packages add their
 // own parser/plugins). Written for the MATERIALIZED location apps/mobile/ —
 // "../../eslint.config.mjs" is two levels up to the project root, not this
-// file's position inside firm-plugins. Kept dependency-light: no RN-specific
+// file's position inside eblouin-plugins. Kept dependency-light: no RN-specific
 // plugin, matching the kit's lean base config.
 import tseslint from "typescript-eslint";
 import rootConfig from "../../eslint.config.mjs";

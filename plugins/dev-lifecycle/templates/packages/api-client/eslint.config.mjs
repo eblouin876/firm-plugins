@@ -6,7 +6,7 @@
 // authored at templates/packages/api-client/ but lands at
 // <project>/packages/api-client/ once scaffolded, so "../../eslint.config.mjs"
 // below is written for that materialized location (two levels up to the
-// project root), not for this file's position in firm-plugins.
+// project root), not for this file's position in eblouin-plugins.
 import tseslint from "typescript-eslint";
 import rootConfig from "../../eslint.config.mjs";
 

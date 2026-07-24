@@ -5,8 +5,8 @@
   // <project>/apps/web/ (the pnpm-workspace `apps/*` glob), so this
   // "extends" path is written for the materialized location — two levels up
   // from apps/web/ to the project root — NOT for where this file sits in the
-  // firm-plugins repo. Same convention as @repo/api-client, @repo/web-shared,
-  // and the Vite SPA block; don't "fix" it to be firm-plugins-relative.
+  // eblouin-plugins repo. Same convention as @repo/api-client, @repo/web-shared,
+  // and the Vite SPA block; don't "fix" it to be eblouin-plugins-relative.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // The base pins Node-executed `module`/`moduleResolution` (NodeNext),

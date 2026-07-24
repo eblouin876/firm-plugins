@@ -1,14 +1,14 @@
-# firm-plugins
+# eblouin-plugins
 
 A Claude Code plugin marketplace: the development firm's lifecycle skills and a self-extending, version-aware reference library. This repo is itself a project in the firm — changes go through the same plan → PR → review → merge → release pipeline as any other repo.
 
-> Names (`firm-plugins`, `dev-lifecycle`) are placeholders — rename to taste before first publish.
+> Names (`eblouin-plugins`, `dev-lifecycle`) are placeholders — rename to taste before first publish.
 
 ## Install
 
 ```
-/plugin marketplace add <owner>/firm-plugins
-/plugin install dev-lifecycle@firm-plugins
+/plugin marketplace add <owner>/eblouin-plugins
+/plugin install dev-lifecycle@eblouin-plugins
 ```
 
 Enable background auto-update in `/plugin` → Marketplaces, or refresh manually with `/plugin marketplace update`. (Auto-pull of git-sourced marketplaces can lag; a periodic manual update is the reliable fallback.)
@@ -16,7 +16,7 @@ Enable background auto-update in `/plugin` → Marketplaces, or refresh manually
 ## Layout
 
 ```
-firm-plugins/
+eblouin-plugins/
 ├── .claude-plugin/marketplace.json      # catalog (semver in metadata.version)
 ├── plugins/dev-lifecycle/
 │   ├── .claude-plugin/plugin.json       # plugin manifest (semver)

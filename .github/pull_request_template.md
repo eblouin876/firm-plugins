@@ -1,5 +1,5 @@
 <!--
-PR template for the firm-plugins repo itself (the plugin/library, not a project
+PR template for the eblouin-plugins repo itself (the plugin/library, not a project
 built with it). Keep it lean — fill what applies, delete what doesn't.
 -->
 

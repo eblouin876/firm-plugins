@@ -167,7 +167,7 @@ that redirect — the subsequent `/admin/ping` call carries the bearer too.
 config are written as `../../<file>` — correct for the **materialized**
 location (`<project>/apps/web/`, two levels below the project root), exactly
 as `@repo/api-client`, `@repo/web-shared`, and the Vite SPA do it. Don't "fix"
-them to be firm-plugins-relative. `tsconfig.json` also overrides the base's
+them to be eblouin-plugins-relative. `tsconfig.json` also overrides the base's
 `NodeNext` module resolution to `bundler` (Next/Turbopack bundles this app and
 imports the extensionless workspace-package builds) and sets `noEmit` (Next
 owns the bundle; tsc is a pure typechecker here). Its `include` covers

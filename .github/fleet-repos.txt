@@ -1,6 +1,6 @@
 # Fleet repos the coverage-audit scans for reference-library gaps.
 # One `owner/repo` per line. Lines starting with `#` and blank lines are ignored.
-# firm-plugins itself is intentionally excluded — it IS the library.
+# eblouin-plugins itself is intentionally excluded — it IS the library.
 #
 # The coverage-audit workflow reads this file weekly, inventories each repo's
 # significant direct dependencies, diffs them against
