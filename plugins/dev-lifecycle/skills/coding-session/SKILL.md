@@ -30,7 +30,8 @@ They are compatible: both produce one PR that closes one issue, so a piece of wo
 - **Orchestrate, don't inline the work.** Spawn a subagent for each build step and each review and let it invoke the firm skill. Don't write feature code or run the review yourself in the conducting thread — that bloats the orchestrator's context and defeats the point. The conductor reads the codebase only enough to write good subagent briefs.
 - **The repo is the memory.** State lives in GitHub — the feature issue and its ticked step checklist, the `in-progress` label, the draft PR with its commits and decision log — not in the thread. Push after every completed step. If the session is interrupted, another session can pick the feature up from the branch, the issue, and the PR alone.
 - **Merge-ready is the ceiling, never merge.** The session converges on `${CLAUDE_PLUGIN_ROOT}/shared/definition-of-done.md`: behavior meets acceptance criteria, meaningful tests pass, CI green, security clean, the final review's blockers resolved. Then it flips the PR to ready, **notifies the user, and stops**. No agent self-merges.
-- **Bound the loop, then escalate.** If a build↔review round can't converge in a couple of passes, or a finding needs a design decision, stop and bring it to the user with the diagnosis — don't thrash or force a risky change. An escalation is signal, not failure; the contract is that every mid-flight stop is worth the user's attention.
+- **Bound the loop, then escalate.** Governs *review/quality* non-convergence: if a build↔review round can't converge in a couple of passes, or a finding needs a design decision, stop and bring it to the user with the diagnosis — don't thrash or force a risky change. An escalation is signal, not failure; the contract is that every mid-flight stop is worth the user's attention. (Distinct from a worker going *silent* mid-step — that's a liveness stall, handled by the cadence rule below, not this one.)
+- **Watch workers actively, don't wait passively.** A stalled or dropped subagent emits no completion signal, so a passive wait can leave it dead for the better part of an hour. Dispatch in the background and back every worker with a right-sized watchdog; catch stalls in minutes, never busy-poll. See `${CLAUDE_PLUGIN_ROOT}/shared/worker-cadence.md`.
 - **Route each subagent to the right model.** Reasoning-heavy stages (planning, plan-review, code-review) run on a stronger model; mechanical build/implementation runs on a cheaper one. Pass the model explicitly on every spawn (see "Model routing" below) — an unset model inherits the orchestrator's, which is the most expensive default and the main source of avoidable spend.
 
 ## Model routing
@@ -87,7 +88,7 @@ Do **not** tag `@claude` on the issue — in a session the *session* drives the 
 
 ### 4. Build — steps land as commits on one feature branch
 
-Work the plan's step list in order. For each step, pick the build skill from the nature of the work, then spawn a subagent to do it — on **`sonnet`** by default (build is execution against a concrete plan; see "Model routing"), raising that one spawn to `opus` only when the step is unusually subtle or security-sensitive:
+Work the plan's step list in order. For each step, pick the build skill from the nature of the work, then spawn a subagent to do it — on **`sonnet`** by default (build is execution against a concrete plan; see "Model routing"), raising that one spawn to `opus` only when the step is unusually subtle or security-sensitive. Dispatch it under the worker-cadence discipline — background dispatch plus a right-sized watchdog, not a blocking wait (`${CLAUDE_PLUGIN_ROOT}/shared/worker-cadence.md`):
 
 | Work is mostly… | Skill the subagent invokes |
 | --- | --- |
@@ -109,7 +110,7 @@ Build agents run **sequentially** on the feature branch — never two at once. K
 
 ### 5. Review each step internally before advancing
 
-After each step's build returns, spawn a review subagent on **`opus`**, briefed to invoke the `code-review` skill on **that step's diff** (the commits since the last reviewed point) and **report its findings back to the conductor** — not as PR comments. Mid-build commentary on a draft PR would bury the final review the human actually reads; per-step findings are working state, and the conductor holds them.
+After each step's build returns, spawn a review subagent on **`opus`**, briefed to invoke the `code-review` skill on **that step's diff** (the commits since the last reviewed point) and **report its findings back to the conductor** — not as PR comments. Mid-build commentary on a draft PR would bury the final review the human actually reads; per-step findings are working state, and the conductor holds them. Spawn this one under the same worker-cadence discipline as a build step (`${CLAUDE_PLUGIN_ROOT}/shared/worker-cadence.md`).
 
 - **Blocker/high findings** → spawn a build subagent (**`sonnet`**) to fix them on the feature branch, then re-review. Bound it: after ~2 rounds without convergence, or the moment a finding needs a human decision, escalate (step 6).
 - **Clean** → tick the step's checkbox on the feature issue, append any judgment calls to the PR's decision log, push, and advance to the next step (back to step 4).
