@@ -35,8 +35,18 @@ Load the relevant reference. Lead with what the reader needs most; prefer workin
 ### 4. Hand off
 Note what you documented and where, and flag anything you couldn't verify against the code. If it documents new code, remind that doc and code move together going forward.
 
+## The starter-kit documentation model
+A project scaffolded from the firm's starter kit (`scaffolding`, composing `${CLAUDE_PLUGIN_ROOT}/templates/`) does not have a hand-maintained root README — it has an **assembled** one. Recognize this model (a `justfile` with `docs-generate`/`docs-check` targets, a root README with `<!-- BEGIN block:<layer>/<name> -->` marker comments) and work with it rather than against it:
+
+- **The root README is assembled, not written.** `just docs-generate` aggregates every composed block's/component's co-located `docs/fragment.md` into the Setup/Deployment/Maintenance/Secrets sections, each wrapped in that block's own BEGIN/END marker region. The **Structure** section is the one exception — hand-written directly, never aggregated.
+- **Edit the fragment, never an aggregated region.** A block's contribution lives at `docs/fragment.md` inside its own materialized directory (e.g. `apps/api/docs/fragment.md`, `packages/api-client/docs/fragment.md`). Fix inaccurate or stale content there, then re-run `just docs-generate` — a hand-edit made directly inside a `<!-- BEGIN block:... -->`/`<!-- END -->` region is silently overwritten on the next regeneration.
+- **`just docs-check` catches drift.** Run it (exit non-zero on drift) before treating root-README docs as done; it's the mechanical backstop for the model, the same way a linter backstops style.
+- **Keep the project `CLAUDE.md` accurate** — it explains the project's structure and points at the root README's Structure section; it also carries the "Keeping the README current" discipline (fragment first, then `docs-generate`, then `docs-check`) that every future contributor — human or agent — should follow.
+- **Full spec:** `${CLAUDE_PLUGIN_ROOT}/references/authoring/documentation-standard.md` — the canonical doc-fragment format, the aggregation-marker syntax, and the root README/CLAUDE.md template bodies.
+- **The weekly freshness audit is the drift detector at the library level**: it's what keeps a template block's *own* authoring-time README (and thus the fragment it ships) honest against the kit's pinned versions, upstream of any one project's `docs-check`. This skill's job on a single project is the same idea scoped down — don't let a project's assembled docs drift from the blocks composed into it.
+
 ## How this works with the other skills
-- **planning / product-planning** decisions → **ADRs** (an epic's architecture decisions map onto an ADR). **backend** defines the API contract (FastAPI generates OpenAPI) → this writes the narrative API docs. **code-review** flags missing/stale docs → this addresses them.
+- **planning / product-planning** decisions → **ADRs** (an epic's architecture decisions map onto an ADR). **backend** defines the API contract (FastAPI generates OpenAPI) → this writes the narrative API docs. **code-review** flags missing/stale docs → this addresses them. **scaffolding** composes the starter kit and runs the first `docs-generate`; this skill maintains the result afterward.
 
 ## What this skill does NOT do
 - Write comments/docs that merely restate the code. Produce docs it won't keep current. Over-document a small project. Invent behavior instead of describing what the code verifiably does. Replace the dedicated writing skills for non-technical prose.

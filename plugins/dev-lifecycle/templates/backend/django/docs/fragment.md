@@ -46,8 +46,7 @@ database. Optional config, all with secure defaults:
 `RATE_LIMIT_TRUSTED_HOPS` (0) / `RATE_LIMIT_MAX_KEYS` (50000),
 `CORS_ALLOWED_ORIGINS` (`[]` — CORS is deny-by-default until set).
 
-## Conformance
-Gate-1 decision: this track targets **wire-contract identity** with
+**Conformance** — Gate-1 decision: this track targets **wire-contract identity** with
 `backend/fastapi` (byte-identical paths/methods/status/JSON), best-effort
 OpenAPI `operationId`/component-name parity, and documented Django-only
 client regeneration — not a promise that `backend/fastapi`'s exact

@@ -32,12 +32,15 @@ Load only the references for what's actually present:
 - **Expo Router** → `${CLAUDE_PLUGIN_ROOT}/references/mobile/navigation.md` (file-based routes, route groups, the auth-gate pattern).
 - **A native capability beyond JS** → `${CLAUDE_PLUGIN_ROOT}/references/mobile/native-modules.md` (SDK modules vs config plugins vs bare; dev builds).
 - **Auth** → `${CLAUDE_PLUGIN_ROOT}/references/wiring/auth-end-to-end.md` — implement the **bearer half** exactly: access token in memory; refresh token in SecureStore; `Authorization: Bearer`; silent single-flight refresh on 401 with one retry; rotation overwrites SecureStore; refresh-401 is terminal → clear + redirect to login; logout posts the refresh token then clears. `cookieMode` is **omitted** — assert it is never enabled on native.
+- **Pull from the catalog first** — check `${CLAUDE_PLUGIN_ROOT}/templates/components/*` and `${CLAUDE_PLUGIN_ROOT}/references/recipes/*` (e.g. `push-notifications`) before hand-building a cross-cutting feature; a recipe composes existing pieces across backend/frontend/mobile rather than inventing new wiring.
 - If a significant mobile library has **no reference yet**, generate one from current official docs, use it now, and PR it into the plugin (self-extend flow).
 
 All paths: match existing conventions; accessibility is not optional (`accessibilityRole`/`accessibilityLabel`, contrast, touch targets ≥ 44pt, keyboard/screen-reader operability); handle loading/empty/error states; keep screens small; if TypeScript is present, type honestly (no `any` escape hatch). Configure `@repo/api-client` once at the app entry (root layout) in bearer mode; consume the generated hooks — don't hand-write `fetch`.
 
 ### 4. Hand off
 Summarize what changed (files, screens, routes) so it's reviewable. Be explicit about the **verification boundary**: hermetic checks (`tsc`, `eslint`, `vitest` on logic like the auth context) run here; **device/simulator builds, `expo prebuild`, and live auth against a running backend are documented-manual** — say so rather than claiming a green device build. Note follow-ups left out of scope. The bar for merge-ready is `${CLAUDE_PLUGIN_ROOT}/shared/definition-of-done.md`.
+
+**Doc upkeep.** If the change touches what `apps/mobile` exposes or needs (a new env var, a new native capability), update `apps/mobile/docs/fragment.md` and run `just docs-generate` so the root README stays accurate — never hand-edit an aggregated region of the root README directly.
 
 ## What this skill does NOT do
 - Assume a framework, Expo SDK, or version without checking.

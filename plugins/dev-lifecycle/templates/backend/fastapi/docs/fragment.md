@@ -35,8 +35,7 @@ trusted reverse-proxy hop count per environment),
 `SECURITY_HEADERS_HSTS_PRELOAD` (false), `CORS_ALLOWED_ORIGINS` (`[]` —
 CORS is unwired entirely until set).
 
-## Security composition
-Wired by default in `app/main.py`'s `create_app()`, outermost to innermost:
+**Security composition** — wired by default in `app/main.py`'s `create_app()`, outermost to innermost:
 security-headers (CSP/HSTS-when-https/nosniff/frame-deny on every
 response) -> request-id/audit binding (`X-Request-ID` minted or reflected,
 bound into `audit.py`'s contextvar) -> rate-limiting (per-client-IP token
