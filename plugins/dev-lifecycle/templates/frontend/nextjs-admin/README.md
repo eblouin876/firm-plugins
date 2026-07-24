@@ -278,7 +278,7 @@ Same convention as `templates/frontend/nextjs/`: `tsconfig.json`'s `extends`
 and `eslint.config.mjs`'s import of the root config are written as
 `../../<file>` — correct for the materialized location (`<project>/apps/admin/`,
 two levels below the project root). Don't "fix" them to be
-firm-plugins-relative.
+eblouin-plugins-relative.
 
 ## For later stages
 - **Nav link targets** Stage 13a created: `/dashboard`, `/users`,

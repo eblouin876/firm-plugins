@@ -13,7 +13,7 @@
 // at templates/frontend/nextjs/ but lands at <project>/apps/web/ once
 // scaffolded, so "../../eslint.config.mjs" below is written for that
 // materialized location (two levels up to the project root), not for this
-// file's position in firm-plugins.
+// file's position in eblouin-plugins.
 import tseslint from "typescript-eslint";
 import rootConfig from "../../eslint.config.mjs";
 

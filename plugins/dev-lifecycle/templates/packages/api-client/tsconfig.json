@@ -5,7 +5,7 @@
   // <project>/packages/api-client/ (the pnpm-workspace `packages/*` glob),
   // so this "extends" path is written for the materialized location — two
   // levels up from packages/api-client/ to the project root — not for
-  // where this file sits in the firm-plugins repo.
+  // where this file sits in the eblouin-plugins repo.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // The base pins Node-executed `module`/`moduleResolution` (NodeNext),

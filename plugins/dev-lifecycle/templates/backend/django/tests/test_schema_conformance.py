@@ -69,7 +69,7 @@ def _frozen_contract_schema() -> dict[str, Any]:
     if not FROZEN_CONTRACT_PATH.exists():
         pytest.skip(
             f"Frozen contract not found at {FROZEN_CONTRACT_PATH} -- this test only runs "
-            "inside the firm-plugins monorepo, where packages/api-client/openapi.json is "
+            "inside the eblouin-plugins monorepo, where packages/api-client/openapi.json is "
             "committed alongside this block. A materialized project that only scaffolds "
             "backend/django (no packages/api-client) has no frozen contract to diff against."
         )

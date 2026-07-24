@@ -45,9 +45,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: |
-            https://github.com/eblouin-development/firm-plugins.git
+            https://github.com/eblouin-development/eblouin-plugins.git
           plugins: |
-            dev-lifecycle@firm-plugins
+            dev-lifecycle@eblouin-plugins
           claude_args: "--model claude-sonnet-5"
           prompt: |
             Run a freshness audit of the reference library in
@@ -84,9 +84,9 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: |
-            https://github.com/eblouin-development/firm-plugins.git
+            https://github.com/eblouin-development/eblouin-plugins.git
           plugins: |
-            dev-lifecycle@firm-plugins
+            dev-lifecycle@eblouin-plugins
           claude_args: "--model claude-sonnet-5 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch"
           prompt: |
             Run the EXTENDED freshness audit for the dev-lifecycle starter

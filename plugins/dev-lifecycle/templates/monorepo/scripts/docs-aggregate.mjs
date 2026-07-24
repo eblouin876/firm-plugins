@@ -6,7 +6,7 @@
  *
  * Canonical spec: references/authoring/documentation-standard.md,
  * "Aggregation markers (canonical spec)" and "Doc fragment format
- * (canonical spec)" in firm-plugins. This script implements exactly that
+ * (canonical spec)" in eblouin-plugins. This script implements exactly that
  * spec — it is not a second source of truth. Read the canon before editing
  * this file's matching/parsing logic.
  *

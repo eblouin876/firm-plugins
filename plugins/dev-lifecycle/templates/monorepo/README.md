@@ -61,7 +61,7 @@ header-lint (`scripts/validate_plugin.py`) skips non-`.md` files, so these
 payload bodies (which describe the *scaffolded project*, not this plugin) are
 exempt from the `last-verified` header this file itself carries; and a
 `.tmpl` file is never mistaken for a real `CLAUDE.md`/`README.md` and
-auto-loaded into a session working in `firm-plugins` itself. Every other file
+auto-loaded into a session working in `eblouin-plugins` itself. Every other file
 in this directory (`justfile`, `package.json`, `pnpm-workspace.yaml`,
 `tsconfig.base.json`, `eslint.config.mjs`, `scripts/docs-aggregate.mjs`,
 dotfiles) is plugin canon copied verbatim — no `.tmpl` suffix, because

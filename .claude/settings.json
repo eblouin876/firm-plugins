@@ -1,9 +1,9 @@
 {
   "extraKnownMarketplaces": {
-    "firm-plugins": {
+    "eblouin-plugins": {
       "source": {
         "source": "github",
-        "repo": "eblouin-development/firm-plugins"
+        "repo": "eblouin-development/eblouin-plugins"
       },
       "autoUpdate": true
     }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update firm-plugins && claude plugin update dev-lifecycle@firm-plugins; } >/dev/null 2>&1 || true",
+            "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update eblouin-plugins && claude plugin update dev-lifecycle@eblouin-plugins; } >/dev/null 2>&1 || true",
             "timeout": 120
           }
         ]
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update firm-plugins && claude plugin update dev-lifecycle@firm-plugins; } >/dev/null 2>&1 || true",
+            "command": "{ command -v claude >/dev/null 2>&1 && claude plugin marketplace update eblouin-plugins && claude plugin update dev-lifecycle@eblouin-plugins; } >/dev/null 2>&1 || true",
             "timeout": 120
           }
         ]

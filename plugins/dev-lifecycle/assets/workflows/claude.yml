@@ -1,19 +1,19 @@
 # Firm implement workflow — thin caller stub. Responds to @claude on issues and
-# PRs by calling the REUSABLE workflow in firm-plugins, so the logic (prompt,
+# PRs by calling the REUSABLE workflow in eblouin-plugins, so the logic (prompt,
 # tool list, plugin load, auth) lives in ONE place instead of being duplicated
 # per repo. Improve it once there; every project on the same major tag (@v1)
-# picks it up on the next firm-plugins release — no re-sync of this file.
+# picks it up on the next eblouin-plugins release — no re-sync of this file.
 #
 # Copy this into a project's .github/workflows/ and replace <owner> (appears
 # twice: the reusable-workflow path and the `owner` input) with the handle that
-# owns firm-plugins — the same account that owns this project in the firm model.
+# owns eblouin-plugins — the same account that owns this project in the firm model.
 #
 # ONE-TIME SETUP (per repo, done by scaffolding/onboarding):
 #   - `gh secret set CLAUDE_CODE_OAUTH_TOKEN` — OAuth only, never an API key.
 #     `secrets: inherit` forwards it to the reusable workflow.
 #   - Install the Claude GitHub App so the workflow has a GitHub identity.
 #   - Enable Actions-created PRs (so the agent's `gh pr create` works).
-#   - If firm-plugins is PRIVATE: on firm-plugins, Settings -> Actions ->
+#   - If eblouin-plugins is PRIVATE: on eblouin-plugins, Settings -> Actions ->
 #     General -> Access -> allow this repo (or all repos owned by <owner>) to
 #     use its workflows, or the `uses:` reference below 403s.
 # To pin to an exact release instead of tracking the major, change @v1 to
@@ -42,7 +42,7 @@ jobs:
       issues: write
       id-token: write
       actions: read   # lets Claude read CI results on PRs
-    uses: <owner>/firm-plugins/.github/workflows/claude-implement.reusable.yml@v1
+    uses: <owner>/eblouin-plugins/.github/workflows/claude-implement.reusable.yml@v1
     secrets: inherit
     with:
       owner: <owner>
