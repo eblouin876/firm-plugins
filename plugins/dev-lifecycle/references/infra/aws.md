@@ -39,4 +39,4 @@ Match the target to the workload:
 
 ## Cost
 - Watch the usual bill-drivers: NAT gateways, idle load balancers, oversized/always-on RDS, and inter-AZ / egress data transfer.
-- **Tag resources** by project/env; set **budgets and cost alerts** so a surprise is caught early. Tear down what a beta no longer needs — this is where Goatenheim (zero hosting cost) often wins for beta/staging.
+- **Tag resources** by project/env; set **budgets and cost alerts** so a surprise is caught early. Tear down what a beta no longer needs — this is where a home server (zero hosting cost) often wins for beta/staging.

@@ -25,7 +25,7 @@ What's being built and for whom; the core capabilities; scale expectations (user
 Propose the stack (backend, frontend, datastore, hosting) and a high-level architecture. For each significant choice, give the rationale and the main **alternative considered and why it was rejected**. Default to firm stacks where they fit; justify a departure where they don't. Right-size to the real scale. Reference the backend/frontend library docs for what's current.
 
 ### 3. Estimate cost & timeline
-Break the build into areas (backend, frontend, infra, integrations) and give an effort estimate as a **range with assumptions**. Include running/hosting cost (e.g. a PaaS vs Goatenheim beta vs cloud). State clearly what would move the number.
+Break the build into areas (backend, frontend, infra, integrations) and give an effort estimate as a **range with assumptions**. Include running/hosting cost (e.g. a PaaS vs a home-server beta vs cloud). State clearly what would move the number.
 
 ### 4. Assess risks & open questions
 The things that could change the plan: technical unknowns, integration risks, scale cliffs, decisions that need the user's input.

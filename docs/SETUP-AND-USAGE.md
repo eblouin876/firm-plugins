@@ -81,7 +81,7 @@ Zero footprint: local config goes in untracked files excluded via `.git/info/exc
 1. **`technical-proposal`** — "What should we build this with, and what will it take?" Recommends the stack + architecture, justifies it, and gives an honest cost/timeline. The build/no-build decision.
 2. **`scaffolding`** — creates and initializes the repo (`gh repo create`, structure, tooling, lean `CLAUDE.md`, pipeline wiring). This is what gives `product-planning` a place to file its epic.
 3. **`product-planning`** — "Plan out the whole product." Produces the north star: vision, architecture/stack decisions, and a **staged roadmap** as a GitHub **epic + milestones + an ADR** in the repo. It stops there — no build.
-4. **Per stage**, repeat: **`planning`** reads the epic + the stage stub, you go back and forth until you approve, then it files the stage issue as a **sub-issue of the epic** (with an `Epic: #<n>` marker and the issue number on the epic's checklist line) under its milestone and tags **`@claude`**. The build agent implements and opens a PR → the **review agent** reviews and **routes the outcome**: clear blocker/high fixes get handed to **`@claude`** to implement automatically (which re-triggers the review, converging when clean), while a clean review or any finding that needs your decision pings **you** — so you're only pulled in when there's a call to make → **CI** runs → **you merge**. On merge the stage issue closes, and the **epic-checkoff** workflow ticks its box in the epic (and GitHub's native sub-issue rollup advances the epic's progress bar) — so the roadmap stays current without you touching it. Then **`devops`** deploys (Goatenheim beta, or your chosen target) → next stage.
+4. **Per stage**, repeat: **`planning`** reads the epic + the stage stub, you go back and forth until you approve, then it files the stage issue as a **sub-issue of the epic** (with an `Epic: #<n>` marker and the issue number on the epic's checklist line) under its milestone and tags **`@claude`**. The build agent implements and opens a PR → the **review agent** reviews and **routes the outcome**: clear blocker/high fixes get handed to **`@claude`** to implement automatically (which re-triggers the review, converging when clean), while a clean review or any finding that needs your decision pings **you** — so you're only pulled in when there's a call to make → **CI** runs → **you merge**. On merge the stage issue closes, and the **epic-checkoff** workflow ticks its box in the epic (and GitHub's native sub-issue rollup advances the epic's progress bar) — so the roadmap stays current without you touching it. Then **`devops`** deploys (a home beta server, or your chosen target) → next stage.
 
 Because every stage plan references the epic and ADR, the whole product stays aligned to the north star.
 
@@ -101,7 +101,7 @@ Because every stage plan references the epic and ADR, the whole product stays al
 Agents plan, build, review, and get to green — **you approve the plan and you merge.** No agent ever merges.
 
 ### From any device / bad signal
-Once a task is dispatched, it runs server-side (a cloud sandbox or the GitHub Action) — independent of your connection. Kick it off, close the laptop, lose Starlink; it keeps going. Check status, review the diff, and merge from the Claude mobile app's remote-control panel or GitHub mobile. Heavier or private work can run on **Goatenheim** over Tailscale and be reviewed the same way.
+Once a task is dispatched, it runs server-side (a cloud sandbox or the GitHub Action) — independent of your connection. Kick it off, close the laptop, lose Starlink; it keeps going. Check status, review the diff, and merge from the Claude mobile app's remote-control panel or GitHub mobile. Heavier or private work can run on **your home server** over Tailscale and be reviewed the same way.
 
 ---
 
@@ -192,7 +192,7 @@ Commit a `.claude/settings.json` (which *does* carry into cloud sessions, unlike
 | Write product/UI copy | `copywriting` |
 | Write/deepen tests | `testing` |
 | Review a diff or run the PR review agent | `code-review` |
-| Containerize, wire CI, deploy (incl. Goatenheim) | `devops` |
+| Containerize, wire CI, deploy (incl. a home server) | `devops` |
 | Provision & maintain hosts/infra (AWS, home, Tailscale) | `infrastructure` |
 | Keep dependencies current / patch a CVE | `dependency-maintenance` |
 | Audit a whole project's security | `security-audit` |

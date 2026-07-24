@@ -6,9 +6,9 @@ provenance: manual
 sources: []
 -->
 
-# Home infrastructure (Goatenheim)
+# Home infrastructure
 
-Running a home box (Goatenheim) as a beta/staging server and self-hosting host that stays reachable and recovers on its own — including while you're on the road. Read after choosing the home-infra target. The machine's existing setup overrides anything here.
+Running a home box as a beta/staging server and self-hosting host that stays reachable and recovers on its own — including while you're on the road. Read after choosing the home-infra target. The machine's existing setup overrides anything here.
 
 ## Role
 A Linux host running Docker for beta deploys and self-hosted services, reachable over Tailscale (see `tailscale.md`), designed to keep running unattended and come back by itself after a reboot or power loss.
