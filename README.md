@@ -26,6 +26,7 @@ firm-plugins/
 │   ├── assets/pr/                       # shippable templates `scaffolding` copies into project repos, e.g. pull_request_template.md
 │   ├── shared/                          # cross-skill references
 │   │   ├── token-efficiency.md          # the efficiency doctrine every skill follows
+│   │   ├── worker-cadence.md            # how an orchestrator watches dispatched subagents (backstop cadence, not polling)
 │   │   └── definition-of-done.md        # the shared merge-ready bar
 │   ├── templates/                       # golden-path starter kit: composable blocks + catalog components
 │   │   ├── <layer>/<name>/README.md     # a block (e.g. backend/fastapi) — composition contract (needs/exposes) + doc fragment
